@@ -17,6 +17,11 @@ function M.active()
 end
 
 function M.finish(record, status, err)
+  -- Capture completed native outputs before cancelling removes the unfinished queue.
+  local accounting_ok, accounting_err = pcall(Actions.account_craft, record, Actor.get())
+  if not accounting_ok then
+    status, err = "failed", U.error(accounting_err)
+  end
   local stop_ok, stop_err = pcall(Actor.stop, record.request.kind == "craft")
   if not stop_ok then
     record.receipt.stopError = U.error(stop_err)

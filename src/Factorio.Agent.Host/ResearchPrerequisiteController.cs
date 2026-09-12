@@ -45,6 +45,14 @@ public sealed class ResearchPrerequisiteController(IGameClient game, IStockGoalE
             await production.RunAsync(next.Item!, (int)requested, token);
             TechnologyObservation proof = await technologies.ReadDependenciesAsync(next.Technology, token);
             RequireScope(proof.Scope);
+            // Trigger technologies are evaluated asynchronously by the engine.
+            // Re-observe only; never manufacture a second item on an unconfirmed result.
+            for (int poll = 0; poll < 30 && !proof.Technologies[next.Technology].Researched; poll++)
+            {
+                await Task.Delay(100, token);
+                proof = await technologies.ReadDependenciesAsync(next.Technology, token);
+                RequireScope(proof.Scope);
+            }
             if (!proof.Technologies[next.Technology].Researched)
                 throw new InvalidOperationException("Production finished but the native research trigger remains unmet. Reconcile instead of repeating production.");
             verified.Add(next.Technology);

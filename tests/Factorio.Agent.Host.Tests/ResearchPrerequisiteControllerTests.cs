@@ -6,6 +6,16 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class ResearchPrerequisiteControllerTests
 {
     [Fact]
+    public async Task DelayedNativeTriggerIsObservedWithoutRepeatingProduction()
+    {
+        var game = new ResearchGame { UnlockReadDelay = 3 };
+        var producer = new Producer(game, unlock: true);
+        var result = await new ResearchPrerequisiteController(game, producer, new Journal()).RunAsync("automation");
+        Assert.Equal("ready-for-lab", result.Status);
+        Assert.Single(producer.Requests);
+    }
+
+    [Fact]
     public async Task ExistingStockDoesNotCountAsTheUnmetCraftTrigger()
     {
         var game = new ResearchGame();
@@ -46,6 +56,7 @@ public sealed class ResearchPrerequisiteControllerTests
     private sealed class ResearchGame : IGameClient
     {
         public bool Unlocked { get; set; }
+        public int UnlockReadDelay { get; set; }
         private long tick;
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
@@ -56,8 +67,9 @@ public sealed class ResearchPrerequisiteControllerTests
             else if (request.Action == "technologies")
             {
                 string name = request.Arguments.GetProperty("name").GetString()!;
+                bool nativeUnlocked = Unlocked && (name != "science" || UnlockReadDelay-- <= 0);
                 NativeTechnology technology = name == "science"
-                    ? new(name, true, Unlocked, !Unlocked, [], [], 1, 0,
+                    ? new(name, true, nativeUnlocked, !nativeUnlocked, [], [], 1, 0,
                         Protocol.ToElement(new { type = "craft-item", item = new { name = "lab" }, count = 1 }))
                     : new(name, true, false, Unlocked, ["science"], [new("pack", 1)], 10, 600);
                 data = new { items = new[] { technology }, total = 1, offset = 0, limit = 1, collectedTick = tick, complete = true };

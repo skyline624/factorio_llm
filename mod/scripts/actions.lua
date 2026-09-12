@@ -2,11 +2,13 @@ local U = require("scripts.util")
 local T = require("scripts.targets")
 local Actor = require("scripts.actor")
 local Visibility = require("scripts.visibility")
+local CraftAccounting = require("scripts.craft_accounting")
 local M = {}
 
 M.capabilities = {"move", "mine", "craft", "wait", "build", "insert", "take", "set_recipe",
   "research", "rotate", "shoot", "launch_rocket"}
 local starts, steps = {}, {}
+M.account_craft = CraftAccounting.update
 
 local function main_inventory(c) return c.get_main_inventory() end
 local function target(c, args, owned)
@@ -126,7 +128,9 @@ starts.craft = function(r, c, args)
       "unsupported_craft", "Only deterministic solid hand-crafting products are supported")
     r.work.expected[product.name] = (r.work.expected[product.name] or 0) + product.amount
   end
-  local queued = c.begin_crafting{recipe = name, count = requested, silent = true}
+  local accounting, direct_count = CraftAccounting.prepare(c, recipe, requested, r.work.expected)
+  r.work.accounting = accounting
+  local queued = c.begin_crafting{recipe = name, count = direct_count, silent = true}
   r.work.requested, r.work.queued = requested, queued
   r.receipt.effects.requested, r.receipt.effects.queued = requested, queued
   r.receipt.effects.recipe = name
@@ -134,6 +138,7 @@ starts.craft = function(r, c, args)
 end
 
 steps.craft = function(r, c)
+  CraftAccounting.update(r, c)
   local w, effects = r.work, r.receipt.effects
   effects.nativeQueueSize, effects.nativeProgress = c.crafting_queue_size, c.crafting_queue_progress
   local products = {}

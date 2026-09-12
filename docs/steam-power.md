@@ -41,3 +41,13 @@ Une fixture distincte a reçu une rive plate, les cinq objets et cinq unités de
 Le premier essai a posé la pompe puis refusé la chaudière, le personnage s'étant arrêté dans son emprise. Après correction du point d'approche, le plan a été repris en conservant la pompe. Entre les ticks 16 375 et 16 681, les quatre machines restantes ont été construites et la production électrique constatée. Le moteur a mesuré environ 6,667 J produits au dernier tick, soit une charge d'environ 400 W, avec 268,444 J dans le bras et un réseau commun. Les objets de construction ont disparu de l'inventaire du personnage ; aucune énergie ni aucun fluide n'a été injecté pour obtenir ce résultat.
 
 Cette preuve couvre les connexions et une première alimentation sous faible charge. Elle ne constitue ni une qualification sous charge industrielle, ni une campagne autonome jusqu'à la fusée.
+
+## Installation en économie normale
+
+La commande a également réussi dans le monde normal de développement, graine 424242, entre les ticks 548 956 et 585 859. Elle est revenue vers l'usine connue, a dégagé un arbre bloquant le passage par minage natif, puis a découvert une rive près du départ. La pompe a été posée en (-34,5 ; -25,5), la chaudière et la machine à vapeur raccordées depuis leurs ports natifs, puis le poteau et le bras construits.
+
+Les cinq objets de construction ont été consommés et cinq unités de bois transférées à la chaudière. Le minage de l'arbre avait fourni quatre unités de bois supplémentaires, vérifiées par le reçu et le stock. Aucun équipement, fluide ou apport d'énergie artificiel n'a été utilisé dans ce monde.
+
+Le moteur a constaté environ 6,667 J produits au dernier tick, 268,444 J dans le bras et le même réseau électrique pour moteur, poteau et consommateur. Une nouvelle lecture native au tick 588 868 confirme encore la génération et les stocks : un poteau et un moteur de réserve, cinq unités de bois et les ingrédients restants. Pollution, évolution et expansion sont actives ; le monde est non pacifique et non marqué comme fixture.
+
+Cette réussite démontre une première alimentation réelle sous faible charge, après plusieurs corrections de développement documentées. Elle ne compte pas parmi les trois campagnes finales sans assistance et ne qualifie pas encore la puissance sous charge industrielle ni la maintenance du combustible.

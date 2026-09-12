@@ -28,7 +28,7 @@ try
           connect --session FILE
           submit --session FILE --kind KIND --json-file FILE [--ticks N]
           defend --session FILE [--seconds N]
-          verify-native|verify-defense|verify-factory|verify-spatial --session FILE
+          verify-native|verify-defense|verify-factory|verify-spatial|verify-crafting --session FILE
           verify-pilot --session FILE --phase manual|ai|standalone
           stop --session FILE
         """);
@@ -55,6 +55,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { clientProcessId = await FactorioRuntime.ConnectClientAsync(session, shutdown.Token) });
+            break;
+        }
+        case "verify-crafting":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new CraftingQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-native":
