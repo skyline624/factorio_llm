@@ -8,6 +8,9 @@ Ce document décrit des essais de composants et des fixtures synthétiques sur F
 - 79 tests hors ligne réussis : 58 pour l'adaptateur Ollama, 18 pour le transport et les reçus, 3 pour la détection de régression d'état côté host. L'appel cloud est exclu de la suite ordinaire.
 - Un appel réel à `glm-5.3-flash:cloud` via Ollama sur des faits synthétiques a produit un objectif valide : 200 plaques de fer. Une tentative, 672 tokens d'entrée et 92 de sortie, environ 1,575 seconde côté client. Il ne commande pas le jeu.
 - Une fixture native démarre sans client : marche avec position réellement changée et temps écoulé, fabrication de deux engrenages consommant quatre plaques, minage de trois minerais avec durée native, refus de minage hors portée, soumission répétée sans nouvel effet, conflit d'identifiant refusé et annulation persistée.
+- La fixture étendue vérifie construction d'un coffre avec consommation d'un objet, refus d'un second placement au même endroit sans perte, insertion/retrait exacts et transfert partiel limité à 90 plaques par la capacité restante du coffre. Un four produit cinq plaques à partir de cinq minerais et de combustible réellement transférés ; ses sorties sont reprises par l'acteur. Réglage de recette et rotation de tapis sont relus dans le moteur. Une recherche dont le prérequis manque est refusée sans sélection ni déblocage.
+- Le tir contre un petit déchiqueteur créé dans la fixture a consommé quatre balles, y compris dans un chargeur partiellement utilisé. L'ennemi a infligé sept points de dégâts avant sa disparition ; le personnage est resté vivant. Cela vérifie une action de tir native contre un attaquant, pas une politique de défense autonome.
+- Une cible placée au-delà de la zone normale du personnage a été refusée avec `target_not_visible`, sans consommation de munition.
 - Dans le client graphique connecté, le pilote est attaché au même identifiant d'entité que l'IA. Le bouton manuel incrémente le compteur d'assistance et les commandes IA sont refusées avec `manual_control`. Le retour IA permet la marche scriptée du personnage connecté. La déconnexion conserve le personnage, qui marche ensuite sans client.
 - Le premier raccordement a révélé une duplication provenant du scénario freeplay. La configuration du scénario supprime désormais les kits destinés à de nouveaux joueurs et le crash tardif ; le corps temporaire vide du nouveau pilote est retiré. Le jeu affiche un seul personnage après connexion. Un ancien personnage possédant des objets reste préservé.
 - Les réglages observés conservent pollution, évolution et expansion actives ; le mode pacifique est désactivé. Ces fixtures ne qualifient pas encore la défense sous attaque.
@@ -20,11 +23,15 @@ Factorio ignore une commande RCON vide. Une barrière non vide est nécessaire ;
 
 Sur une carte neuve, la première commande Lua a renvoyé une chaîne vide sans initialiser l'acteur. Le démarrage vérifie désormais une impression fixe, sans effet sur le personnage, au plus deux fois avant le handshake. La réponse exacte est journalisée localement. Aucune action métier n'est répétée pour contourner cette condition.
 
-Un arrêt avant la première sauvegarde automatique a aussi révélé que `/server-save` échoue si le dossier `saves` est absent. Le host crée ce répertoire lors de la préparation du profil et avant la demande de checkpoint.
+Un arrêt avant la première sauvegarde automatique a aussi révélé que `/server-save` échoue si le dossier `saves` est absent. Le host crée ce répertoire lors de la préparation du profil et avant la demande de checkpoint ; un nouvel arrêt avant autosave a réussi.
+
+Certains bâtiments de base ont un `unit_number` mais ne sont pas accessibles par `get_entity_by_unit_number`. Le mod conserve leurs références natives lors de la construction et de l'observation. Les transferts de la fixture vérifient cette résolution.
+
+Sans aucun joueur dans sa force, le personnage seul ne rafraîchit pas la visibilité cartographique native ; les requêtes `chart` peuvent rester en attente. La perception autorise donc explicitement les cinq secteurs sur cinq autour du secteur courant du personnage, en plus de la visibilité native courante. Cette zone a été comparée au client connecté ; après déplacement, le moteur conserve temporairement aussi des secteurs précédents. La qualification exhaustive des radars, de cette expiration et des observateurs distants reste à réaliser.
 
 ## Limites restantes
 
-Les douze kinds annoncés par le mod sont des capacités implémentées ; seuls les mécanismes explicitement listés ci-dessus ont une preuve moteur dans cette livraison. Construction, transferts, réglage de recette, tir, mort/réapparition, récupération et lancement du silo nécessitent encore leurs qualifications.
+Les douze kinds annoncés par le mod sont des capacités implémentées ; seuls les mécanismes explicitement listés ci-dessus ont une preuve moteur dans cette livraison. Les cas étendus de transfert, les recettes avec restitution, la sélection d'une recherche disponible, mort/réapparition, récupération et lancement du silo nécessitent encore leurs qualifications.
 
 L'observation complète de l'usine, la comptabilité du transit et des segments fluides, la défense autonome, les routes et implantations calculées en C#, la mémoire SQLite et la traduction des objectifs libres en progression scientifique restent à développer. Les indicateurs de couverture du protocole annoncent ces lacunes.
 

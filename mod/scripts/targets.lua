@@ -4,8 +4,17 @@ local M = {}
 function M.find(character, args)
   local target
   if args.entityId then
-    local id = tonumber(args.entityId)
-    if id then target = game.get_entity_by_unit_number(id) end
+    local reference = U.string(args.entityId, "entityId")
+    -- Many base buildings do not set get-by-unit-number, even though they have a
+    -- unit_number. Retain the native references registered during build/observation.
+    target = storage.agent and storage.agent.known[reference]
+    if not target and storage.agent and storage.agent.observedTargets then
+      local observed = storage.agent.observedTargets[reference]
+      if observed then target = observed.entity end
+    end
+    if target and not target.valid then target = nil end
+    local id = tonumber(reference)
+    if not target and id then target = game.get_entity_by_unit_number(id) end
     U.check(target and target.valid and target.surface == character.surface,
       "target_missing", "The requested entity no longer exists on this surface")
   else

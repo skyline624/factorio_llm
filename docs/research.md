@@ -75,6 +75,8 @@ La publication autorisée cible `skyline624/factorio_llm`, public, après prépa
 
 ## Décisions de conception proposées à partir des sources
 
+Compléments vérifiés pendant l'implémentation : le [joueur](https://wiki.factorio.com/Player) dispose d'une couverture locale de 5 × 5 secteurs, également décrite dans la page [radar](https://wiki.factorio.com/Radar). La mesure dans le client 2.0.77 confirme cette zone à l'arrêt, avec une persistance temporaire des secteurs précédents après déplacement. Le personnage standalone d'une force sans joueur ne produit pas ces mêmes données cartographiques : la perception locale applique donc explicitement la même zone maximale, et la couverture radar complète reste à qualifier. Enfin, l'API locale 2.0.77 précise que `get_entity_by_unit_number` exige le drapeau de prototype correspondant ; il faut conserver les références natives des bâtiments qui ne le possèdent pas.
+
 1. Prioriser l'état observable, l'identité des opérations et les critères de résultat avant la stratégie LLM.
 2. Démontrer le personnage headless et ses actions natives avant de figer le reste du contrôleur.
 3. Calculer en C# besoins, positions, routes et raccordements ; réserver au LLM les intentions et priorités.

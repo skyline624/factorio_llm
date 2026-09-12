@@ -65,6 +65,8 @@ public sealed class NativeQualification(RuntimeSession session)
             OperationReceipt queried = await client.QueryAsync(wait.OperationId, token);
             Require(queried.Status == "cancelled", "Cancelled state was not retained.");
             evidence.Add(new { check = "explicit-cancellation", receipt = queried.Evidence });
+            await QualifyFactoryAsync(token);
+            await QualifyCombatAsync(token);
             await SaveReportAsync(report, true, null, token);
             return report;
         }
@@ -101,6 +103,145 @@ public sealed class NativeQualification(RuntimeSession session)
         evidence.Add(new { check = "synthetic-fixture-initialized", disqualifiedAsCampaign = true, setup = "Cleared test area, positioned actor, inserted 12 iron plates and ore patch. Actions after initialization use the public mod protocol." });
     }
 
+    private async Task QualifyFactoryAsync(CancellationToken token)
+    {
+        const string setup = """
+            /silent-command local c=game.surfaces.nauvis.find_entities_filtered{type="character",force="factorio_agent"}[1]; c.insert{name="wooden-chest",count=2}; c.insert{name="stone-furnace",count=1}; c.insert{name="assembling-machine-1",count=1}; c.insert{name="transport-belt",count=1}; c.insert{name="iron-plate",count=102}; c.insert{name="iron-ore",count=2}; c.insert{name="coal",count=2}; rcon.print("factory-fixture-ready");
+            """;
+        Require((await session.CreateRcon().ExecuteAsync(setup, token)).Trim() == "factory-fixture-ready", "Factory fixture setup not acknowledged.");
+        evidence.Add(new { check = "synthetic-factory-fixture", disqualifiedAsCampaign = true,
+            setup = "Added two chests, a furnace, an assembler, a belt, 102 plates, two ore and two coal after the initial native checks." });
+        FactoryNativeState initial = await ReadFactoryStateAsync(token);
+        Require(initial.ActorCount("iron-plate") == 110, "Unexpected initial fixture plate stock.");
+        var chest = await ExecuteAsync("build", new { item = "wooden-chest", position = new MapPosition(2.5, -2.5) }, 600, token);
+        FactoryNativeState built = await ReadFactoryStateAsync(token);
+        Require(chest.Receipt.Status == "completed" && built.ChestCount == 1 && built.ActorCount("wooden-chest") == 1,
+            "Chest construction did not consume exactly one item and create one entity.");
+        string chestId = chest.Receipt.Effects.GetProperty("entityId").GetString()!;
+        var blocked = await ExecuteAsync("build", new { item = "wooden-chest", position = new MapPosition(2.5, -2.5) }, 600, token);
+        FactoryNativeState stillBuilt = await ReadFactoryStateAsync(token);
+        Require(blocked.Receipt.Status == "failed" && blocked.Receipt.Error?.Code == "placement_blocked"
+            && stillBuilt.ChestCount == 1 && stillBuilt.ActorCount("wooden-chest") == 1,
+            "Blocked placement consumed an item or created another chest.");
+        evidence.Add(new { check = "native-build-and-collision", before = initial, after = stillBuilt });
+
+        var inserted = await ExecuteAsync("insert", new { entityId = chestId, inventory = "chest", item = "iron-plate", count = 17 }, 600, token);
+        FactoryNativeState stocked = await ReadFactoryStateAsync(token);
+        Require(inserted.Receipt.Status == "completed" && stocked.ChestPlates == 17 && stocked.ActorCount("iron-plate") == 93,
+            "Chest insertion stock conservation failed.");
+        var taken = await ExecuteAsync("take", new { entityId = chestId, inventory = "chest", item = "iron-plate", count = 7 }, 600, token);
+        FactoryNativeState withdrawn = await ReadFactoryStateAsync(token);
+        Require(taken.Receipt.Status == "completed" && withdrawn.ChestPlates == 10 && withdrawn.ActorCount("iron-plate") == 100,
+            "Chest withdrawal stock conservation failed.");
+        const string restrictChest = """
+            /silent-command local c=game.surfaces.nauvis.find_entities_filtered{name="wooden-chest",force="factorio_agent"}[1]; c.get_inventory(defines.inventory.chest).set_bar(2); rcon.print("one-slot-fixture");
+            """;
+        Require((await session.CreateRcon().ExecuteAsync(restrictChest, token)).Trim() == "one-slot-fixture", "Fixture chest capacity not set.");
+        var limited = await ExecuteAsync("insert", new { entityId = chestId, inventory = "chest", item = "iron-plate", count = 100 }, 600, token);
+        FactoryNativeState filled = await ReadFactoryStateAsync(token);
+        Require(limited.Receipt.Status == "partial" && limited.Receipt.Effects.GetProperty("transferred").GetInt32() == 90
+            && filled.ChestPlates == 100 && filled.ActorCount("iron-plate") == 10,
+            "Capacity-limited transfer was not partial or did not conserve stocks.");
+        evidence.Add(new { check = "native-transfers-and-capacity", stocked, withdrawn, filled, receipt = limited.Receipt.Evidence });
+
+        var furnace = await ExecuteAsync("build", new { item = "stone-furnace", position = new MapPosition(6, 0) }, 600, token);
+        Require(furnace.Receipt.Status == "completed", "Furnace construction failed.");
+        string furnaceId = furnace.Receipt.Effects.GetProperty("entityId").GetString()!;
+        var fuel = await ExecuteAsync("insert", new { entityId = furnaceId, inventory = "fuel", item = "coal", count = 1 }, 600, token);
+        var ore = await ExecuteAsync("insert", new { entityId = furnaceId, inventory = "input", item = "iron-ore", count = 5 }, 600, token);
+        Require(fuel.Receipt.Status == "completed" && ore.Receipt.Status == "completed", "Furnace inputs were not transferred.");
+        FactoryNativeState fueled = await ReadFactoryStateAsync(token);
+        Require(fueled.ActorCount("coal") == 1 && fueled.ActorCount("iron-ore") == 0 && fueled.ActorCount("stone-furnace") == 0,
+            "Furnace or input item cost was not paid.");
+        long productionStart = fueled.Tick;
+        FactoryNativeState smelted = fueled;
+        for (int sample = 0; sample < 30 && smelted.FurnaceOutput < 5; sample++)
+        {
+            await Task.Delay(1000, token);
+            smelted = await ReadFactoryStateAsync(token);
+        }
+        Require(smelted.FurnaceOutput == 5 && smelted.FurnaceInput == 0 && smelted.Tick - productionStart >= 600,
+            "Native smelting did not complete at a plausible rate.");
+        var output = await ExecuteAsync("take", new { entityId = furnaceId, inventory = "output", item = "iron-plate", count = 5 }, 600, token);
+        FactoryNativeState collected = await ReadFactoryStateAsync(token);
+        Require(output.Receipt.Status == "completed" && collected.FurnaceOutput == 0 && collected.ActorCount("iron-plate") == 15,
+            "Smelted plate collection does not match native output.");
+        evidence.Add(new { check = "native-smelting-and-collection", fueled, smelted, collected });
+
+        var assembler = await ExecuteAsync("build", new { item = "assembling-machine-1", position = new MapPosition(-3.5, 3.5) }, 600, token);
+        Require(assembler.Receipt.Status == "completed", "Assembler construction failed.");
+        string assemblerId = assembler.Receipt.Effects.GetProperty("entityId").GetString()!;
+        var recipe = await ExecuteAsync("set_recipe", new { entityId = assemblerId, recipe = "iron-gear-wheel" }, 600, token);
+        Require(recipe.Receipt.Status == "completed" && (await ReadFactoryStateAsync(token)).AssemblerRecipe == "iron-gear-wheel",
+            "Assembler recipe was not set natively.");
+        var lockedResearch = await ExecuteAsync("research", new { technology = "automation" }, 600, token);
+        Require(lockedResearch.Receipt.Status == "failed" && lockedResearch.Receipt.Error?.Code == "prerequisite_missing",
+            "Research skipped its native crafting-trigger prerequisite.");
+        FactoryNativeState researching = await ReadFactoryStateAsync(token);
+        Require(researching.Research == "" && !researching.AutomationResearched,
+            "Refused research must not select or unlock the technology.");
+        var belt = await ExecuteAsync("build", new { item = "transport-belt", position = new MapPosition(0.5, 6.5) }, 600, token);
+        Require(belt.Receipt.Status == "completed", "Belt construction failed.");
+        var rotate = await ExecuteAsync("rotate", new { entityId = belt.Receipt.Effects.GetProperty("entityId").GetString()! }, 600, token);
+        FactoryNativeState configured = await ReadFactoryStateAsync(token);
+        Require(rotate.Receipt.Status == "completed" && configured.BeltDirection == 4, "Native belt rotation did not face east.");
+        evidence.Add(new { check = "native-recipe-research-prerequisite-and-rotation", after = configured });
+    }
+
+    private async Task<FactoryNativeState> ReadFactoryStateAsync(CancellationToken token)
+    {
+        const string command = """
+            /silent-command local s=game.surfaces.nauvis; local c=s.find_entities_filtered{type="character",force="factorio_agent"}[1]; local items={}; for _,v in pairs(c.get_main_inventory().get_contents()) do items[v.name]=(items[v.name] or 0)+v.count end; local ch=s.find_entities_filtered{name="wooden-chest",force=c.force}; local f=s.find_entities_filtered{name="stone-furnace",force=c.force}[1]; local a=s.find_entities_filtered{name="assembling-machine-1",force=c.force}[1]; local b=s.find_entities_filtered{name="transport-belt",force=c.force}[1]; rcon.print(helpers.table_to_json{tick=game.tick,actorItems=items,chestCount=#ch,chestPlates=ch[1] and ch[1].get_inventory(defines.inventory.chest).get_item_count("iron-plate") or 0,furnaceInput=f and f.get_inventory(defines.inventory.furnace_source).get_item_count("iron-ore") or 0,furnaceOutput=f and f.get_inventory(defines.inventory.furnace_result).get_item_count("iron-plate") or 0,assemblerRecipe=a and a.get_recipe() and a.get_recipe().name or "",research=c.force.current_research and c.force.current_research.name or "",automationResearched=c.force.technologies.automation.researched,beltDirection=b and b.direction or -1});
+            """;
+        return JsonSerializer.Deserialize<FactoryNativeState>(await session.CreateRcon().ExecuteAsync(command, token), Protocol.Json)
+            ?? throw new InvalidDataException("Missing native factory state.");
+    }
+
+    private async Task QualifyCombatAsync(CancellationToken token)
+    {
+        CombatNativeState before = await ReadCombatStateAsync(token);
+        Require(before.Enemies == 0 && before.Rounds > 0 && before.Health > 0, "Combat fixture requires a living armed character and no existing nearby enemy.");
+        const string setup = """
+            /silent-command local s=game.surfaces.nauvis; local c=s.find_entities_filtered{type="character",force="factorio_agent"}[1]; local b=s.create_entity{name="small-biter",position={4,4},force="enemy"}; assert(b and b.commandable); b.commandable.set_command{type=defines.command.attack,target=c,distraction=defines.distraction.none}; rcon.print(helpers.table_to_json({entityId=tostring(b.unit_number)}));
+            """;
+        using JsonDocument target = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(setup, token));
+        string id = target.RootElement.GetProperty("entityId").GetString()!;
+        evidence.Add(new { check = "synthetic-attacker", disqualifiedAsCampaign = true,
+            setup = "Created one normal small biter near the character and issued its native attack command.", entityId = id });
+        GameResponse seen = await game.ExecuteAsync(GameRequest.Create("observe"), token);
+        Require(seen.Ok && seen.Data.GetProperty("enemies").ValueKind == JsonValueKind.Array
+            && seen.Data.GetProperty("enemies").EnumerateArray().Any(e => e.GetProperty("id").GetString() == id),
+            "The nearby attacking enemy was not visible to the standalone character.");
+        var shot = await ExecuteAsync("shoot", new { entityId = id, ticks = 180 }, 600, token);
+        CombatNativeState after = await ReadCombatStateAsync(token);
+        Require(shot.Receipt.Status == "completed" && after.Rounds < before.Rounds && after.Health > 0 && after.Enemies == 0,
+            "Native shooting lacks ammunition consumption, target removal, or actor survival evidence.");
+        Require(shot.Receipt.Effects.GetProperty("roundsConsumed").GetInt32() == before.Rounds - after.Rounds,
+            "The receipt does not count partially used magazines correctly.");
+        evidence.Add(new { check = "native-visible-target-shooting", before, after, receipt = shot.Receipt.Evidence,
+            scope = "One synthetic attacker; not a qualified autonomous defense policy." });
+        const string hiddenSetup = """
+            /silent-command local s=game.surfaces.nauvis; local p=s.find_non_colliding_position("small-biter",{112,0},4,0.5); assert(p); local b=s.create_entity{name="small-biter",position=p,force="enemy"}; assert(b and b.commandable); b.commandable.set_command{type=defines.command.stop}; rcon.print(helpers.table_to_json({position=b.position}));
+            """;
+        using JsonDocument hidden = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(hiddenSetup, token));
+        MapPosition hiddenPosition = hidden.RootElement.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+        evidence.Add(new { check = "synthetic-hidden-target", disqualifiedAsCampaign = true, position = hiddenPosition });
+        var unseen = await ExecuteAsync("shoot", new { position = hiddenPosition, name = "small-biter", ticks = 60 }, 600, token);
+        CombatNativeState refused = await ReadCombatStateAsync(token);
+        Require(unseen.Receipt.Status == "failed" && unseen.Receipt.Error?.Code == "target_not_visible" && refused.Rounds == after.Rounds,
+            "An enemy outside normal character visibility was not refused before consuming ammunition.");
+        evidence.Add(new { check = "native-hidden-target-refused", after = refused, receipt = unseen.Receipt.Evidence });
+    }
+
+    private async Task<CombatNativeState> ReadCombatStateAsync(CancellationToken token)
+    {
+        const string command = """
+            /silent-command local s=game.surfaces.nauvis; local c=s.find_entities_filtered{type="character",force="factorio_agent"}[1]; local rounds=0; if c then local inv=c.get_inventory(defines.inventory.character_ammo); for i=1,#inv do local stack=inv[i]; if stack.valid_for_read then rounds=rounds+(stack.count-1)*stack.prototype.magazine_size+stack.ammo end end end; rcon.print(helpers.table_to_json({tick=game.tick,health=c and c.health or 0,rounds=rounds,enemies=s.count_entities_filtered{area={{-8,-8},{12,8}},type="unit",force="enemy"}}));
+            """;
+        return JsonSerializer.Deserialize<CombatNativeState>(await session.CreateRcon().ExecuteAsync(command, token), Protocol.Json)
+            ?? throw new InvalidDataException("Missing native combat state.");
+    }
+
     public async Task<NativeState> ReadStateAsync(CancellationToken token)
     {
         const string command = """
@@ -126,3 +267,12 @@ public sealed record NativeState(long Tick, MapPosition Position, Dictionary<str
 {
     public int Count(string item) => Items.GetValueOrDefault(item);
 }
+
+public sealed record FactoryNativeState(long Tick, Dictionary<string, int> ActorItems, int ChestCount,
+    int ChestPlates, int FurnaceInput, int FurnaceOutput, string AssemblerRecipe, string Research,
+    bool AutomationResearched, int BeltDirection)
+{
+    public int ActorCount(string item) => ActorItems.GetValueOrDefault(item);
+}
+
+public sealed record CombatNativeState(long Tick, double Health, int Rounds, int Enemies);

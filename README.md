@@ -61,7 +61,7 @@ dotnet $hostDll observe --session $sessionFile
 dotnet $hostDll connect --session $sessionFile
 ```
 
-`verify-native` prépare explicitement une zone et des ressources artificielles, puis vérifie marche, fabrication, minage, coûts, déduplication, refus hors portée et annulation. Le marquage fixture précède toute préparation. `connect` ouvre le jeu avec un profil isolé ; le bouton IA/Manuel transfère le même personnage. Les commandes `verify-pilot --phase manual`, `--phase ai` et `--phase standalone` vérifient les transitions réalisées dans l'interface et produisent un journal local de preuves. Les phases IA déplacent le personnage de trois cases vers le sud dans la zone préparée.
+`verify-native` prépare explicitement une zone, des ressources et des ennemis artificiels, puis vérifie actions du personnage, construction, conservation des stocks, capacité, cuisson, réglage de recette, prérequis, rotation et tir. Le marquage fixture précède toute préparation. `connect` ouvre le jeu avec un profil isolé ; le bouton IA/Manuel transfère le même personnage. Les commandes `verify-pilot --phase manual`, `--phase ai` et `--phase standalone` vérifient les transitions réalisées dans l'interface et produisent un journal local de preuves. Les phases IA déplacent le personnage de trois cases vers le sud dans la zone préparée.
 
 Pour sauvegarder puis arrêter le serveur :
 

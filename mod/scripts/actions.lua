@@ -1,6 +1,7 @@
 local U = require("scripts.util")
 local T = require("scripts.targets")
 local Actor = require("scripts.actor")
+local Visibility = require("scripts.visibility")
 local M = {}
 
 M.capabilities = {"move", "mine", "craft", "wait", "build", "insert", "take", "set_recipe",
@@ -261,8 +262,7 @@ end
 starts.shoot = function(r, c, args)
   local entity = T.find(c, args)
   U.check(entity.force ~= c.force and not c.force.get_friend(entity.force), "not_enemy", "Target is not hostile")
-  local chunk = {x = math.floor(entity.position.x / 32), y = math.floor(entity.position.y / 32)}
-  U.check(c.force.is_chunk_visible(entity.surface, chunk), "target_not_visible", "Enemy is outside currently visible chunks")
+  U.check(Visibility.is_visible(c, entity), "target_not_visible", "Enemy is outside currently visible chunks")
   r.work.target = entity
   r.work.endTick = game.tick + U.number(args.ticks, "ticks", 1, 3600, 60, true)
   r.work.beforeAmmo = U.inventory(c.get_inventory(defines.inventory.character_ammo))
@@ -278,8 +278,7 @@ steps.shoot = function(r, c)
     U.inventory(c.get_inventory(defines.inventory.character_ammo)))
   r.receipt.effects.roundsConsumed = r.work.beforeRounds - U.ammo(c.get_inventory(defines.inventory.character_ammo))
   if not entity.valid then r.receipt.effects.targetGone = true; return "completed" end
-  local chunk = {x = math.floor(entity.position.x / 32), y = math.floor(entity.position.y / 32)}
-  U.check(c.force.is_chunk_visible(entity.surface, chunk), "target_not_visible", "Lost current target visibility")
+  U.check(Visibility.is_visible(c, entity), "target_not_visible", "Lost current target visibility")
   r.receipt.effects.afterHealth = entity.health
   if game.tick >= r.work.endTick then
     U.check(r.receipt.effects.roundsConsumed > 0, "no_shots_observed", "No ammunition consumption was observed")

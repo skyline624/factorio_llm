@@ -5,6 +5,7 @@ local Operations = require("scripts.operations")
 local Observation = require("scripts.observation")
 local Catalog = require("scripts.catalog")
 local Pilot = require("scripts.pilot")
+local Visibility = require("scripts.visibility")
 
 script.on_init(Actor.initialize)
 script.on_configuration_changed(Actor.initialize)
@@ -13,6 +14,8 @@ script.on_configuration_changed(Actor.initialize)
 local function hello(args)
   local s = Actor.state()
   local session = U.string(args.sessionId, "sessionId")
+  local world = s.worldId or U.string(args.worldId, "worldId (required on first hello)")
+  if args.worldId then U.check(args.worldId == world, "world_mismatch", "The loaded save belongs to a different world") end
   if not s.freeplayConfigured then
     -- The one agent receives the normal no-intro kit. Connecting its pilot must not
     -- generate another kit or a late crash site in an already running factory.
@@ -23,11 +26,7 @@ local function hello(args)
     remote.call("freeplay", "set_skip_intro", true)
     s.freeplayConfigured = true
   end
-  if not s.worldId then
-    s.worldId = U.string(args.worldId, "worldId (required on first hello)")
-  elseif args.worldId then
-    U.check(args.worldId == s.worldId, "world_mismatch", "The loaded save belongs to a different world")
-  end
+  s.worldId = world
   if session ~= s.sessionId then
     Operations.cancel_active("Controller session changed")
     s.sessionId, s.generation = session, s.generation + 1
@@ -76,6 +75,8 @@ end})
 script.on_event(defines.events.on_tick, function()
   local s = Actor.state()
   if not s then return end
+  local character = Actor.get()
+  if character and not s.pilotIndex and game.tick % 60 == 0 then Visibility.refresh(character) end
   if s.respawnTick and game.tick >= s.respawnTick and not Actor.get() then
     local ok, err = pcall(Actor.spawn, false)
     if not ok then s.respawnError, s.respawnTick = U.error(err), game.tick + 600 end

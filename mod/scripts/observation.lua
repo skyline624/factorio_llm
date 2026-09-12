@@ -1,6 +1,7 @@
 local U = require("scripts.util")
 local Actor = require("scripts.actor")
 local Operations = require("scripts.operations")
+local Visibility = require("scripts.visibility")
 local M = {}
 
 local inventory_names = {"fuel", "output", "chest", "input", "lab", "ammo", "rocket", "corpse"}
@@ -50,6 +51,10 @@ end
 
 function M.observe(args)
   local s, c = Actor.state(), Actor.get()
+  s.observedTargets = s.observedTargets or {}
+  for id, record in pairs(s.observedTargets) do
+    if not record.entity.valid or game.tick - record.tick > 600 then s.observedTargets[id] = nil end
+  end
   local radius = U.number(args.radius, "radius", 1, 64, 32)
   local limit = U.number(args.limit, "limit", 1, 200, 100, true)
   s.snapshotSequence = s.snapshotSequence + 1
@@ -60,7 +65,7 @@ function M.observe(args)
     operation = Operations.last_receipt(), entities = {}, resources = {}, enemies = {}, players = {},
     coverage = {radius = radius, limit = limit, atomic = true, collectionStartTick = game.tick,
       collectionEndTick = game.tick, factoryComplete = false, transitComplete = false,
-      fluidsAggregateSafe = false, enemyVisibility = "force-currently-visible-chunks", enemyComplete = false},
+      fluidsAggregateSafe = false, enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility", enemyComplete = false},
     goal = {rocketsLaunched = Actor.force() and Actor.force().rockets_launched or 0,
       humanInterventions = s.humanInterventions, fixture = s.fixture == true,
       fixtureReason = s.fixtureReason, fixtureTick = s.fixtureTick}}
@@ -95,10 +100,13 @@ function M.observe(args)
         result.resources[#result.resources + 1] = item
       end
     elseif entity.force ~= c.force and not c.force.get_friend(entity.force) then
-      local chunk = {x = math.floor(entity.position.x / 32), y = math.floor(entity.position.y / 32)}
-      if c.force.is_chunk_visible(c.surface, chunk) then
+      if Visibility.is_visible(c, entity) then
         enemy_count = enemy_count + 1
-        if #result.enemies < limit then result.enemies[#result.enemies + 1] = M.entity(entity, false) end
+        if #result.enemies < limit then
+          local observed = M.entity(entity, false)
+          result.enemies[#result.enemies + 1] = observed
+          s.observedTargets[observed.id] = {entity = entity, tick = game.tick}
+        end
       end
     end
   end
