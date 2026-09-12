@@ -8,7 +8,7 @@ using var shutdown = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; shutdown.Cancel(); };
 try
 {
-    if (args.Length == 0) throw new ArgumentException("Commands: start [--fixture] [--seed N] [--root PATH] [--installation PATH]; observe --session FILE; rpc --session FILE --action ACTION [--json-file FILE]; connect --session FILE; submit --session FILE --kind KIND --json-file FILE [--ticks N]; verify-native --session FILE; verify-pilot --session FILE --phase manual|ai|standalone; stop --session FILE.");
+    if (args.Length == 0) throw new ArgumentException("Commands: start [--fixture] [--seed N] [--root PATH] [--installation PATH]; observe --session FILE; rpc --session FILE --action ACTION [--json-file FILE]; connect --session FILE; submit --session FILE --kind KIND --json-file FILE [--ticks N]; defend --session FILE [--seconds N]; verify-native --session FILE; verify-defense --session FILE; verify-pilot --session FILE --phase manual|ai|standalone; stop --session FILE.");
     var options = Parse(args[1..]);
     string? Option(string name) => options.GetValueOrDefault(name);
     string Required(string name) => Option(name) ?? throw new ArgumentException($"Missing --{name}.");
@@ -37,6 +37,22 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new PilotQualification(session).RunPhaseAsync(Required("phase"), shutdown.Token) });
+            break;
+        }
+        case "defend":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"defense-{Guid.NewGuid():N}.jsonl");
+            var controller = new DefenseController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            await controller.RunAsync(TimeSpan.FromSeconds(int.Parse(Option("seconds") ?? "60", CultureInfo.InvariantCulture)), shutdown.Token);
+            Print(new { journal = journalPath });
+            break;
+        }
+        case "verify-defense":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new DefenseQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "stop":

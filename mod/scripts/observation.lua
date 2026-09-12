@@ -3,6 +3,7 @@ local Actor = require("scripts.actor")
 local Operations = require("scripts.operations")
 local Visibility = require("scripts.visibility")
 local Recovery = require("scripts.recovery")
+local Weapons = require("scripts.weapons")
 local M = {}
 
 local inventory_names = {"fuel", "output", "chest", "input", "lab", "ammo", "rocket", "corpse"}
@@ -93,6 +94,7 @@ function M.observe(args)
   result.agent.guns = U.inventory(c.get_inventory(defines.inventory.character_guns))
   result.agent.ammo = U.inventory(c.get_inventory(defines.inventory.character_ammo))
   result.agent.ammoRounds = U.ammo(c.get_inventory(defines.inventory.character_ammo))
+  result.agent.weapon = Weapons.observe(c)
   result.agent.craftingQueue = c.crafting_queue
   result.agent.craftingProgress, result.agent.miningProgress = c.crafting_queue_progress, c.character_mining_progress
   result.agent.walking, result.agent.mining = c.walking_state.walking, c.mining_state.mining

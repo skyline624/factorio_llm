@@ -5,7 +5,7 @@ using Factorio.Agent.Core;
 namespace Factorio.Agent.Host;
 
 /// <summary>Serializes calls across CLI processes and detects observed world-history regressions.</summary>
-public sealed class SessionGameClient(RuntimeSession session, IGameClient inner) : IGameClient
+public sealed class SessionGameClient(RuntimeSession session, IGameClient inner, ActorControlLease? controllerLease = null) : IGameClient
 {
     private static readonly HashSet<string> Mutations = ["hello", "submit", "cancel", "mark_fixture"];
     private string WatermarkPath => Path.Combine(session.Directory, "observation-watermark.json");
@@ -13,6 +13,9 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner)
     public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
     {
         await using FileStream guard = await AcquireLockAsync(cancellationToken);
+        using ActorControlLease? callLease = Mutations.Contains(request.Action) && controllerLease is null
+            ? ActorControlLease.Acquire(session.Directory) : null;
+        if (Mutations.Contains(request.Action)) controllerLease?.Validate(session.Directory);
         Watermark? previous = File.Exists(WatermarkPath)
             ? JsonSerializer.Deserialize<Watermark>(await File.ReadAllTextAsync(WatermarkPath, cancellationToken), Protocol.Json)
             : null;

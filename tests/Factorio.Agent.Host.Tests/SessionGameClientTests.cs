@@ -41,6 +41,31 @@ public sealed class SessionGameClientTests : IDisposable
     }
 
     private RuntimeSession Session() => new(directory, "factorio.exe", "config.ini", "mods", "save.zip", 0, 1, 2, "fixture-only", "session", "world", 1, true);
+
+    [Fact]
+    public async Task ControllerLeaseBlocksOtherMutationsButAllowsObservation()
+    {
+        var game = new FakeGame { Tick = 10 };
+        var session = Session();
+        using var lease = ActorControlLease.Acquire(directory);
+        var outsider = new SessionGameClient(session, game);
+        await outsider.ExecuteAsync(GameRequest.Create("observe"));
+        await Assert.ThrowsAsync<ActorControlUnavailableException>(() => outsider.ExecuteAsync(GameRequest.Create("submit")));
+        Assert.Equal(["observe"], game.Calls);
+        await new SessionGameClient(session, game, lease).ExecuteAsync(GameRequest.Create("submit"));
+        Assert.Equal(["observe", "observe", "submit"], game.Calls);
+    }
+
+    [Fact]
+    public async Task DisposedControllerLeaseCannotAuthorizeAMutation()
+    {
+        var game = new FakeGame { Tick = 10 };
+        var lease = ActorControlLease.Acquire(directory);
+        var controller = new SessionGameClient(Session(), game, lease);
+        lease.Dispose();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => controller.ExecuteAsync(GameRequest.Create("submit")));
+        Assert.Empty(game.Calls);
+    }
     public void Dispose() => Directory.Delete(directory, recursive: true);
 
     private sealed class FakeGame : IGameClient

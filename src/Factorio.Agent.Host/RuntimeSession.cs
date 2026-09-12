@@ -16,7 +16,8 @@ public sealed record RuntimeSession(string Directory, string Executable, string 
 {
     public string ManifestPath => Path.Combine(Directory, "session.json");
     public RconClient CreateRcon() => new(new RconOptions { Port = RconPort, Password = RconPassword, MaximumResponseBytes = 8 * 1024 * 1024 });
-    public IGameClient CreateClient() => new SessionGameClient(this, new FactorioGameClient(CreateRcon()));
+    public IGameClient CreateClient(ActorControlLease? controllerLease = null) =>
+        new SessionGameClient(this, new FactorioGameClient(CreateRcon()), controllerLease);
     public static async Task<RuntimeSession> ReadAsync(string file, CancellationToken token = default) =>
         JsonSerializer.Deserialize<RuntimeSession>(await File.ReadAllTextAsync(file, token), new JsonSerializerOptions(JsonSerializerDefaults.Web))
         ?? throw new InvalidDataException("Session file is empty.");
