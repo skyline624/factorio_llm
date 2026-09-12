@@ -69,7 +69,7 @@ public sealed class SpatialQualification(RuntimeSession session)
             await using (var stopping = new SpatialController(interruptingClient,
                 new ControllerJournal(Path.Combine(session.Directory, $"spatial-stop-{id}.jsonl"))))
             {
-                try { await stopping.NavigateAsync(new(-10, 0), cancellationToken: interrupted.Token); }
+                try { await stopping.WorkAsync("move", new { position = new MapPosition(-10, 0) }, 1800, token: interrupted.Token); }
                 catch (OperationCanceledException) when (!token.IsCancellationRequested) { interruptedAsExpected = true; }
             }
             Require(interruptedAsExpected && interruptingClient.OperationId is not null, "Fixture did not interrupt an accepted move.");
@@ -115,18 +115,23 @@ public sealed class SpatialQualification(RuntimeSession session)
         public long? InjectedTick { get; private set; }
         public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
-            GameResponse response = await inner.ExecuteAsync(request, cancellationToken);
-            if (InjectedTick is null && response.Ok && request.Action == "submit"
+            if (InjectedTick is null && request.Action == "submit"
                 && request.Arguments.GetProperty("kind").GetString() == "move"
-                && request.Arguments.GetProperty("args").GetProperty("position").Deserialize<MapPosition>(Protocol.Json) == new MapPosition(20, 0))
+                && request.Arguments.GetProperty("args").GetProperty("position").GetProperty("x").GetDouble() > 15.15
+                && request.Arguments.GetProperty("preconditions").GetProperty("position").GetProperty("x").GetDouble() < 15)
             {
-                const string command = """
-                    /silent-command local s=game.surfaces.nauvis; for y=-6,-2 do assert(s.create_entity{name="stone-wall",position={15.5,y+0.5},force="factorio_agent"}) end; rcon.print(game.tick);
+                // Fixture perturbation and the ordinary RPC run at the same tick, before physics can
+                // complete a short waypoint. No terrain mutation exists in the production controller.
+                const string inject = """
+                    ; local s=game.surfaces.nauvis; for y=-6,-2 do assert(s.create_entity{name="stone-wall",position={15.5,y+0.5},force="factorio_agent"}) end;
                     """;
-                InjectedTick = long.Parse((await runtime.CreateRcon().ExecuteAsync(command, cancellationToken)).Trim(),
-                    System.Globalization.CultureInfo.InvariantCulture);
+                string json = await runtime.CreateRcon().ExecuteAsync(FactorioGameClient.BuildCommand(request) + inject, cancellationToken);
+                GameResponse response = JsonSerializer.Deserialize<GameResponse>(json, Protocol.Json)!;
+                Require(response.RequestId == request.RequestId && response.Ok, "Fixture move submission correlation failed.");
+                InjectedTick = response.Tick;
+                return response;
             }
-            return response;
+            return await inner.ExecuteAsync(request, cancellationToken);
         }
     }
 

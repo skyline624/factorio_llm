@@ -4,5 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Factorio.Agent.Infrastructure/Factorio.Agent.Infrastructure.csproj" />
+    <ProjectReference Include="../Factorio.Agent.Ollama/Factorio.Agent.Ollama.csproj" />
   </ItemGroup>
 </Project>

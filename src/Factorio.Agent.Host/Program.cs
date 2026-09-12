@@ -3,6 +3,7 @@ using System.Text.Json;
 using Factorio.Agent.Core;
 using Factorio.Agent.Host;
 using Factorio.Agent.Infrastructure;
+using Factorio.Agent.Ollama;
 
 using var shutdown = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; shutdown.Cancel(); };
@@ -16,6 +17,8 @@ try
           spatial --session FILE [--items item1,item2]
           navigate --session FILE --x N --y N [--distance N]
           build --session FILE --item NAME --x N --y N
+          produce --session FILE --item NAME --quantity N
+          run-goal --session FILE
           rpc --session FILE --action ACTION [--json-file FILE]
           connect --session FILE
           submit --session FILE --kind KIND --json-file FILE [--ticks N]
@@ -86,6 +89,30 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new FactoryQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "run-goal":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"strategic-production-{Guid.NewGuid():N}.jsonl");
+            using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+            var planner = new OllamaStrategicPlanner(http, new OllamaOptions { MaxAttempts = 1 });
+            var controller = new StrategicProductionController(session.CreateClient(lease), planner, new ControllerJournal(journalPath));
+            ProductionResult result = await controller.RunOnceAsync(shutdown.Token);
+            Print(new { result.Item, result.TargetStock, result.InitialStock, result.FinalStock, result.StartTick, result.EndTick, journalPath });
+            break;
+        }
+        case "produce":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"production-{Guid.NewGuid():N}.jsonl");
+            var controller = new ProductionController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            ProductionResult result = await controller.ProduceAsync(Required("item"),
+                int.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token);
+            Print(new { result.Item, result.TargetStock, result.InitialStock, result.FinalStock,
+                result.StartTick, result.EndTick, result.Steps, journalPath });
             break;
         }
         case "spatial":

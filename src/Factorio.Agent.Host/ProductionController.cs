@@ -1,0 +1,231 @@
+using System.Text.Json;
+using Factorio.Agent.Core;
+using Factorio.Agent.Infrastructure;
+
+namespace Factorio.Agent.Host;
+
+/// <summary>Early solid production from observed resources and native recipes, with no injected stock.</summary>
+public sealed class ProductionController(IGameClient game, IControllerJournal journal)
+{
+    public async Task<ProductionResult> ProduceAsync(string item, int targetStock, CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(item);
+        if (targetStock is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(targetStock));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromMinutes(15));
+        await using var controller = new SpatialController(game, journal);
+        var planner = new ProductionPlanner();
+        var spatial = new SpatialClient(game);
+        var exploration = new ExplorationPlanner();
+        ProductionState initial = await ObserveAsync(deadline.Token);
+        var receipts = new List<OperationReceipt>();
+        for (int stepNumber = 0; stepNumber < 256; stepNumber++)
+        {
+            ProductionState state = await ObserveAsync(deadline.Token);
+            if (state.Scope != initial.Scope) throw new InvalidOperationException("Production scope changed; reconcile death or pilot transition before resuming.");
+            if (state.ControlMode != "ai") throw new InvalidOperationException("The pilot has manual control.");
+            if (state.Inventory.GetValueOrDefault(item) >= targetStock)
+            {
+                var result = new ProductionResult(item, targetStock, initial.Tick, state.Tick,
+                    initial.Inventory.GetValueOrDefault(item), state.Inventory.GetValueOrDefault(item), stepNumber, receipts.AsReadOnly());
+                await journal.AppendAsync("production-result", result, deadline.Token);
+                return result;
+            }
+            ProductionCatalog catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), deadline.Token));
+            SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: deadline.Token);
+            if (catalog.Scope != state.Scope || map.Scope != state.Scope) throw new InvalidDataException("Production observations span different actor scopes.");
+            ProductionEntity? ready = state.Entities.FirstOrDefault(e => e.Count("output", item) > 0);
+            if (ready is not null)
+            {
+                await TravelAsync(ready.Position, 3, catalog);
+                await ActAsync("take", new { entityId = ready.Id, inventory = "output", item,
+                    count = Math.Min(ready.Count("output", item), targetStock - state.Inventory.GetValueOrDefault(item)) }, 600);
+                continue;
+            }
+            ProductionEntity? engaged = state.Entities.FirstOrDefault(e => e.InventoryTotal("input") > 0
+                && catalog.Recipes.Any(r => r.Name == e.Recipe && r.Products.Count == 1 && r.Products[0].Name == item
+                    && r.Products[0].DeterministicItem && r.Ingredients.Count == 1 && r.Ingredients[0].DeterministicItem)
+                && catalog.Machines.Values.Any(m => m.EntityName == e.Name));
+            if (engaged is not null)
+            {
+                NativeRecipe recipe = catalog.Recipes.Single(r => r.Name == engaged.Recipe);
+                int batches = Math.Min(16, checked((int)Math.Ceiling((targetStock - state.Inventory.GetValueOrDefault(item)) / recipe.Products[0].Amount!.Value)));
+                await SmeltAsync(new("smelt", item, batches, recipe), state, catalog, map);
+                continue;
+            }
+            ProductionStep step = planner.Next(item, targetStock, state.Inventory, catalog, map);
+            await journal.AppendAsync("production-step", new { item, targetStock, stepNumber, state.Tick, step }, deadline.Token);
+            switch (step.Kind)
+            {
+                case "mine":
+                    await TravelAsync(step.Source!.Position, MiningDistance(step.Source, map), catalog);
+                    await ActAsync("mine", new { name = step.Source.Name, position = step.Source.Position, count = step.Quantity }, 36000);
+                    break;
+                case "craft":
+                    await ActAsync("craft", new { recipe = step.Recipe!.Name, count = step.Quantity }, 36000);
+                    break;
+                case "smelt":
+                    await SmeltAsync(step, state, catalog, map);
+                    break;
+                case "unavailable":
+                    MapPosition frontier = exploration.Choose(map, step.Item, catalog);
+                    await journal.AppendAsync("exploration-frontier", new { step.Item, frontier, map.CollectedTick }, deadline.Token);
+                    await controller.NavigateAsync(frontier, cancellationToken: deadline.Token);
+                    break;
+                default: throw new InvalidOperationException($"{step.Kind}: {step.Item}: {step.Reason}");
+            }
+        }
+        throw new InvalidOperationException("Production exhausted its 256-step budget.");
+
+        async Task<OperationReceipt> ActAsync(string kind, object args, long ticks)
+        {
+            OperationReceipt receipt = await controller.WorkAsync(kind, args, ticks, token: deadline.Token);
+            receipts.Add(receipt);
+            if (receipt.Status is not ("completed" or "partial") && receipt.Error?.Code != "cancelled")
+                throw new InvalidOperationException($"Production action {kind} ended with {receipt.Status}: {receipt.Error?.Code}.");
+            return receipt;
+        }
+
+        async Task TravelAsync(MapPosition position, double distance, ProductionCatalog catalog)
+        {
+            for (int segment = 0; segment < 64; segment++)
+            {
+                SpatialSnapshot currentMap = await spatial.CaptureAsync(cancellationToken: deadline.Token);
+                if (currentMap.Actor.Position.DistanceTo(position) <= 24)
+                {
+                    await controller.NavigateAsync(position, distance, deadline.Token);
+                    return;
+                }
+                MapPosition waypoint = exploration.Choose(currentMap, "", catalog, position);
+                await journal.AppendAsync("travel-segment", new { position, waypoint, currentMap.CollectedTick }, deadline.Token);
+                await controller.NavigateAsync(waypoint, cancellationToken: deadline.Token);
+            }
+            throw new InvalidOperationException("Travel to a known entity exhausted its local segment budget.");
+        }
+
+        async Task SmeltAsync(ProductionStep step, ProductionState state, ProductionCatalog catalog, SpatialSnapshot map)
+        {
+            NativeRecipe recipe = step.Recipe!;
+            if (recipe.Ingredients.Count != 1 || recipe.Products.Count != 1)
+                throw new InvalidOperationException("Automatic furnace selection currently requires one solid ingredient and product.");
+            var supported = catalog.Machines.Where(m => m.Value.Categories.ContainsKey(recipe.Category))
+                .OrderBy(m => m.Key, StringComparer.Ordinal).ToArray();
+            var owned = state.Entities.Where(e => supported.Any(m => m.Value.EntityName == e.Name))
+                .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).FirstOrDefault(e => e.Recipe is null || e.Recipe == recipe.Name);
+            KeyValuePair<string, NativeFurnace> machine;
+            string entityId;
+            MapPosition position;
+            if (owned is null)
+            {
+                machine = supported.FirstOrDefault(m => state.Inventory.GetValueOrDefault(m.Key) > 0);
+                if (machine.Key is null) throw new InvalidOperationException("A compatible furnace must first be produced; machine prerequisite grounding is pending.");
+                OperationReceipt built = await controller.BuildAsync(machine.Key, map.Actor.Position, deadline.Token);
+                receipts.Add(built);
+                if (built.Status != "completed") throw new InvalidOperationException($"Furnace construction failed: {built.Error?.Code}.");
+                entityId = built.Effects.GetProperty("entityId").GetString()!;
+                position = built.Effects.GetProperty("entityPosition").Deserialize<MapPosition>(Protocol.Json)!;
+            }
+            else
+            {
+                machine = supported.First(m => m.Value.EntityName == owned.Name);
+                entityId = owned.Id;
+                position = owned.Position;
+            }
+            await TravelAsync(position, 3, catalog);
+            // Feed a bounded batch. Read actual output/fuel every iteration; never infer output from a timer.
+            string input = recipe.Ingredients[0].Name;
+            FactorySnapshot factory = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: deadline.Token);
+            if (factory.Scope != state.Scope) throw new InvalidDataException("Furnace accounting scope changed.");
+            if (catalog.Items[input].FuelValue > 0) throw new InvalidOperationException("Fuel ingredients need explicit compartment accounting.");
+            FurnaceRequirements requirements = FurnaceRequirements.From(factory, entityId, recipe, step.Quantity);
+            int missingInput = requirements.InputToInsert;
+            await journal.AppendAsync("furnace-requirements", new { factory.SnapshotId, factory.CollectedTick, entityId, requirements }, deadline.Token);
+            if (missingInput > 0)
+            {
+                OperationReceipt inserted = await ActAsync("insert", new { entityId, inventory = "input", item = input, count = missingInput }, 600);
+                if (inserted.Status != "completed") throw new InvalidOperationException("Furnace input was only partially transferred; re-observation is required.");
+            }
+            long initialOutput = state.Inventory.GetValueOrDefault(step.Item);
+            long expectedOutput = checked((long)(recipe.Products[0].Amount!.Value * step.Quantity));
+            for (int attempt = 0; attempt < 200; attempt++)
+            {
+                ProductionState current = await ObserveAsync(deadline.Token);
+                ProductionEntity furnace = current.Entities.Single(e => e.Id == entityId);
+                long output = furnace.Count("output", step.Item);
+                if (output > 0)
+                {
+                    await TravelAsync(position, 3, catalog);
+                    await ActAsync("take", new { entityId, inventory = "output", item = step.Item, count = output }, 600);
+                }
+                if (current.Inventory.GetValueOrDefault(step.Item) + output >= initialOutput + expectedOutput) return;
+                if (furnace.InventoryTotal("fuel") == 0)
+                {
+                    var fuels = catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.FuelCategory is not null
+                        && machine.Value.FuelCategories.ContainsKey(p.Value.FuelCategory)).OrderByDescending(p => p.Value.FuelValue).ToArray();
+                    var carried = fuels.FirstOrDefault(p => current.Inventory.GetValueOrDefault(p.Key) > 0);
+                    if (carried.Key is null)
+                    {
+                        map = await spatial.CaptureAsync(radius: 48, cancellationToken: deadline.Token);
+                        ProductionStep? fuelStep = fuels.Select(p => planner.Next(p.Key, 1, current.Inventory, catalog, map))
+                            .FirstOrDefault(p => p.Kind == "mine");
+                        if (fuelStep is null)
+                        {
+                            string? wantedFuel = fuels.FirstOrDefault(p => catalog.Mining.Values.Any(products =>
+                                products.Any(material => material.Name == p.Key && material.DeterministicItem))).Key;
+                            if (wantedFuel is null) throw new InvalidOperationException("No known solid extraction route for compatible fuel.");
+                            MapPosition frontier = exploration.Choose(map, wantedFuel, catalog);
+                            await journal.AppendAsync("fuel-exploration-frontier", new { wantedFuel, frontier, map.CollectedTick }, deadline.Token);
+                            await controller.NavigateAsync(frontier, cancellationToken: deadline.Token);
+                            continue;
+                        }
+                        await TravelAsync(fuelStep.Source!.Position, MiningDistance(fuelStep.Source, map), catalog);
+                        await ActAsync("mine", new { name = fuelStep.Source.Name, position = fuelStep.Source.Position, count = 1 }, 36000);
+                        await TravelAsync(position, 3, catalog);
+                        carried = fuels.First(p => p.Key == fuelStep.Item);
+                    }
+                    await TravelAsync(position, 3, catalog);
+                    await ActAsync("insert", new { entityId, inventory = "fuel", item = carried.Key, count = 1 }, 600);
+                }
+                await ActAsync("wait", new { ticks = 60 }, 180);
+            }
+            throw new InvalidOperationException("Furnace output was not established within its observation budget.");
+        }
+    }
+
+    private static double MiningDistance(SpatialEntity source, SpatialSnapshot map) =>
+        map.Prototypes[source.Name].Type == "resource" ? 1 : 3;
+
+    private async Task<ProductionState> ObserveAsync(CancellationToken token)
+    {
+        GameResponse response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 64, limit = 200 }), token);
+        if (!response.Ok) throw new GameRpcException(response.Error!);
+        JsonElement data = response.Data, agent = data.GetProperty("agent");
+        if (!agent.GetProperty("alive").GetBoolean()) throw new InvalidOperationException("The actor died; production requires recovery.");
+        if (data.GetProperty("collectedTick").GetInt64() != response.Tick
+            || !data.GetProperty("coverage").GetProperty("knownInventoriesComplete").GetBoolean())
+            throw new InvalidDataException("Production requires complete, current known entity inventories.");
+        return new(data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!, response.Tick,
+            agent.GetProperty("controlMode").GetString()!, agent.GetProperty("inventory").Deserialize<Dictionary<string, long>>(Protocol.Json)!,
+            ReadEntities(data.GetProperty("entities")));
+    }
+
+    private static IReadOnlyList<ProductionEntity> ReadEntities(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object && !value.EnumerateObject().Any()) return [];
+        return value.EnumerateArray().Select(e => new ProductionEntity(e.GetProperty("id").GetString()!,
+            e.GetProperty("name").GetString()!, e.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!,
+            e.TryGetProperty("recipe", out var recipe) ? recipe.GetString() : null, e.GetProperty("inventories").Clone())).ToArray();
+    }
+}
+
+public sealed record ProductionResult(string Item, int TargetStock, long StartTick, long EndTick, long InitialStock,
+    long FinalStock, int Steps, IReadOnlyList<OperationReceipt> Receipts);
+internal sealed record ProductionState(ActorScope Scope, long Tick, string ControlMode, IReadOnlyDictionary<string, long> Inventory,
+    IReadOnlyList<ProductionEntity> Entities);
+internal sealed record ProductionEntity(string Id, string Name, MapPosition Position, string? Recipe, JsonElement Inventories)
+{
+    public long Count(string slot, string item) => Inventories.TryGetProperty(slot, out var inventory)
+        && inventory.GetProperty("items").TryGetProperty(item, out var amount) ? amount.GetInt64() : 0;
+    public long InventoryTotal(string slot) => Inventories.TryGetProperty(slot, out var inventory)
+        ? inventory.GetProperty("items").EnumerateObject().Sum(i => i.Value.GetInt64()) : 0;
+}

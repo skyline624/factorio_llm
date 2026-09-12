@@ -7,6 +7,30 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class SpatialControllerTests
 {
+    [Fact]
+    public void Long_oblique_route_is_subdivided_before_native_eight_direction_steering()
+    {
+        var start = new MapPosition(-8, -63);
+        var goal = new MapPosition(-20, -40);
+        IReadOnlyList<MapPosition> route = SpatialController.Subdivide(start, [goal]);
+        Assert.Equal(goal, route[^1]);
+        MapPosition previous = start;
+        foreach (MapPosition point in route)
+        {
+            Assert.InRange(previous.DistanceTo(point), 0, 0.75000001);
+            Assert.InRange(Math.Abs((point.X - start.X) * (goal.Y - start.Y) - (point.Y - start.Y) * (goal.X - start.X)), 0, 1e-9);
+            previous = point;
+        }
+    }
+
+    [Fact]
+    public void Reached_corner_is_not_resubmitted_as_a_zero_motion_operation()
+    {
+        var field = new SpatialCollisionField(SpatialPlannerTests.Map([]));
+        var route = new RoutePlan(RouteStatus.Found, [new(0.05, 0), new(4, 3)], 1, 5);
+        Assert.Equal(new MapPosition(4, 3), SpatialController.SelectWaypoint(field, route));
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]

@@ -37,7 +37,7 @@ Le [profil exemple](config/appsettings.example.json) décrit les paramètres de 
 Copy-Item config/appsettings.example.json config/appsettings.local.json
 ```
 
-L'adaptateur a réussi un appel réel avec l'effort `low`, sur un contexte synthétique, en plus des tests hors ligne. Ce test ne représente pas une partie pilotée par le modèle. La présence de JSON ou d'arguments d'outils ne garantit jamais leur validité : syntaxe, schéma et corrélation de la réponse sont contrôlés ; la traduction des objectifs en plans exécutables reste à implémenter. Le profil ne contient aucun secret et son chargement par une commande de campagne complète reste à développer.
+L'adaptateur a réussi un appel réel avec l'effort `low` sur un contexte synthétique, puis a été relié à une première boucle de production dans le jeu. La présence de JSON ou d'arguments d'outils ne garantit jamais leur validité : syntaxe, schéma et corrélation sont contrôlés. La traduction actuelle accepte des objectifs de stock d'objets solides ; les autres objectifs restent des propositions non exécutables. Le profil ne contient aucun secret et son chargement par une commande de campagne complète reste à développer.
 
 ## Essais avec Factorio
 
@@ -88,6 +88,15 @@ dotnet $hostDll build --session $sessionFile --item wooden-chest --x 23 --y 0
 ```
 
 Ces commandes calculent leurs routes et placements en C#, à partir de la zone actuellement observée. La construction consomme un objet possédé ; ses coordonnées sont une préférence, la position réelle figure dans le reçu. `verify-spatial --session $sessionFile` prépare une **fixture** qui vérifie contournement d'eau et de murs, blocage par un obstacle ajouté pendant la marche, recalcul, placement avec coût réel et arrêt après annulation du contrôleur. Elle a réussi sans client et avec le pilote connecté. Voir la [navigation et le placement](docs/spatial.md), notamment leurs limites ; une implantation complète d'usine n'est pas encore disponible.
+
+Une première boucle peut extraire des ingrédients, fabriquer à la main et alimenter un four dans une partie normale :
+
+```powershell
+dotnet $hostDll produce --session $sessionFile --item iron-plate --quantity 20
+dotnet $hostDll run-goal --session $sessionFile
+```
+
+La première commande reçoit un stock cible explicite dans l'inventaire du personnage. La seconde demande un objectif libre au modèle cloud puis vérifie s'il est actuellement exécutable. La production relit les stocks et les cuissons engagées ; ses positions sont calculées en C#. Cette boucle ne synthétise pas encore une chaîne automatisée jusqu'à la fusée. Voir les [capacités et preuves de production](docs/production.md).
 
 Pour sauvegarder puis arrêter le serveur :
 

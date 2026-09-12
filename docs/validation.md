@@ -1,11 +1,11 @@
 # Qualification du socle — 12 septembre 2026
 
-Ce document décrit des essais de composants et des fixtures synthétiques sur Factorio **2.0.77** de base, graine **424242**. Aucune de ces parties ne constitue une campagne autonome jusqu'à la fusée.
+Ce document décrit des essais de composants, des fixtures synthétiques et une première production en économie normale sur Factorio **2.0.77** de base, graine **424242**. Aucune de ces parties ne constitue une campagne autonome jusqu'à la fusée.
 
 ## Vérifications réalisées
 
 - Compilation Release des sept projets .NET, sans avertissement.
-- 118 tests hors ligne réussis : 58 pour l'adaptateur Ollama, 30 pour l'infrastructure, 30 pour le host. Ils couvrent notamment transport/reçus, continuité des photographies d'usine, détection de régression, contrôle exclusif, priorité du transport, transitions de défense, collisions spatiales et arrêt d'un mouvement malgré des réponses de mutation perdues. L'appel cloud est exclu de la suite ordinaire.
+- 138 tests hors ligne réussis : 58 pour l'adaptateur Ollama, 30 pour l'infrastructure, 50 pour le host. Ils couvrent notamment transport/reçus, photographies d'usine, détection de régression, contrôle exclusif, priorité du transport, défense, collisions spatiales, arrêt malgré des réponses perdues, dépendances de recettes, refus des objectifs non pris en charge et comptabilité des cuissons engagées. L'appel cloud est exclu de la suite ordinaire.
 - Un appel réel à `glm-5.3-flash:cloud` via Ollama sur des faits synthétiques a produit un objectif valide : 200 plaques de fer. Une tentative, 672 tokens d'entrée et 92 de sortie, environ 1,575 seconde côté client. Il ne commande pas le jeu.
 - Une fixture native démarre sans client : marche avec position réellement changée et temps écoulé, fabrication de deux engrenages consommant quatre plaques, minage de trois minerais avec durée native, refus de minage hors portée, soumission répétée sans nouvel effet, conflit d'identifiant refusé et annulation persistée.
 - La fixture étendue vérifie construction d'un coffre avec consommation d'un objet, refus d'un second placement au même endroit sans perte, insertion/retrait exacts et transfert partiel limité à 90 plaques par la capacité restante du coffre. Un four produit cinq plaques à partir de cinq minerais et de combustible réellement transférés ; ses sorties sont reprises par l'acteur. Réglage de recette et rotation de tapis sont relus dans le moteur. Une recherche dont le prérequis manque est refusée sans sélection ni déblocage.
@@ -24,6 +24,14 @@ Ce document décrit des essais de composants et des fixtures synthétiques sur F
 - Une nouvelle marche de cette fixture est interrompue côté C# juste après acceptation. La libération du contrôleur obtient un reçu `cancelled` ; deux lectures natives séparées de 500 ms montrent des ticks croissants et une position inchangée. Avec le client, un seul personnage est présent et son identifiant reste celui du pilote pendant les trajets, les constructions et l'arrêt. Ces preuves concernent une fixture locale, pas la synthèse d'une usine ni une campagne.
 
 Les rapports JSON/JSONL bruts restent dans `.runtime/`, avec sauvegardes, identités de session et journaux locaux. Ils ne sont pas publiés. Les coûts et positions ont été comparés à des lectures natives indépendantes des reçus du mod.
+
+## Production en économie normale et objectif réel du LLM
+
+Dans un monde de développement distinct des fixtures, le C# a exploré jusqu'au fer, extrait 12 minerais, construit un four et atteint 20 plaques à partir des huit plaques initiales. Les déplacements et la production ont nécessité les corrections détaillées dans [production.md](production.md), sans restauration d'une ancienne sauvegarde ni apport artificiel.
+
+Un appel réel à `glm-5.3-flash:cloud` sur les observations du jeu a ensuite proposé 100 plaques. La traduction C# a accepté l'identifiant natif et exécuté l'objectif par lots de cuisson d'au plus 16 fabrications. L'inventaire passe de 20 à 100 plaques entre les ticks 103 167 et 132 815. L'appel a consommé 1 158 tokens d'entrée et 139 de sortie, en une tentative.
+
+Une lecture indépendante du moteur confirme 100 plaques transportées, un seul four avec 92 produits terminés depuis sa construction, aucune cuisson engagée ni minerai/produit restant dans ses inventaires d'entrée/sortie. Le pilote est connecté au même personnage. Le déclencheur natif de production a débloqué `steam-power`. Pollution, évolution et expansion sont actives, le mode pacifique est désactivé ; le mod rapporte zéro intervention manuelle, `fixture=false` et zéro lancement de fusée. L'objectif du modèle a été exécuté sans intervention, mais la préparation et les corrections antérieures de ce monde excluent de présenter cet essai comme une des trois campagnes finales.
 
 ## Défauts rencontrés et corrigés
 
@@ -47,7 +55,7 @@ Les douze kinds annoncés par le mod sont des capacités implémentées ; seuls 
 
 La photographie complète du registre connu, les inventaires natifs, le transit des tapis/bras et la déduplication des segments fluides sont implémentés avec les preuves limitées ci-dessus. La découverte globale de l'usine, les objets au sol et les réservations C# restent incomplets. Les filtres et capacités de machines particulières, la collecte sous forte charge et les grands réseaux fluides restent à qualifier.
 
-La navigation locale et le placement individuel en C# sont implémentés avec les preuves ci-dessus. L'exploration, les implantations complètes et leurs réseaux, la fuite et la défense de l'usine, la mémoire SQLite et la traduction des objectifs libres en progression scientifique restent à développer.
+La navigation locale, le placement individuel, une première exploration et la production de solides en C# sont implémentés avec les preuves décrites ici et dans [production.md](production.md). Les implantations complètes et leurs réseaux, la fuite et la défense de l'usine, la mémoire SQLite et la traduction générale des objectifs libres en progression scientifique restent à développer.
 
 Le watermark local refuse une régression observée de tick, d'incarnation ou de génération et un autre monde. Il ne démontre pas une détection universelle d'une ancienne sauvegarde restaurée puis avancée au-delà du dernier tick connu. La reprise gérée des sessions reste à implémenter.
 

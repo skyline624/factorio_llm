@@ -53,7 +53,7 @@ local handlers = {hello = hello, observe = Observation.observe, factory_snapshot
   end,
   operation = function(args) return Operations.get(args.operationId) end,
   cancel = function(args) return Operations.cancel(args.operationId) end,
-  recipes = Catalog.recipes, technologies = Catalog.technologies}
+  recipes = Catalog.recipes, technologies = Catalog.technologies, production_catalog = Catalog.production}
 
 remote.add_interface("factorio_agent", {execute = function(json)
   local request, response
