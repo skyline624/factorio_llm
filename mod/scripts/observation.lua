@@ -29,6 +29,10 @@ function M.entity(entity, include_inventory)
     if entity.type == "assembling-machine" or entity.type == "furnace" or entity.type == "rocket-silo" then
       local recipe = entity.get_recipe()
       result.recipe, result.craftingProgress = recipe and recipe.name, entity.crafting_progress
+      if entity.type == "furnace" then
+        local previous = entity.previous_recipe
+        result.previousRecipe = previous and (type(previous.name) == "string" and previous.name or previous.name.name)
+      end
     end
     if entity.type == "inserter" then
       local held = entity.held_stack

@@ -5,7 +5,7 @@ using Factorio.Agent.Core;
 namespace Factorio.Agent.Host;
 
 /// <summary>Serializes calls across CLI processes and detects observed world-history regressions.</summary>
-public sealed class SessionGameClient(RuntimeSession session, IGameClient inner, ActorControlLease? controllerLease = null) : IGameClient
+public sealed class SessionGameClient(RuntimeSession session, IGameClient inner, ActorControlLease? controllerLease = null) : IGameClient, IResourceMemoryReader
 {
     private static readonly HashSet<string> Mutations = ["hello", "submit", "cancel", "mark_fixture", "prepare_checkpoint"];
     private readonly SemaphoreSlim callGate = new(1, 1);
@@ -36,7 +36,18 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
             Watermark verified = Verify(response, previous);
             await PersistAsync(verified, cancellationToken);
         }
+        if (request.Action == "spatial" && response.Ok)
+            await new ResourceMemoryStore(session.Directory).RecordAsync(SpatialSnapshot.Parse(response), cancellationToken);
         return response;
+    }
+
+    public async Task<ResourceMemorySnapshot> ReadResourceMemoryAsync(SpatialSnapshot current, CancellationToken token = default)
+    {
+        if (current.Scope.WorldId != session.ProposedWorldId || current.Scope.SessionId != session.SessionId)
+            throw new SessionDivergenceException("Resource memory request belongs to another world or controller session.");
+        using IDisposable priority = await AcquireCallAsync(control: false, token);
+        await using FileStream guard = await AcquireLockAsync(token);
+        return await new ResourceMemoryStore(session.Directory).ReadAsync(current, token);
     }
 
     // A stock page cannot interrupt a call already in flight, but it yields the

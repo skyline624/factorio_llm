@@ -14,9 +14,10 @@ public sealed class ExplorationPlanner
     private double frontierDistance;
     private int stalledFrontierSteps;
 
-    public MapPosition Choose(SpatialSnapshot map, string wanted, ProductionCatalog catalog, MapPosition? destination = null)
+    public MapPosition Choose(SpatialSnapshot map, string wanted, ProductionCatalog catalog, MapPosition? destination = null, IReadOnlyList<SurveyedCell>? surveyed = null)
     {
         origin ??= map.Actor.Position;
+        foreach (var cell in surveyed ?? []) observed.Add((cell.X, cell.Y));
         foreach (string id in resources.Where(p => map.Bounds.Contains(p.Value.Position)).Select(p => p.Key).ToArray())
             resources.Remove(id);
         foreach (SpatialEntity entity in map.Entities.Where(e => catalog.Mining.ContainsKey(e.Name)))

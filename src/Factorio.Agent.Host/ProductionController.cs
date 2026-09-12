@@ -222,7 +222,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
         if (value.ValueKind == JsonValueKind.Object && !value.EnumerateObject().Any()) return [];
         return value.EnumerateArray().Select(e => new ProductionEntity(e.GetProperty("id").GetString()!,
             e.GetProperty("name").GetString()!, e.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!,
-            e.TryGetProperty("recipe", out var recipe) ? recipe.GetString() : null, e.GetProperty("inventories").Clone())).ToArray();
+            e.TryGetProperty("recipe", out var recipe) ? recipe.GetString() : null, e.GetProperty("inventories").Clone(),
+            e.TryGetProperty("previousRecipe", out var previous) ? previous.GetString() : null)).ToArray();
     }
 }
 
@@ -230,7 +231,7 @@ public sealed record ProductionResult(string Item, int TargetStock, long StartTi
     long FinalStock, int Steps, IReadOnlyList<OperationReceipt> Receipts);
 internal sealed record ProductionState(ActorScope Scope, long Tick, string ControlMode, IReadOnlyDictionary<string, long> Inventory,
     IReadOnlyList<ProductionEntity> Entities);
-internal sealed record ProductionEntity(string Id, string Name, MapPosition Position, string? Recipe, JsonElement Inventories)
+internal sealed record ProductionEntity(string Id, string Name, MapPosition Position, string? Recipe, JsonElement Inventories, string? PreviousRecipe = null)
 {
     public KnownProductionMachine AsMachine() => new(Id, Name, Recipe, Items("input"), Items("output"));
     private IReadOnlyDictionary<string, long> Items(string slot) => Inventories.TryGetProperty(slot, out var inventory)

@@ -120,7 +120,22 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
             RequireAi(map);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during exploration clearance.");
-            try { return new(planner.Choose(map, wanted, catalog, destination), map.CollectedTick); }
+            ResourceMemorySnapshot? memory = game is IResourceMemoryReader reader ? await reader.ReadResourceMemoryAsync(map, token) : null;
+            ResourceSighting? remembered = destination is null ? memory?.Nearest(wanted, catalog, map.Actor.Position) : null;
+            ResourceSearchHint? hint = null;
+            if (destination is null && remembered is null && memory is not null && wanted.Length > 0)
+            {
+                ProductionState known = await new ProductionController(game, journal).ObserveAsync(token);
+                if (known.Scope != map.Scope) throw new InvalidDataException("Actor changed while reading resource search landmarks.");
+                hint = memory.ProcessingAreaHint(wanted, catalog, known.Entities.Select(e => (e.Id, e.Recipe ?? e.PreviousRecipe, e.Position)), map);
+                if (hint is not null)
+                    await journal.AppendAsync("factory-resource-search-hint", new { map.Scope, map.SurfaceIndex, known.Tick, wanted, hint,
+                        interpretation = "processing-area-hypothesis-not-an-observed-deposit" }, token);
+            }
+            if (remembered is not null)
+                await journal.AppendAsync("resource-memory-target", new { map.Scope, map.SurfaceIndex, map.CollectedTick, wanted,
+                    remembered, interpretation = "historical-destination-requires-local-reobservation" }, token);
+            try { return new(planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position, memory?.SurveyedCells), map.CollectedTick); }
             catch (ExplorationBlockedException) when (cleared < 16)
             {
                 if (!await ClearTreeAsync(map, catalog, destination, token)) throw;

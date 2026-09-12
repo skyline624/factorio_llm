@@ -107,6 +107,8 @@ dotnet $hostDll steam-power --session $sessionFile
 
 Cette commande C# calcule les raccordements directs depuis les ports fluides natifs et cherche une rive observée. Elle vérifie les connexions réellement établies, la génération électrique et l'alimentation d'un bras servant de faible charge. Elle ne fait pas encore partie de la traduction des objectifs libres du modèle. Voir les [preuves et limites de l'électricité](docs/steam-power.md), dont la reprise explicite d'une construction partielle.
 
+La [mémoire des ressources](docs/resource-memory.md) conserve les gisements réellement vus et les zones explorées entre les commandes. Les souvenirs restent datés et sont vérifiés localement avant extraction.
+
 La commande `assemble --session $sessionFile --item electronic-circuit --quantity 5` installe et approvisionne un assembleur alimenté. `produce` réutilise ensuite une machine déjà configurée. Voir la [production par assemblage](docs/assembly.md) pour les bilans natifs, les essais et les limites.
 
 Pour lire la prochaine étape scientifique sans modifier le jeu, utiliser `research-plan --session $sessionFile --technology automation`. `prepare-research --session $sessionFile --technology automation` exécute les déclencheurs de fabrication pris en charge et vérifie leur déblocage natif ; la fabrication du laboratoire et le déblocage de la science rouge ont réussi dans le monde normal de développement. `research --session $sessionFile --technology automation` prend ensuite en charge le laboratoire, les packs et la recherche disponible. Voir les [prérequis scientifiques](docs/research-planning.md) et l'[exécution en laboratoire](docs/laboratory-research.md), avec leurs preuves et limites.
