@@ -55,20 +55,26 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
             RequireScope(value.Scope, catalog);
             return value;
         }
-        async Task<string> BuildAsync(string buildingItem, PlacementCandidate candidate)
-        {
-            await controller.TravelAsync(candidate.Position, 8, catalog, token);
-            var current = await MapAsync();
-            MapPosition approach = new PlacementPlanner().FindApproach(new(current), buildingItem, candidate)
-                ?? throw new InvalidOperationException("No reachable approach outside the planned footprint.");
-            await controller.NavigateAsync(approach, .2, token);
-            var validation = await spatial.ValidateAsync(catalog.Scope, buildingItem, [candidate], token);
-            if (!validation.Candidates[0].Allowed || !validation.Candidates[0].InReach)
-                throw new InvalidOperationException("The engine refused the calculated powered-machine placement.");
-            var built = await controller.WorkAsync("build", new { item = buildingItem, candidate.Position, candidate.Direction }, 600, token: token);
-            Completed(built);
-            return built.Effects.GetProperty("entityId").GetString()!;
-        }
+        Task<string> BuildAsync(string buildingItem, PlacementCandidate candidate) =>
+            BuildAtAsync(buildingItem, candidate, catalog, controller, token);
+    }
+
+    public async Task<string> BuildAtAsync(string item, PlacementCandidate candidate, ProductionCatalog catalog,
+        SpatialController controller, CancellationToken token)
+    {
+        var spatial = new SpatialClient(game);
+        await controller.TravelAsync(candidate.Position, 8, catalog, token);
+        var current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
+        RequireScope(current.Scope, catalog);
+        MapPosition approach = new PlacementPlanner().FindApproach(new(current), item, candidate)
+            ?? throw new InvalidOperationException("No reachable approach outside the planned footprint.");
+        await controller.NavigateAsync(approach, .2, token);
+        var validation = await spatial.ValidateAsync(catalog.Scope, item, [candidate], token);
+        if (!validation.Candidates[0].Allowed || !validation.Candidates[0].InReach)
+            throw new InvalidOperationException("The engine refused the calculated powered-machine placement.");
+        var built = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction }, 600, token: token);
+        Completed(built);
+        return built.Effects.GetProperty("entityId").GetString()!;
     }
 
     public async Task MaintainFuelAsync(string machineId, double expectedEnergy, ProductionCatalog catalog,

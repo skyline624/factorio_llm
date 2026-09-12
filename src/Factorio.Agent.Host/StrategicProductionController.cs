@@ -45,7 +45,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 .Select(t => new { t.Name, t.Count, t.Ingredients, t.Trigger }).ToArray(),
             executionCapabilities = "Production goals use category production, unit items and an exact native item identifier, up to 1000 carried items. " +
                 "C# explores, mines, hand-crafts, installs or reuses burner production, powered assemblers and local steam supply. " +
-                "Research goals use category research, unit completion, quantity 1 and an exact native technology identifier. C# resolves native prerequisites, supported craft-item triggers and laboratory research, including science production and power maintenance. " +
+                "Research goals use category research, unit completion, quantity 1 and an exact native technology identifier. C# resolves native prerequisites, supported craft-item triggers and laboratory research, including science production and power maintenance. It can also satisfy fluid resource mining triggers using a compatible electric extractor on an observed deposit near an existing network, with at most one new pole. Remote powered outposts and solid-resource mining triggers remain unsupported. " +
                 "Only deterministic solid production and bounded science batches are executable so far; fluid networks and industrial transport remain unsupported. " +
                 "Choose an unmet useful goal toward the rocket. Other meaningful goals remain permissible proposals with explicit unsupported results.",
             scope = "Local observed resources; known own buildings; exact actor inventory at observedTick. Hidden areas and enemies are unknown."

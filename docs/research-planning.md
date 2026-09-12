@@ -36,3 +36,7 @@ La commande `research` enchaîne les prérequis et les recherches en laboratoire
 ## Cascade native en fixture
 
 La fixture a reçu explicitement les ingrédients d’un laboratoire et dix packs rouges ; sa technologie de science rouge a été réinitialisée pour cet essai. Une seule commande ciblant `gun-turret` a fabriqué le laboratoire, vérifié le déblocage de `automation-science-pack`, puis alimenté le laboratoire et achevé la recherche des tourelles. Les deux technologies figurent dans le résultat vérifié, entre les ticks 82 852 et 90 171. La lecture indépendante confirme la recette de tourelle disponible et une unité de laboratoire dans le compteur natif de production. Les apports et le prérequis réinitialisé excluent cette fixture des campagnes finales.
+
+## Déclencheurs d’extraction
+
+Les déclencheurs `mine-entity` conservent leur identité native dans `TechnologyStep.Entity`. `research` peut les exécuter pour un gisement fluide au moyen d’un extracteur électrique compatible et d’une alimentation locale. Le pompage, le stock fluide observé et le déblocage sont vérifiés séparément. Voir les [preuves et limites de l’extraction pétrolière](resource-research.md). Les autres types d’extraction restent explicitement non exécutables.

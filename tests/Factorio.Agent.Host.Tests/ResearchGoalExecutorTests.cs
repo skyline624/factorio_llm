@@ -35,6 +35,17 @@ public sealed class ResearchGoalExecutorTests
         Assert.Empty(steps.Executed);
     }
 
+    [Fact]
+    public async Task MiningPrerequisiteRunsAndStillRequiresNativeCompletion()
+    {
+        var game = new ResearchGame(true);
+        var steps = new Steps(game, true);
+        var result = await new ResearchGoalExecutor(game, new Journal(), steps).RunAsync("target");
+        Assert.True(result.Researched);
+        Assert.Equal("mine-trigger", steps.Kinds[0]);
+        Assert.Equal(new[] { "prerequisite", "target" }, steps.Executed);
+    }
+
     private sealed class Journal : IControllerJournal
     {
         public Task AppendAsync(string type, object data, CancellationToken token) => Task.CompletedTask;
@@ -42,14 +53,16 @@ public sealed class ResearchGoalExecutorTests
     private sealed class Steps(ResearchGame game, bool complete) : IResearchStepExecutor
     {
         public List<string> Executed { get; } = [];
+        public List<string> Kinds { get; } = [];
         public Task ExecuteAsync(TechnologyStep step, CancellationToken token)
         {
             Executed.Add(step.Technology);
+            Kinds.Add(step.Kind);
             if (complete) game.Finished.Add(step.Technology);
             return Task.CompletedTask;
         }
     }
-    private sealed class ResearchGame : IGameClient
+    private sealed class ResearchGame(bool mining = false) : IGameClient
     {
         public HashSet<string> Finished { get; } = [];
         private long tick;
@@ -61,7 +74,7 @@ public sealed class ResearchGoalExecutorTests
             if (request.Action != "technologies") throw new InvalidOperationException("Unexpected mutation in dependency reader.");
             string name = request.Arguments.GetProperty("name").GetString()!;
             var technology = new NativeTechnology(name, true, Finished.Contains(name), name == "prerequisite" || Finished.Contains("prerequisite"),
-                name == "prerequisite" ? [] : ["prerequisite"], [new("red", 1)], 1, 60);
+                name == "prerequisite" ? [] : ["prerequisite"], [new("red", 1)], 1, 60, mining && name == "prerequisite" ? Protocol.ToElement(new { type = "mine-entity", entity = "oil" }) : null);
             return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(new
             { items = new[] { technology }, total = 1, offset = 0, limit = 1, collectedTick = tick, complete = true })));
         }

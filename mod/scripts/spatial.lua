@@ -17,7 +17,8 @@ end
 
 local function prototype(value)
   local result = {name = value.name, type = value.type, collisionBox = box(value.collision_box),
-    mask = mask(value.collision_mask), tileWidth = value.tile_width, tileHeight = value.tile_height}
+    mask = mask(value.collision_mask), tileWidth = value.tile_width, tileHeight = value.tile_height,
+    isElectric = value.electric_energy_source_prototype ~= nil}
   if value.type == "resource" then result.resourceCategory = value.resource_category end
   if value.type == "mining-drill" then
     result.miningRadius = value.mining_drill_radius

@@ -138,3 +138,5 @@ Le manifeste contient un secret RCON local et reste ignoré par Git. Le serveur 
 Le code original du projet est sous [licence MIT](LICENSE), copyright skyline624. Cette licence ne couvre pas Factorio, ses assets, ni les composants tiers éventuellement utilisés, qui conservent leurs propres licences. Les références étudiées ne sont pas automatiquement des dépendances incorporées. Le projet n'est pas affilié à Wube Software.
 
 La commande `run-campaign --session FILE --max-goals 10` ajoute une [continuité stratégique avec mémoire persistante](docs/strategic-campaign.md). Ses arrêts de budget ou de réconciliation ne sont pas des réussites de campagne. Deux objectifs successifs ont été exécutés avec le modèle réel dans une fixture : recherche des foreuses électriques, puis stock de 50 packs rouges.
+
+La recherche prend également en charge le [déblocage du raffinage par extraction électrique native](docs/resource-research.md), qualifié dans une fixture avec un chevalet placé et alimenté par C#. Les réseaux distants, le raffinage et la chimie restent à développer.

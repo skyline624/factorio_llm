@@ -51,6 +51,15 @@ public sealed class TechnologyPlannerTests
         Assert.Equal(new TechnologyStep("research", "automation"), new TechnologyPlanner().Next("automation", Map(technology)));
     }
 
+    [Fact]
+    public void NativeMineTriggerRetainsItsExactResourceIdentity()
+    {
+        var technology = Technology("oil") with { Trigger = Protocol.ToElement(new { type = "mine-entity", entity = "crude-oil" }) };
+        var step = new TechnologyPlanner().Next("oil", Map(technology));
+        Assert.Equal("mine-trigger", step.Kind);
+        Assert.Equal("crude-oil", step.Entity);
+    }
+
     private static NativeTechnology Technology(string name) => new(name, true, false, true, [], [], 1, 600);
     private static IReadOnlyDictionary<string, NativeTechnology> Map(params NativeTechnology[] values) => values.ToDictionary(v => v.Name);
 }

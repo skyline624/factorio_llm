@@ -10,7 +10,7 @@ public sealed record NativeTechnology(string Name, bool Enabled, bool Researched
     [property: JsonConverter(typeof(NativeArrayConverter<ScienceIngredient>))] IReadOnlyList<ScienceIngredient> Ingredients,
     long Count, double EnergyTicks, JsonElement? Trigger = null, JsonElement? Effects = null);
 
-public sealed record TechnologyStep(string Kind, string Technology, string? Item = null, int Count = 0, string? Reason = null);
+public sealed record TechnologyStep(string Kind, string Technology, string? Item = null, int Count = 0, string? Reason = null, string? Entity = null);
 
 /// <summary>Resolves native technology dependencies without granting research or guessing unlocks.</summary>
 public sealed class TechnologyPlanner
@@ -37,8 +37,15 @@ public sealed class TechnologyPlanner
             if (technology.Trigger is { } trigger && trigger.ValueKind != JsonValueKind.Null)
             {
                 if (trigger.ValueKind != JsonValueKind.Object
-                    || !trigger.TryGetProperty("type", out JsonElement type) || type.ValueKind != JsonValueKind.String || type.GetString() != "craft-item")
+                    || !trigger.TryGetProperty("type", out JsonElement type) || type.ValueKind != JsonValueKind.String)
                     return Unsupported("This native research trigger is not implemented.");
+                if (type.GetString() == "mine-entity")
+                {
+                    if (!trigger.TryGetProperty("entity", out var entity) || entity.ValueKind != JsonValueKind.String
+                        || string.IsNullOrWhiteSpace(entity.GetString())) return Unsupported("The native mining trigger has no exact entity identity.");
+                    return new("mine-trigger", name, Count: 1, Entity: entity.GetString());
+                }
+                if (type.GetString() != "craft-item") return Unsupported("This native research trigger is not implemented.");
                 if (!trigger.TryGetProperty("item", out JsonElement item) || item.ValueKind != JsonValueKind.Object
                     || !item.TryGetProperty("name", out JsonElement itemName) || itemName.ValueKind != JsonValueKind.String
                     || string.IsNullOrWhiteSpace(itemName.GetString()) || !trigger.TryGetProperty("count", out JsonElement count)

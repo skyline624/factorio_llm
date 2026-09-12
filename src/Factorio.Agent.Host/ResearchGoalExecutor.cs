@@ -36,7 +36,7 @@ public sealed class ResearchGoalExecutor(IGameClient game, IControllerJournal jo
                 await journal.AppendAsync("research-goal-result", result, token);
                 return result;
             }
-            if (next.Kind is not ("craft-trigger" or "research"))
+            if (next.Kind is not ("craft-trigger" or "mine-trigger" or "research"))
                 throw new InvalidOperationException(next.Reason ?? "The native research prerequisite is not executable.");
             await executor.ExecuteAsync(next, token);
             // Never interpret a successful method return or a research-selection receipt as completion.
@@ -61,6 +61,8 @@ public sealed class ResearchGoalExecutor(IGameClient game, IControllerJournal jo
         {
             if (step.Kind == "craft-trigger")
                 await new ResearchPrerequisiteController(game, new ProductionGoalExecutor(game, journal), journal).RunAsync(step.Technology, token);
+            else if (step.Kind == "mine-trigger")
+                await new ResourceResearchController(game, journal).RunAsync(step.Technology, token);
             else if (step.Kind == "research")
                 await new LaboratoryController(game, journal).RunAsync(step.Technology, token);
             else throw new InvalidOperationException("Unsupported research stage.");
