@@ -10,13 +10,13 @@ public sealed class PlacementPlanner
         double reach = field.Map.Actor.ReachDistance - 1;
         if (reach <= 0) return null;
         MapPosition start = field.Map.Actor.Position;
-        if (start.DistanceTo(entity.Position) <= reach && field.Walkable(start)) return start;
+        if (start.DistanceTo(entity.Position) <= reach && CanStop(field, start)) return start;
         var candidates = new List<MapPosition>();
         for (double x = Math.Ceiling((entity.Position.X - reach) * 2) / 2; x <= entity.Position.X + reach; x += 0.5)
             for (double y = Math.Ceiling((entity.Position.Y - reach) * 2) / 2; y <= entity.Position.Y + reach; y += 0.5)
             {
                 var point = new MapPosition(x, y);
-                if (point.DistanceTo(entity.Position) <= reach && field.Walkable(point)) candidates.Add(point);
+                if (point.DistanceTo(entity.Position) <= reach && CanStop(field, point)) candidates.Add(point);
             }
         return candidates.OrderBy(p => p.DistanceTo(start)).ThenBy(p => p.DistanceTo(entity.Position))
             .FirstOrDefault(p => new RoutePlanner().Find(field, p).Status == RouteStatus.Found);
@@ -42,7 +42,7 @@ public sealed class PlacementPlanner
             {
                 var point = new MapPosition(x, y);
                 if (point.DistanceTo(placement.Position) > reach || exclusion.Overlaps(field.Character.CollisionBox.Translate(point))
-                    || !field.Walkable(point)) continue;
+                    || !CanStop(field, point)) continue;
                 candidates.Add(point);
             }
         return candidates.OrderBy(p => p.DistanceTo(field.Map.Actor.Position)).ThenBy(p => p.DistanceTo(placement.Position))
@@ -59,6 +59,16 @@ public sealed class PlacementPlanner
             double radius = Math.Max(.2, reach);
             return remainingTargets.All(target => new RoutePlanner().Find(after, target, radius).Status == RouteStatus.Found);
         }
+    }
+
+    private static bool CanStop(SpatialCollisionField field, MapPosition position)
+    {
+        if (!field.Walkable(position)) return false;
+        var body = field.Character.CollisionBox.Translate(position);
+        // Belts remain walkable for routes, but their motion prevents a stable action handoff.
+        return !field.Map.Entities.Any(e => field.Map.Prototypes[e.Name].Type is "transport-belt" or "underground-belt" or "splitter"
+            && new WorldBox(new(Math.Floor(e.Bounds.Min.X), Math.Floor(e.Bounds.Min.Y)),
+                new(Math.Ceiling(e.Bounds.Max.X), Math.Ceiling(e.Bounds.Max.Y))).Overlaps(body));
     }
 
     public IReadOnlyList<PlacementCandidate> FindCandidates(SpatialCollisionField field, string item,

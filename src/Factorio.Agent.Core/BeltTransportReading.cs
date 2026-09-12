@@ -13,6 +13,7 @@ public sealed record MaterialEndpoint(string EntityId, string InventoryId, strin
         var work = snapshot.Records.Single(r => r.Kind == "work" && r.EntityId == entityId);
         string recipeName = work.Data.GetProperty("recipe").GetString() ?? throw new InvalidOperationException("A transport machine must have a configured recipe.");
         var recipe = catalog.Recipes.Single(r => r.Name == recipeName);
+        if (!recipe.Enabled) throw new InvalidOperationException("A configured transport endpoint recipe is still locked by research.");
         var materials = source ? recipe.Products : recipe.Ingredients;
         if ((source && materials.Count != 1) || !materials.Any(m => m.Name == item)
             || materials.Where(m => m.Name == item).Any(m => !m.DeterministicItem))

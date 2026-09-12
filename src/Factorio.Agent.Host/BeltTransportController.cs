@@ -9,7 +9,8 @@ public sealed record BeltTransportResult(string SourceId, string TargetId, strin
 /// <summary>Installs or reuses an isolated native transport line and reconciles both endpoints with all transit.</summary>
 public sealed class BeltTransportController(IGameClient game, IControllerJournal journal)
 {
-    public async Task<BeltTransportResult> RunAsync(string sourceId, string targetId, string item, int quantity, CancellationToken token = default)
+    public async Task<BeltTransportResult> RunAsync(string sourceId, string targetId, string item, int quantity, CancellationToken token = default,
+        IReadOnlySet<string>? reservedEntityIds = null)
     {
         if (sourceId == targetId || quantity is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(quantity));
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -29,14 +30,14 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
         await controller.ApproachEntityAsync(sourceId, sourceEntity.Position, catalog, token);
         var map = await MapAsync();
         var initial = await StockAsync();
-        var source = MaterialEndpoint.From(initial, catalog, sourceId, item, true);
+        var boundary = BeltTransportBoundary.From(map, initial, catalog, sourceId, targetId, item);
+        var reserved = boundary.ReservedEntityIds.Concat(reservedEntityIds ?? new HashSet<string>()).Append(targetId).ToHashSet(StringComparer.Ordinal);
         var target = MaterialEndpoint.From(initial, catalog, targetId, item, false);
         if (target.Recipe is not null && map.Entities.Single(e => e.Id == targetId).Status is null)
             throw new InvalidDataException("Machine transport requires its native operating status; update the mod before construction.");
-        source.Read(initial, item); target.Read(initial, item);
-        if (source.Recipe is null && map.Entities.Any(e => e.DropTargetId == sourceId))
-            throw new InvalidOperationException("A replenished source container requires upstream flow accounting before transport construction.");
-        var installation = BeltTransportNetwork.Find(map, sourceId, targetId);
+        target.Read(initial, item);
+        await journal.AppendAsync("belt-transport-boundary", new { sourceId, targetId, boundary.Root, boundary.Buffers, boundary.Segments }, token);
+        var installation = boundary.FindConnection(map, targetId);
         BeltTransportReading baseline;
         long startTick;
         if (installation is null)
@@ -48,7 +49,6 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
                 controller, TimeSpan.FromMinutes(5), token)
                 ?? throw new InvalidOperationException("No powered isolated belt-and-inserter layout found in the observed area.");
             await journal.AppendAsync("belt-transport-plan", new { sourceId, targetId, item, quantity, equipment, plan, map.Scope, map.CollectedTick }, token);
-            var reserved = new HashSet<string>(StringComparer.Ordinal) { sourceId, targetId };
             await production.ProduceAsync(equipment.Belt, plan.Belts.Count, token, reserved);
             await production.ProduceAsync(equipment.Inserter, 2, token, reserved);
             if (plan.Poles.Count > 0) await production.ProduceAsync(equipment.Pole, plan.Poles.Count, token, reserved);
@@ -69,7 +69,7 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
             remaining.Remove(plan.TargetInserter.Position);
             string targetArm = await builder.BuildAtAsync(equipment.Inserter, plan.TargetInserter, catalog, controller, token, remaining);
             var beforeActivation = await StockAsync();
-            baseline = BeltTransportReading.From(beforeActivation, source, target, item, beltIds, [targetArm]);
+            baseline = boundary.Read(beforeActivation, target, item, beltIds, [targetArm]);
             startTick = beforeActivation.CollectedTick;
             string sourceArm = await builder.BuildAtAsync(equipment.Inserter, plan.SourceInserter, catalog, controller, token);
             installation = new(sourceArm, targetArm, beltIds);
@@ -77,14 +77,17 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
         }
         else
         {
-            baseline = BeltTransportReading.From(initial, source, target, item, installation.BeltIds,
+            baseline = boundary.Read(initial, target, item, installation.BeltIds,
                 [installation.SourceInserterId, installation.TargetInserterId]);
             startTick = initial.CollectedTick;
             await journal.AppendAsync("belt-transport-reused", new { installation, baseline, startTick }, token);
         }
         double speed = map.Prototypes[map.Items[equipment.Belt].EntityName].BeltSpeed
             ?? throw new InvalidDataException("Missing native transport speed.");
-        long observationBudget = (long)Math.Clamp(1200 + installation.BeltIds.Count / speed + quantity * 120, 3600, 180000);
+        long observationBudget = BeltTransportTiming.ObservationBudget(quantity,
+            installation.BeltIds.Count + boundary.Segments.Sum(s => s.Installation.BeltIds.Count), speed,
+            BeltTransportTiming.SecondsPerItem(boundary.Root, map, catalog), BeltTransportTiming.SecondsPerItem(target, map, catalog));
+        await journal.AppendAsync("belt-transport-window", new { startTick, observationBudget, quantity }, token);
         int powered = 0;
         bool outputPrepared = false;
         long outputInstallationTicks = 0;
@@ -93,9 +96,9 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
             var waited = await controller.WorkAsync("wait", new { ticks = 30 }, 600, token: token);
             if (waited.Status != "completed") throw new InvalidOperationException("Transport supervision did not complete its native wait.");
             map = await MapAsync();
-            BeltTransportNetwork.Verify(map, sourceId, targetId, installation.SourceInserterId, installation.TargetInserterId, installation.BeltIds);
+            boundary.VerifyConnection(map, targetId, installation);
             var current = await StockAsync();
-            var reading = BeltTransportReading.From(current, source, target, item, installation.BeltIds,
+            var reading = boundary.Read(current, target, item, installation.BeltIds,
                 [installation.SourceInserterId, installation.TargetInserterId]);
             long delivered = reading.DeliveredSince(baseline);
             bool energized = map.Entities.Single(e => e.Id == installation.SourceInserterId).Power?.Energy > 0
@@ -110,13 +113,13 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
             }
             if (!outputPrepared && target.Recipe is not null && map.Entities.Single(e => e.Id == targetId).Status == "full_output")
             {
-                await new MachineOutputBufferController(game, journal).EnsureAsync(targetId, sourceId, catalog, controller, token);
+                await new MachineOutputBufferController(game, journal).EnsureAsync(targetId, sourceId, catalog, controller, token, reserved);
                 outputInstallationTicks = checked(outputInstallationTicks + (await StockAsync()).CollectedTick - current.CollectedTick);
                 outputPrepared = true;
                 // The next atomic snapshot includes all production and transfers while the output line was installed.
                 continue;
             }
-            if (source.Recipe is null && reading.Source.Count == 0 && reading.Transit == 0)
+            if (boundary.Root.Recipe is null && reading.Source.Count == 0 && reading.Transit == 0)
                 throw new InvalidOperationException($"The source is exhausted after {delivered} verified deliveries.");
             if (current.CollectedTick - startTick - outputInstallationTicks > observationBudget)
                 throw new TimeoutException($"The native transport window ended after {delivered} verified deliveries; preserve the installed line.");

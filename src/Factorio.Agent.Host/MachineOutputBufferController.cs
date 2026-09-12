@@ -7,7 +7,7 @@ namespace Factorio.Agent.Host;
 public sealed class MachineOutputBufferController(IGameClient game, IControllerJournal journal)
 {
     public async Task EnsureAsync(string machineId, string reservedSourceId, ProductionCatalog catalog,
-        SpatialController controller, CancellationToken token)
+        SpatialController controller, CancellationToken token, IReadOnlySet<string>? reservedEntityIds = null)
     {
         var stock = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         RequireScope(stock.Scope);
@@ -16,6 +16,7 @@ public sealed class MachineOutputBufferController(IGameClient game, IControllerJ
         if (recipe.Products.Count != 1 || !recipe.Products[0].DeterministicItem)
             throw new InvalidOperationException("Automatic output storage currently requires one deterministic solid product.");
         string item = recipe.Products[0].Name;
+        var reserved = (reservedEntityIds ?? new HashSet<string>()).Append(reservedSourceId).Append(machineId).ToHashSet(StringComparer.Ordinal);
         var equipment = new BeltTransportEquipment("transport-belt", "inserter", "small-electric-pole");
         const string containerItem = "wooden-chest";
         var spatial = new SpatialClient(game);
@@ -33,11 +34,10 @@ public sealed class MachineOutputBufferController(IGameClient game, IControllerJ
                 .Find(map, machineId, containerItem, equipment, cancellation), controller, TimeSpan.FromMinutes(5), token)
                 ?? throw new InvalidOperationException("No reachable output container and transport layout found for the blocked machine.");
             await journal.AppendAsync("machine-output-buffer-plan", new { machineId, item, placement, map.Scope, map.CollectedTick }, token);
-            await new ProductionController(game, journal).ProduceAsync(containerItem, 1, token,
-                new HashSet<string>(StringComparer.Ordinal) { reservedSourceId, machineId });
+            await new ProductionController(game, journal).ProduceAsync(containerItem, 1, token, reserved);
             targetId = await new PoweredMachineController(game, journal).BuildAtAsync(containerItem, placement, catalog, controller, token);
         }
-        var drained = await new BeltTransportController(game, journal).RunAsync(machineId, targetId, item, 1, token);
+        var drained = await new BeltTransportController(game, journal).RunAsync(machineId, targetId, item, 1, token, reserved);
         await journal.AppendAsync("machine-output-buffer-ready", new { machineId, targetId, item, drained }, token);
 
         void RequireScope(ActorScope scope)
