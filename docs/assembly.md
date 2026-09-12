@@ -1,0 +1,25 @@
+# Production par machines d'assemblage
+
+`assemble --session FILE --item electronic-circuit --quantity 5` vise un stock final transporté. Le C# choisit une recette solide déterministe disponible, prépare une machine compatible si nécessaire, calcule son placement alimenté, règle la recette et approvisionne ses ingrédients. Les coûts de fabrication, de construction et de transfert restent ceux du moteur.
+
+Le catalogue exporte les catégories acceptées, la limite d'ingrédients, la recette fixe éventuelle, la vitesse et la consommation électrique natives. Le placement et les extensions de poteaux utilisent le même composant que les laboratoires. La maintenance recherche une chaudière reliée au générateur du réseau observé et limite son combustible à la pile native.
+
+La photographie atomique de l'usine donne les identifiants natifs des inventaires d'entrée et de sortie. Les objets dans d'autres compartiments ne sont pas des ingrédients disponibles. Les bilans soustraient séparément les ingrédients présents, un éventuel cycle engagé et les produits prêts. Avant chaque transfert, le contrôleur relit l'état et la capacité native estimée ; le reçu du transfert établit la quantité réellement déplacée. Les lots sont limités à seize cycles et à une pile par ingrédient.
+
+`produce` réutilise un assembleur déjà réglé sur la bonne recette. Une machine libre n'est pas réservée implicitement pour un produit fabricable à la main, ce qui évite que la production d'un ingrédient change la recette de la machine parente. Les recettes exclusivement mécaniques peuvent également déclencher l'assemblage. Les cycles de dépendances entre exécutions d'assemblage sont refusés.
+
+## Essais natifs en fixture
+
+Sur Factorio 2.0.77, la fixture à vapeur a reçu explicitement une machine, des poteaux, du bois et les ingrédients de circuits. Un premier essai s'est arrêté avant construction sur un budget de navigation : l'approche du poteau source demandait une proximité inutile. Après correction de la distance d'observation, le C# a posé un poteau et une machine à une position calculée, reliés au réseau 1.
+
+Entre les ticks 55 153 et 56 505, la machine 38 a réalisé dix cycles : dix plaques de fer et trente câbles consommés, dix circuits récupérés. La lecture native indépendante au tick 58 756 confirme dix produits terminés, aucune fabrication engagée, des inventaires d'entrée et de sortie vides et une énergie positive sur le réseau 1.
+
+Un objectif `produce electronic-circuit --quantity 15` a réutilisé cette machine et ajouté cinq circuits par cinq cycles. Après introduction des identifiants stricts d'inventaire, un nouveau lot a porté le stock à vingt circuits. La photographie atomique finale est au tick 70 495. Les ressources fournies à ces essais sont artificielles ; ils ne comptent pas comme campagnes autonomes.
+
+La régression du laboratoire avec le composant électrique partagé a également terminé `automation` dans la fixture : dix packs consommés, 78 observations alimentées, ticks 60 350 à 66 960. La technologie avait été explicitement réinitialisée pour cet essai synthétique.
+
+## Limites actuelles
+
+Cette capacité traite un produit solide déterministe et jusqu'à huit ingrédients solides distincts. Les fluides, coproduits, transports continus par tapis/bras, dimensionnement industriel du réseau et coordination de machines restent à implémenter. Le compteur de cycles est une mesure native, distincte du stock final : une reprise peut récupérer des produits déjà terminés sans nouveau cycle. Une erreur ou un transfert partiel impose une réconciliation ; aucune répétition aveugle ne démarre une autre méthode.
+
+L'essai en économie normale est encore en cours. Aucun lancement de fusée n'est qualifié.

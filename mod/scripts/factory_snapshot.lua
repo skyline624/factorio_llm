@@ -138,7 +138,11 @@ local function capture(args)
     end
     if entity.type == "assembling-machine" or entity.type == "furnace" or entity.type == "rocket-silo" then
       local recipe = entity.get_recipe()
+      local input = entity.get_inventory(entity.type == "furnace" and defines.inventory.furnace_source or defines.inventory.assembling_machine_input)
+      local output = entity.get_output_inventory()
       add("work:" .. id, "work", id, "machine-craft", {recipe = recipe and recipe.name,
+        inputInventoryId = input and ("inventory:" .. id .. ":" .. input.index),
+        outputInventoryId = output and ("inventory:" .. id .. ":" .. output.index),
         inProcess = entity.is_crafting(), progress = entity.crafting_progress, productsFinished = entity.products_finished,
         ingredients = recipe and U.copy(recipe.ingredients), products = recipe and U.copy(recipe.products),
         collection = "native-current-process-not-physical-stock"})

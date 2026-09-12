@@ -21,7 +21,8 @@ public sealed record NativeFurnace(string EntityName, IReadOnlyDictionary<string
 public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
     [property: JsonConverter(typeof(NativeArrayConverter<NativeRecipe>))] IReadOnlyList<NativeRecipe> Recipes,
     IReadOnlyDictionary<string, NativeItem> Items, IReadOnlyDictionary<string, NativeMaterial[]> Mining,
-    IReadOnlyDictionary<string, NativeFurnace> Machines, IReadOnlyDictionary<string, bool> HandCategories)
+    IReadOnlyDictionary<string, NativeFurnace> Machines, IReadOnlyDictionary<string, bool> HandCategories,
+    IReadOnlyDictionary<string, NativeAssembler>? Assemblers = null)
 {
     public bool CanHandCraft(NativeRecipe recipe) => !recipe.HandCraftingDisabled && HandCategories.ContainsKey(recipe.Category);
 
@@ -34,7 +35,9 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
             || catalog.Recipes.Select(r => r.Name).Distinct(StringComparer.Ordinal).Count() != catalog.Recipes.Count
             || catalog.Recipes.Any(r => !double.IsFinite(r.EnergySeconds) || r.EnergySeconds <= 0)
             || catalog.Items.Values.Any(i => !double.IsFinite(i.FuelValue) || i.FuelValue < 0 || i.StackSize < 1)
-            || catalog.Machines.Values.Any(m => !double.IsFinite(m.CraftingSpeed) || m.CraftingSpeed <= 0))
+            || catalog.Machines.Values.Any(m => !double.IsFinite(m.CraftingSpeed) || m.CraftingSpeed <= 0)
+            || catalog.Assemblers?.Values.Any(m => !double.IsFinite(m.CraftingSpeed) || m.CraftingSpeed <= 0
+                || !double.IsFinite(m.EnergyPerTick) || m.EnergyPerTick <= 0) == true)
             throw new InvalidDataException("Inconsistent native production catalog.");
         return catalog;
     }
@@ -78,6 +81,12 @@ public sealed class ProductionPlanner
                     return source is null
                         ? new("unavailable", wanted, (int)missing, Reason: "No currently observed extraction source; exploration is required.")
                         : new("mine", wanted, (int)missing, Source: source);
+                }
+                if (catalog.Assemblers is { } assemblers)
+                {
+                    var assembly = new AssemblyPlanner().Choose(wanted, catalog.Recipes, assemblers, machines, configuredOnly: true)
+                        ?? new AssemblyPlanner().Choose(wanted, catalog.Recipes.Where(r => !catalog.CanHandCraft(r)), assemblers, machines);
+                    if (assembly is not null) return new("assemble", wanted, total, assembly.Recipe);
                 }
                 NativeRecipe[] candidates = catalog.Recipes.Where(r => r.Enabled
                     && r.Products.Any(p => p.Name == wanted) && r.Products.All(p => p.DeterministicItem)

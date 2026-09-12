@@ -18,7 +18,7 @@ public sealed class FurnaceRequirementsTests
         var snapshot = new FactorySnapshot("photo", new("world", "session", "actor", 1, 1), 100, 200, Protocol.ToElement(new { }), [
             new("input", "inventory", "furnace", "input", Protocol.ToElement(new { items = new Dictionary<string, int> { ["iron-ore"] = input } })),
             new("output", "inventory", "furnace", "output", Protocol.ToElement(new { items = new Dictionary<string, int> { ["iron-plate"] = output } })),
-            new("work", "work", "furnace", "machine-craft", Protocol.ToElement(new { recipe = "iron-plate", inProcess = crafting }))]);
+            new("work", "work", "furnace", "machine-craft", Protocol.ToElement(new { recipe = "iron-plate", inProcess = crafting, inputInventoryId = "input", outputInventoryId = "output" }))]);
         FurnaceRequirements result = FurnaceRequirements.From(snapshot, "furnace", recipe, 6);
         Assert.Equal(expectedMissing, result.InputToInsert);
         Assert.Equal(output, result.ReadyOutput);

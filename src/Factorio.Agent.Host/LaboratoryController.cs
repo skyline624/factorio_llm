@@ -33,49 +33,16 @@ public sealed class LaboratoryController(IGameClient game, IControllerJournal jo
         string labItem = lab is null ? compatible[0].Key : compatible.First(p => p.Value.EntityName == lab.Name).Key;
         LaboratoryPrototype labPrototype = initial.Prototypes[labItem];
         await journal.AppendAsync("laboratory-start", new { initial, technology, labItem }, token);
-        if (lab is null) await executor.RunAsync(labItem, 1, token);
         await PreparePacksAsync(initial, lab);
-        ProductionState factory = await production.ObserveAsync(token);
-        RequireScope(factory.Scope);
-        if (!factory.Entities.Any(e => catalog.Items.Values.Any(i => i.PlaceEntity == e.Name && i.PlaceEntityType == "electric-pole")))
-        {
-            await new SteamPowerController(game, journal).RunAsync(token);
-            factory = await production.ObserveAsync(token);
-            RequireScope(factory.Scope);
-        }
-        var spatial = new SpatialClient(game);
         await using var controller = new SpatialController(game, journal);
-        var poleNames = catalog.Items.Values.Where(i => i.PlaceEntityType == "electric-pole").Select(i => i.PlaceEntity).ToHashSet(StringComparer.Ordinal);
-        ProductionEntity poleEntity = factory.Entities.Where(e => poleNames.Contains(e.Name))
-            .OrderBy(e => lab is null ? 0 : e.Position.DistanceTo(lab.Position)).ThenBy(e => e.Id, StringComparer.Ordinal).First();
-        string poleItem = catalog.Items.First(p => p.Value.PlaceEntity == poleEntity.Name).Key;
-        await controller.TravelAsync(lab?.Position ?? poleEntity.Position, 4, catalog, token);
-        SpatialSnapshot map = await MapAsync();
-        SpatialEntity pole = map.Entities.Single(e => e.Id == poleEntity.Id);
+        var power = new PoweredMachineController(game, journal);
         if (lab is null)
         {
-            PlacementCandidate? placement = new LaboratoryPlanner().Place(map, labItem, pole);
-            if (placement is null)
-            {
-                LaboratoryExtension extension = new LaboratoryPlanner().Extend(map, labItem, poleItem, pole)
-                    ?? throw new InvalidOperationException("No clear lab placement or bounded pole extension on the observed terrain.");
-                await journal.AppendAsync("laboratory-pole-extension", new { map.Scope, map.CollectedTick, sourceId = pole.Id, poleItem, extension }, token);
-                await executor.RunAsync(poleItem, 1, token);
-                string poleId = await BuildAtAsync(poleItem, extension.Pole);
-                map = await MapAsync();
-                SpatialEntity connected = map.Entities.Single(e => e.Id == poleId);
-                if (connected.Power?.NetworkId is null || connected.Power.NetworkId != map.Entities.Single(e => e.Id == pole.Id).Power?.NetworkId)
-                    throw new InvalidOperationException("The added pole did not join the source network. Reconcile before constructing the lab.");
-                pole = connected;
-                placement = extension.Lab;
-            }
-            await journal.AppendAsync("laboratory-placement", new { map.Scope, map.CollectedTick, labItem, pole.Id, placement }, token);
-            string id = await BuildAtAsync(labItem, placement);
-            lab = (await ReadAsync()).Labs.Single(l => l.Id == id);
+            string installedId = await power.InstallAsync(labItem, catalog, controller, token);
+            lab = (await ReadAsync()).Labs.Single(l => l.Id == installedId);
         }
         string labId = lab.Id;
-        if (lab.NetworkId != pole.Power?.NetworkId || lab.NetworkId is null)
-            throw new InvalidOperationException("The laboratory does not share the planned electric network.");
+        if (lab.NetworkId is null) throw new InvalidOperationException("The laboratory is not on an electric network.");
         await MaintainFuelAsync(force: true);
         await SupplyAsync();
         ResearchSnapshot beforeSelection = await ReadAsync();
@@ -115,25 +82,6 @@ public sealed class LaboratoryController(IGameClient game, IControllerJournal jo
             RequireScope(value.Scope);
             return value;
         }
-        async Task<SpatialSnapshot> MapAsync()
-        {
-            var value = await spatial.CaptureAsync([labItem, poleItem], 48, token);
-            RequireScope(value.Scope);
-            return value;
-        }
-        async Task<string> BuildAtAsync(string item, PlacementCandidate placement)
-        {
-            await controller.TravelAsync(placement.Position, 8, catalog, token);
-            SpatialSnapshot current = await MapAsync();
-            MapPosition approach = new PlacementPlanner().FindApproach(new(current), item, placement)
-                ?? throw new InvalidOperationException("No reachable approach outside the planned construction footprint.");
-            await controller.NavigateAsync(approach, .2, token);
-            PlacementValidation validation = await spatial.ValidateAsync(initialScope, item, [placement], token);
-            if (!validation.Candidates[0].Allowed || !validation.Candidates[0].InReach)
-                throw new InvalidOperationException("The engine refused the calculated placement; reconcile partial construction.");
-            OperationReceipt built = await ActAsync("build", new { item, placement.Position, placement.Direction });
-            return built.Effects.GetProperty("entityId").GetString()!;
-        }
         async Task<OperationReceipt> ActAsync(string kind, object args)
         {
             OperationReceipt receipt = await controller.WorkAsync(kind, args, 36000, token: token);
@@ -169,33 +117,9 @@ public sealed class LaboratoryController(IGameClient game, IControllerJournal jo
         async Task MaintainFuelAsync(bool force)
         {
             ResearchSnapshot state = await ReadAsync();
-            var currentLab = state.Labs.Single(l => l.Id == labId);
-            if (state.Researched || (!force && currentLab.Energy > 0)) return;
-            await controller.TravelAsync(currentLab.Position, 4, catalog, token);
-            map = await MapAsync();
-            var generators = map.Entities.Where(e => map.Prototypes[e.Name].Type == "generator" && e.Power?.NetworkId == currentLab.NetworkId).ToArray();
-            ProductionState owned = await production.ObserveAsync(token);
-            RequireScope(owned.Scope);
-            SpatialEntity? boiler = map.Entities.FirstOrDefault(e => map.Prototypes[e.Name].Type == "boiler" && owned.Entities.Any(o => o.Id == e.Id)
-                && generators.Any(g => e.FluidConnections?.Any(f => f.TargetEntityId == g.Id) == true || g.FluidConnections?.Any(f => f.TargetEntityId == e.Id) == true));
-            if (boiler is null)
-            {
-                if (currentLab.Energy > 0) return;
-                throw new InvalidOperationException("No observed fuel-maintainable steam supply for the unpowered lab.");
-            }
-            var categories = map.Prototypes[boiler.Name].FuelCategories;
-            string fuel = catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.FuelCategory is { } category && categories?.ContainsKey(category) == true
-                    && catalog.Mining.Values.Any(products => products.Any(p2 => p2.Name == p.Key && p2.DeterministicItem)))
-                .OrderByDescending(p => owned.Inventory.GetValueOrDefault(p.Key) > 0).ThenBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key).First();
+            if (state.Researched || (!force && state.Labs.Single(l => l.Id == labId).Energy > 0)) return;
             double energy = technology.Count * technology.EnergyTicks * labPrototype.EnergyPerTick / labPrototype.ResearchingSpeed;
-            int reserve = (int)Math.Clamp(Math.Ceiling(energy * 1.25 / catalog.Items[fuel].FuelValue), 2, 100);
-            long installedFuel = owned.Entities.Single(e => e.Id == boiler.Id).Count("fuel", fuel);
-            int missing = Math.Max(0, reserve - (int)Math.Min(int.MaxValue, installedFuel));
-            if (missing == 0) return;
-            await executor.RunAsync(fuel, missing, token);
-            await controller.TravelAsync(boiler.Position, 3, catalog, token);
-            await ActAsync("insert", new { entityId = boiler.Id, inventory = "fuel", item = fuel, count = missing });
-            await journal.AppendAsync("laboratory-fuel", new { boiler.Id, fuel, count = missing, energyEstimate = energy }, token);
+            await power.MaintainFuelAsync(labId, energy, catalog, controller, force, token);
         }
         void RequireScope(ActorScope scope)
         {

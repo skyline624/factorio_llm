@@ -25,6 +25,7 @@ try
           research-plan --session FILE --technology NAME
           prepare-research --session FILE --technology NAME
           research --session FILE --technology NAME
+          assemble --session FILE --item NAME --quantity N
           rpc --session FILE --action ACTION [--json-file FILE]
           connect --session FILE
           submit --session FILE --kind KIND --json-file FILE [--ticks N]
@@ -56,6 +57,15 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { clientProcessId = await FactorioRuntime.ConnectClientAsync(session, shutdown.Token) });
+            break;
+        }
+        case "assemble":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"assembly-{Guid.NewGuid():N}.jsonl");
+            var controller = new AssemblyController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            Print(new { result = await controller.RunAsync(Required("item"), int.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token), journalPath });
             break;
         }
         case "research":

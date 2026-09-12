@@ -66,7 +66,7 @@ end
 function M.production()
   local c = Actor.get()
   U.check(c ~= nil, "actor_dead", "Production catalog requires a living character")
-  local result = {scope = Actor.scope(), collectedTick = game.tick, recipes = {}, items = {}, mining = {}, machines = {},
+  local result = {scope = Actor.scope(), collectedTick = game.tick, recipes = {}, items = {}, mining = {}, machines = {}, assemblers = {},
     handCategories = c.prototype.crafting_categories}
   for name, recipe in pairs(c.force.recipes) do
     if not recipe.hidden then
@@ -84,6 +84,11 @@ function M.production()
     if entity and entity.type == "furnace" and entity.burner_prototype then
       result.machines[name] = {entityName = entity.name, categories = entity.crafting_categories,
         fuelCategories = entity.burner_prototype.fuel_categories, craftingSpeed = entity.get_crafting_speed("normal")}
+    end
+    if entity and entity.type == "assembling-machine" and entity.electric_energy_source_prototype then
+      result.assemblers[name] = {entityName = entity.name, categories = entity.crafting_categories,
+        craftingSpeed = entity.get_crafting_speed("normal"), energyPerTick = entity.get_max_energy_usage("normal"),
+        ingredientCount = entity.ingredient_count, fixedRecipe = entity.fixed_recipe}
     end
   end
   for name, entity in pairs(prototypes.entity) do

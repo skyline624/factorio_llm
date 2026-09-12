@@ -16,11 +16,11 @@ public sealed class LaboratoryPlannerTests
         };
         var source = new SpatialEntity("source", "pole", new(.5, .5), new(new(.35, .35), new(.65, .65)), 0, "own", Power: new(0, 1));
         map = map with { Prototypes = prototypes, Entities = [source], Items = new Dictionary<string, PlaceableItem>(map.Items) { ["lab"] = new("lab", 10) } };
-        var extension = new LaboratoryPlanner().Extend(map, "lab", "pole", source);
+        var extension = new PoweredMachinePlanner().Extend(map, "lab", "pole", source);
         Assert.NotNull(extension);
         Assert.InRange(source.Position.DistanceTo(extension.Pole.Position), .1, 7.5);
         Assert.False(prototypes["pole"].CollisionBox.Translate(extension.Pole.Position)
-            .Overlaps(prototypes["lab"].CollisionBox.Translate(extension.Lab.Position)));
+            .Overlaps(prototypes["lab"].CollisionBox.Translate(extension.Machine.Position)));
     }
 
     [Fact]
@@ -59,10 +59,10 @@ public sealed class LaboratoryPlannerTests
         };
         var pole = new SpatialEntity("p", "pole", new(5.5, 5.5), new(new(5.35, 5.35), new(5.65, 5.65)), 0, "own", Power: new(0, 7));
         map = map with { Prototypes = prototypes, Entities = [pole], Items = new Dictionary<string, PlaceableItem>(map.Items) { ["lab"] = new("lab", 10) } };
-        var placement = new LaboratoryPlanner().Place(map, "lab", pole);
+        var placement = new PoweredMachinePlanner().Place(map, "lab", pole);
         Assert.NotNull(placement);
         Assert.True(new WorldBox(new(3, 3), new(8, 8)).Overlaps(prototypes["lab"].CollisionBox.Translate(placement.Position)));
         Assert.True(new SpatialCollisionField(map).PlacementClear(prototypes["lab"], placement.Position, placement.Direction));
-        Assert.Null(new LaboratoryPlanner().Place(map, "lab", pole with { Power = null }));
+        Assert.Null(new PoweredMachinePlanner().Place(map, "lab", pole with { Power = null }));
     }
 }

@@ -66,6 +66,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             await journal.AppendAsync("production-step", new { item, targetStock, stepNumber, state.Tick, step }, deadline.Token);
             switch (step.Kind)
             {
+                case "assemble":
+                    await new AssemblyController(game, journal).RunAsync(step.Item, step.Quantity, deadline.Token);
+                    break;
                 case "automate":
                     await new AutomatedSmeltingController(game, journal).RunAsync(step.Item, step.Quantity, deadline.Token);
                     break;
