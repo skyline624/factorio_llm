@@ -18,7 +18,7 @@ public sealed class ProductionGoalExecutorTests
 
     [Theory]
     [InlineData(true, "automated-smelting")]
-    [InlineData(false, "actor-production")]
+    [InlineData(false, "planned-production")]
     public async Task SelectsFromNativeCapabilityAndPropagatesExecutionFailureWithoutFallback(bool installed, string method)
     {
         var game = new SelectionGame(stock: 0, installed);

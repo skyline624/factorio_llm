@@ -3,6 +3,7 @@
 - Travailler depuis la racine du dépôt, sans chemin personnel imposé aux contributeurs.
 - Lorsque RTK est disponible, préfixer les commandes shell par `rtk`. Respecter les instructions propres à l'environnement ; aucun fichier de configuration personnel n'est requis pour contribuer.
 - C# pour l'agent, les transports, la planification et les outils. Lua uniquement pour les API natives de Factorio.
+- Limiter au maximum le minage manuel : prioriser le réemploi, la construction et l'alimentation de foreuses et de fours. Réserver le minage manuel aux besoins nécessaires d'amorçage des équipements ; ne pas l'utiliser par défaut pour les lots de production. Documenter les limites encore non couvertes.
 - Appliquer SOLID, DRY et KISS : responsabilités courtes, interfaces aux frontières, aucune abstraction sans usage.
 - Garder les binaires/assets/documentations livrés avec le jeu, les modèles, secrets, sauvegardes, bases d'état et journaux privés hors Git. Utiliser `.runtime/` pour les données d'exécution ; seules les fixtures synthétiques documentées sont publiables.
 - Tester avec Factorio 2.0.77 réel en headless et vérifier également un client graphique connecté.

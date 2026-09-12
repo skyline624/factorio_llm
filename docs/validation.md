@@ -159,3 +159,8 @@ Cette fixture a ensuite été prolongée vers une machine de science. Un lot de 
 ## Approvisionnement de l’assemblage par tapis
 
 La commande générale d’assemblage a porté le stock de 65 à 70 packs rouges entre les ticks 213618 et 217583, avec cinq nouveaux cycles natifs. Elle a réutilisé les sources de cuivre et d’engrenages, attendu le producteur amont malgré son coffre vide, puis collecté la sortie dans son coffre. Aucun minage, insertion d’ingrédients ou assemblage imbriqué n’a été soumis pendant ce lot. Les [preuves et limites](assembly-transport.md) détaillent les apports artificiels, les échecs corrigés et les interruptions assistées des essais précédents. Le monde est sauvegardé et arrêté au tick 219411. Les 379 tests hors ligne passent ; aucune campagne finale n’est qualifiée.
+
+
+## Priorité à l’extraction mécanique
+
+Un objectif de cuivre a porté le stock de 75 à 100 avec une foreuse et un four construits par le C#, sans minage manuel de minerai de cuivre ou de fer pendant le lot. Dix pierres et un arbre ont été récoltés pour l’amorçage. Les [preuves et limites du ravitaillement](mining-priority.md) distinguent ce lot réussi, le défaut de petits approvisionnements, la tentative suivante interrompue et la correction testée. Les 397 tests hors ligne passent ; l’extraction générale du charbon et de la pierre reste incomplète. Aucune campagne finale n’est qualifiée.

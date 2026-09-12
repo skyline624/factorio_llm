@@ -70,6 +70,12 @@ local function capture(args)
     local metadata = {role = roles[id], type = entity.type, surfaceIndex = entity.surface.index,
       position = U.copy(entity.position), direction = entity.direction, force = entity.force.name,
       inventories = {}, transportLines = {}, fluidStores = {}}
+    local fuel = entity.get_fuel_inventory()
+    if fuel and fuel.valid then
+      local owner = fuel.entity_owner
+      U.check(owner and owner.valid and fuel.index, "inventory_identity_unavailable", "Fuel inventory identity is unavailable")
+      metadata.fuelInventoryId = "inventory:" .. U.entity_id(owner) .. ":" .. fuel.index
+    end
     add(id, "entity", id, entity.name, metadata)
     for index = 1, entity.get_max_inventory_index() do
       local inventory = entity.get_inventory(index)

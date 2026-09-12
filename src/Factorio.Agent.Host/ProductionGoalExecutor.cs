@@ -27,7 +27,7 @@ public sealed class ProductionGoalExecutor(IGameClient game, IControllerJournal 
         {
             var automated = new AutomatedSmeltingController(game, journal);
             SmeltingPlan? opportunity = await automated.AssessAsync(item, initial, token);
-            string method = opportunity is null ? "actor-production" : "automated-smelting";
+            string method = opportunity is null ? "planned-production" : "automated-smelting";
             await journal.AppendAsync("production-method", new { method, item, targetStock, initial.Scope, initial.Tick, stock, opportunity }, token);
             // Both executors recollect state before acting. A failed execution never triggers
             // an alternate mutation path: partial or unknown effects require reconciliation.

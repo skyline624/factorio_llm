@@ -14,7 +14,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
         if (targetStock is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(targetStock));
         using var reservations = ProductionReservations.Enter(reservedEntityIds);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromMinutes(15));
+        deadline.CancelAfter(TimeSpan.FromMinutes(45));
         await using var controller = new SpatialController(game, journal);
         var planner = new ProductionPlanner();
         var spatial = new SpatialClient(game);
@@ -54,20 +54,29 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             }
             ProductionEntity? engaged = state.Entities.FirstOrDefault(e => !ProductionReservations.Current.Contains(e.Id) && e.InventoryTotal("input") > 0
                 && catalog.Recipes.Any(r => r.Name == e.Recipe && r.Products.Count == 1 && r.Products[0].Name == item
-                    && r.Products[0].DeterministicItem && r.Ingredients.Count == 1 && r.Ingredients[0].DeterministicItem)
+                    && r.Products[0].DeterministicItem && r.Ingredients.Count == 1 && r.Ingredients[0].DeterministicItem
+                    && e.Count("input", r.Ingredients[0].Name) >= r.Ingredients[0].Amount!.Value)
                 && catalog.Machines.Values.Any(m => m.EntityName == e.Name));
             if (engaged is not null)
             {
                 NativeRecipe recipe = catalog.Recipes.Single(r => r.Name == engaged.Recipe);
-                int batches = Math.Min(16, checked((int)Math.Ceiling((targetStock - state.Inventory.GetValueOrDefault(item)) / recipe.Products[0].Amount!.Value)));
+                int supplied = FurnaceBatchSizing.SuppliedBatches(recipe, engaged.Count("input", recipe.Ingredients[0].Name),
+                    state.Inventory.GetValueOrDefault(recipe.Ingredients[0].Name));
+                int batches = FurnaceBatchSizing.Limit(recipe, catalog.Items, Math.Min(supplied,
+                    checked((int)Math.Ceiling((targetStock - state.Inventory.GetValueOrDefault(item)) / recipe.Products[0].Amount!.Value))));
                 await SmeltAsync(new("smelt", item, batches, recipe), state, catalog, map);
                 continue;
             }
             ProductionStep step = planner.Next(item, targetStock, state.Inventory, catalog, map,
-                state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id)).Select(e => e.AsMachine()).ToArray());
+                state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id)).Select(e => e.AsMachine()).ToArray(),
+                allowExtractionPreparation: !SmeltingPreparationController.IsPreparing);
             await journal.AppendAsync("production-step", new { item, targetStock, stepNumber, state.Tick, step }, deadline.Token);
             switch (step.Kind)
             {
+                case "prepare-smelting":
+                    await new SmeltingPreparationController(game, journal).PrepareAsync(step.Item, deadline.Token);
+                    await new AutomatedSmeltingController(game, journal).RunAsync(step.Item, step.Quantity, deadline.Token);
+                    break;
                 case "assemble":
                     await new AssemblyController(game, journal).RunAsync(step.Item, step.Quantity, deadline.Token);
                     break;
@@ -143,7 +152,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             await TravelAsync(position, 3, catalog);
             // Feed a bounded batch. Read actual output/fuel every iteration; never infer output from a timer.
             string input = recipe.Ingredients[0].Name;
-            FactorySnapshot factory = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: deadline.Token);
+            FactorySnapshot factory = await new FactorySnapshotClient(game).CaptureAsync([input], cancellationToken: deadline.Token);
             if (factory.Scope != state.Scope) throw new InvalidDataException("Furnace accounting scope changed.");
             if (catalog.Items[input].FuelValue > 0) throw new InvalidOperationException("Fuel ingredients need explicit compartment accounting.");
             FurnaceRequirements requirements = FurnaceRequirements.From(factory, entityId, recipe, step.Quantity);
@@ -151,12 +160,18 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             await journal.AppendAsync("furnace-requirements", new { factory.SnapshotId, factory.CollectedTick, entityId, requirements }, deadline.Token);
             if (missingInput > 0)
             {
+                string inputId = factory.Records.Single(r => r.Kind == "work" && r.EntityId == entityId).Data.GetProperty("inputInventoryId").GetString()
+                    ?? throw new InvalidDataException("Missing native furnace input identity.");
+                var inputInventory = factory.Records.Single(r => r.Kind == "inventory" && r.Id == inputId && r.EntityId == entityId);
+                long insertable = inputInventory.Data.GetProperty("capacityHints").GetProperty(input).GetProperty("insertable").GetInt64();
+                if (insertable < missingInput) throw new InvalidOperationException("Native furnace input capacity changed; reconcile the prepared batch before insertion.");
                 OperationReceipt inserted = await ActAsync("insert", new { entityId, inventory = "input", item = input, count = missingInput }, 600);
                 if (inserted.Status != "completed") throw new InvalidOperationException("Furnace input was only partially transferred; re-observation is required.");
             }
             long initialOutput = state.Inventory.GetValueOrDefault(step.Item);
             long expectedOutput = checked((long)(recipe.Products[0].Amount!.Value * step.Quantity));
-            for (int attempt = 0; attempt < 200; attempt++)
+            int observationLimit = FurnaceBatchSizing.ObservationLimit(recipe, machine.Value.CraftingSpeed, step.Quantity);
+            for (int attempt = 0; attempt < observationLimit; attempt++)
             {
                 ProductionState current = await ObserveAsync(deadline.Token);
                 ProductionEntity furnace = current.Entities.Single(e => e.Id == entityId);

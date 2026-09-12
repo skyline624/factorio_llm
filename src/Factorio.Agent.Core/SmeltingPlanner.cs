@@ -6,7 +6,8 @@ public sealed record SmeltingPlan(NativeRecipe Recipe, string DrillItem, Extract
 public sealed class SmeltingPlanner
 {
     public SmeltingPlan? Find(string item, ProductionCatalog catalog, SpatialSnapshot map,
-        IReadOnlyDictionary<string, long> inventory, IReadOnlyDictionary<string, KnownProductionMachine> knownMachines)
+        IReadOnlyDictionary<string, long> inventory, IReadOnlyDictionary<string, KnownProductionMachine> knownMachines,
+        IReadOnlySet<string>? constructibleDrills = null)
     {
         if (catalog.Scope != map.Scope) throw new InvalidDataException("Smelting observations span different actor scopes.");
         string[] drills = map.Items.Where(p => map.Prototypes[p.Value.EntityName].Type == "mining-drill"
@@ -36,7 +37,7 @@ public sealed class SmeltingPlanner
                             && p.OutputPosition.DistanceTo(installed.DropPosition!) <= 0.01);
                     if (connection is not null) opportunities.Add(new(recipe, drillItem, connection, installed.Id));
                 }
-                if (inventory.GetValueOrDefault(drillItem) > 0)
+                if (inventory.GetValueOrDefault(drillItem) > 0 || constructibleDrills?.Contains(drillItem) == true)
                     opportunities.AddRange(new ExtractionPlanner().Find(new(map), drillItem, recipe.Ingredients[0].Name, catalog, receivers)
                         .Select(p => new SmeltingPlan(recipe, drillItem, p)));
             }

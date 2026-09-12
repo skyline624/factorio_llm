@@ -5,6 +5,32 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class ProductionPlannerTests
 {
+    [Theory]
+    [InlineData(100, 75)]
+    [InlineData(10, 10)]
+    public void MiningForFurnaceUsesNativeInputStackInsteadOfSixteenItemTrips(int stackSize, int expected)
+    {
+        var catalog = Catalog() with { Items = new Dictionary<string, NativeItem> { ["iron-ore"] = new(0, stackSize) } };
+        var step = Next("iron-plate", 75, new(), catalog);
+        Assert.Equal("unavailable", step.Kind);
+        Assert.Equal("iron-ore", step.Item);
+        Assert.Equal(expected, step.Quantity);
+    }
+
+    [Fact]
+    public void FurnaceBatchAccountsForMultipleIngredientUnitsPerCycle()
+    {
+        var recipe = Recipe("steel", [Item("iron-plate", 5)], [Item("steel", 1)], "smelting");
+        var catalog = Catalog() with
+        {
+            Recipes = [recipe],
+            Items = new Dictionary<string, NativeItem> { ["iron-plate"] = new(0, 100) }
+        };
+        var step = Next("steel", 30, new() { ["iron-plate"] = 100 }, catalog);
+        Assert.Equal("smelt", step.Kind);
+        Assert.Equal(20, step.Quantity);
+    }
+
     [Fact]
     public void Existing_stock_satisfies_target_without_manufacturing_it_again()
     {
@@ -192,7 +218,7 @@ public sealed class ProductionPlannerTests
         [Recipe("gear", [Item("iron-plate", 2)], [Item("gear", 1)]),
          Recipe("belt", [Item("gear", 1), Item("iron-plate", 1)], [Item("belt", 2)]),
          Recipe("iron-plate", [Item("iron-ore", 1)], [Item("iron-plate", 1)], "smelting")],
-        new Dictionary<string, NativeItem>(),
+        new Dictionary<string, NativeItem> { ["iron-ore"] = new(0, 100), ["iron-plate"] = new(0, 100) },
         new Dictionary<string, NativeMaterial[]> { ["iron-ore"] = [Item("iron-ore", 1)], ["tree-variant"] = [Item("wood", 4)] },
         new Dictionary<string, NativeFurnace>
         {

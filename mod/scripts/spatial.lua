@@ -21,9 +21,13 @@ local function prototype(value)
   local result = {name = value.name, type = value.type, collisionBox = box(value.collision_box),
     mask = mask(value.collision_mask), tileWidth = value.tile_width, tileHeight = value.tile_height,
     isElectric = value.electric_energy_source_prototype ~= nil}
-  if value.type == "resource" then result.resourceCategory = value.resource_category end
+  if value.type == "resource" then
+    result.resourceCategory = value.resource_category
+    result.miningTime = value.mineable_properties.mining_time
+  end
   if value.type == "mining-drill" then
     result.miningRadius = value.mining_drill_radius
+    result.miningSpeed = value.mining_speed
     local output = value.vector_to_place_result
     if output then result.miningOutput = {x = output[1], y = output[2]} end
     result.resourceCategories = value.resource_categories
@@ -57,7 +61,11 @@ local function prototype(value)
     result.supplyArea = value.get_supply_area_distance("normal")
     result.maxWireDistance = value.get_max_wire_distance("normal")
   end
-  if value.burner_prototype then result.fuelCategories = value.burner_prototype.fuel_categories end
+  if value.burner_prototype then
+    result.fuelCategories = value.burner_prototype.fuel_categories
+    result.burnerEffectivity = value.burner_prototype.effectivity
+    result.energyPerTick = value.get_max_energy_usage("normal")
+  end
   if #value.tile_buildability_rules > 0 then
     result.tileBuildability = {}
     for _, rule in ipairs(value.tile_buildability_rules) do

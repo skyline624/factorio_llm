@@ -12,6 +12,7 @@ Agent majoritairement C#, mod Lua minimal, Factorio 2.0.77 de base, modèle `glm
 - Objectifs stratégiques libres du modèle, traduction C# en critères mesurables, validation stricte des appels d'outils. Aucun Lua ou placement produit par le LLM.
 - Synthèse complète des implantations en C#, bilans de production, contraintes spatiales et routage ; pas de bibliothèque de gabarits prédéfinis. Les résultats de solveur distinguent solution, délai et impossibilité prouvée.
 - V1 jusqu'à la fusée avec tapis et tuyaux ; trains et logistique robotique différés.
+- Limiter le minage manuel aux besoins d'amorçage et aux dépannages bornés. Prioriser le réemploi, la construction et l'alimentation de foreuses et de fours pour la production ; mesurer séparément les quantités extraites à la main et par les machines, y compris le charbon et la pierre.
 - Stocks exacts de toute l'usine propre connue. Périmètre, date, capacités, réservations, transit, fabrication engagée et débits mesurés sont distincts. La source de vérité est le moteur.
 - Visibilité ennemie normale du personnage/radars ; informations historiques marquées anciennes, aucune révélation par un observateur supplémentaire.
 - Identité des opérations, déduplication, préconditions revérifiées, effets partiels et preuves. Un timeout réseau donne un résultat inconnu, jamais un échec autorisant une répétition aveugle.

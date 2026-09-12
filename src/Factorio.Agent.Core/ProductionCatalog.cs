@@ -61,7 +61,7 @@ public sealed record KnownProductionMachine(string Id, string Name, string? Reci
 public sealed class ProductionPlanner
 {
     public ProductionStep Next(string item, int targetStock, IReadOnlyDictionary<string, long> inventory,
-        ProductionCatalog catalog, SpatialSnapshot map, IReadOnlyList<KnownProductionMachine> machines)
+        ProductionCatalog catalog, SpatialSnapshot map, IReadOnlyList<KnownProductionMachine> machines, bool allowExtractionPreparation = true)
     {
         if (targetStock is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(targetStock));
         var visiting = new HashSet<string>(StringComparer.Ordinal);
@@ -99,6 +99,8 @@ public sealed class ProductionPlanner
                 if (candidates.Length == 0) return new("unsupported", wanted, (int)missing, Reason: "No enabled deterministic solid recipe with a supported machine.");
                 if (new SmeltingPlanner().Find(wanted, catalog, map, inventory, knownMachines) is { } automated)
                     return new("automate", wanted, total, automated.Recipe);
+                if (allowExtractionPreparation && new SmeltingPreparationPlanner().Options(catalog, inventory, wanted).Count > 0)
+                    return new("prepare-smelting", wanted, total);
                 ProductionStep? failed = null;
                 foreach (NativeRecipe recipe in candidates)
                 {
@@ -125,7 +127,7 @@ public sealed class ProductionPlanner
                     }
                     double yield = recipe.Products.Where(p => p.Name == wanted).Sum(p => p.Amount!.Value);
                     int batches = checked((int)Math.Ceiling(missing / yield));
-                    if (!catalog.CanHandCraft(recipe)) batches = Math.Min(16, batches);
+                    if (!catalog.CanHandCraft(recipe)) batches = FurnaceBatchSizing.Limit(recipe, catalog.Items, batches);
                     bool impossible = false;
                     foreach (var ingredient in recipe.Ingredients.GroupBy(p => p.Name))
                     {
