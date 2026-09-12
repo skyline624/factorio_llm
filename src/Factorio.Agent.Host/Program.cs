@@ -181,6 +181,7 @@ try
             break;
         }
         case "run-goal":
+        case "run-campaign":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
@@ -188,8 +189,15 @@ try
             using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
             var planner = new OllamaStrategicPlanner(http, new OllamaOptions { MaxAttempts = 1 });
             var controller = new StrategicProductionController(session.CreateClient(lease), planner, new ControllerJournal(journalPath));
-            StrategicGoalResult result = await controller.RunOnceAsync(shutdown.Token);
-            Print(new { result, journalPath });
+            if (args[0] == "run-campaign")
+            {
+                string memoryPath = Path.Combine(session.Directory, "strategic-memory.json");
+                int maxGoals = int.Parse(Option("max-goals") ?? "10", CultureInfo.InvariantCulture);
+                var result = await new StrategicCampaignController(session.CreateClient(lease), controller, memoryPath)
+                    .RunAsync(maxGoals, shutdown.Token);
+                Print(new { result, journalPath, memoryPath });
+            }
+            else Print(new { result = await controller.RunOnceAsync(shutdown.Token), journalPath });
             break;
         }
         case "automate-smelting":

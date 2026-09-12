@@ -19,13 +19,23 @@ public sealed class StrategicResearchTests
         Assert.Contains("nativeTechnologyIdentifiers", planner.Context!.Facts);
         Assert.DoesNotContain("position", planner.Context.Facts);
     }
-    private sealed class Planner : IStrategicPlanner
+    [Fact]
+    public async Task UnsupportedProposalReturnsExplicitFeedbackWithoutGoalExecution()
+    {
+        var game = new Game();
+        var result = await new StrategicProductionController(game, new Planner(true), new Journal()).RunOnceAsync();
+        Assert.NotNull(result.UnsupportedReason);
+        Assert.Null(result.Production);
+        Assert.Null(result.Research);
+        Assert.DoesNotContain("submit", game.Actions);
+    }
+    private sealed class Planner(bool unsupported = false) : IStrategicPlanner
     {
         public StrategicContext? Context { get; private set; }
         public Task<GoalProposal> ProposeAsync(StrategicContext context, CancellationToken cancellationToken = default)
         {
             Context = context;
-            return Task.FromResult(new GoalProposal(context.ObservationId, "Complete automation", GoalCategory.Research,
+            return Task.FromResult(new GoalProposal(context.ObservationId, "Complete automation", unsupported ? GoalCategory.Other : GoalCategory.Research,
                 "automation", 1, GoalUnit.Completion, GoalPriority.Normal, new(TimeSpan.Zero, 1, null, null, null)));
         }
     }

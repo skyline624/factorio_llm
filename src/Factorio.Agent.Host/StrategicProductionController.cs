@@ -5,12 +5,12 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
-public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null);
+public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null);
 
 /// <summary>Grounds semantic production or research goals into verified native execution.</summary>
-public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal)
+public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal) : IStrategicGoalRunner
 {
-    public async Task<StrategicGoalResult> RunOnceAsync(CancellationToken token = default)
+    public async Task<StrategicGoalResult> RunOnceAsync(CancellationToken token = default, string? previousResult = null)
     {
         GameResponse observation = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 64, limit = 200 }), token);
         if (!observation.Ok) throw new GameRpcException(observation.Error!);
@@ -51,7 +51,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             scope = "Local observed resources; known own buildings; exact actor inventory at observedTick. Hidden areas and enemies are unknown."
         }, Protocol.Json);
         var context = new StrategicContext(observationId, facts,
-            "Progress toward a normal hostile base-game rocket launch using verified stock and native actions.");
+            "Progress toward a normal hostile base-game rocket launch using verified stock and native actions.", previousResult);
         await journal.AppendAsync("strategic-context", context, token);
         var defense = new DefenseController(game, journal);
         GoalProposal goal;
@@ -79,7 +79,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         if (reason is not null)
         {
             await journal.AppendAsync("grounding-unsupported", new { goal, reason }, token);
-            throw new InvalidOperationException(reason);
+            return new(goal, UnsupportedReason: reason);
         }
         // Production recollects inventory, recipes and geometry before acting; the LLM context is never a precondition.
         if (goal.Category == GoalCategory.Research)
