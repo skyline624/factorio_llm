@@ -2,6 +2,8 @@
 
 `steam-power --session FILE` prépare une première installation composée d'une pompe côtière, d'une chaudière, d'une machine à vapeur, d'un petit poteau et d'un bras électrique servant de consommateur. La commande fabrique les objets manquants avec le contrôleur de production, obtient du combustible, cherche une rive puis construit les machines. Elle est encore une capacité C# explicite, distincte du traitement des objectifs libres de `run-goal`.
 
+La première recherche de rive commence près du centre des bâtiments de production propres connus, calculé depuis leurs positions observées. Le personnage y revient à pied avant l'exploration locale. Sans usine connue, aucune position de base n'est inventée. Ce choix rapproche la future alimentation des machines ; la [documentation de génération](https://wiki.factorio.com/Map_generator#Starting_area) indique aussi qu'un lac est garanti dans la zone de départ. Cette connaissance ne fournit aucune coordonnée d'eau au contrôleur. La recherche dispose d'au plus 128 étapes de déplacement dont 64 recherches locales, dans le délai global de 30 minutes.
+
 ## Implantation calculée
 
 Le mod exporte les ports fluides natifs : positions pour les quatre orientations, sens de circulation, catégorie de raccordement, filtre de fluide et limites de température. C# calcule une connexion lorsque deux ports compatibles se font face sur des cases adjacentes. Les positions ne proviennent pas du modèle et aucune disposition de bâtiments n'est enregistrée comme gabarit.

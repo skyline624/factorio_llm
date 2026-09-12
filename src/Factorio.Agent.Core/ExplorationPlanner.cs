@@ -1,5 +1,7 @@
 namespace Factorio.Agent.Core;
 
+public sealed class ExplorationBlockedException(string message) : InvalidOperationException(message);
+
 /// <summary>Local frontier selection. Only observed terrain and historical solid resources are remembered.</summary>
 public sealed class ExplorationPlanner
 {
@@ -65,13 +67,19 @@ public sealed class ExplorationPlanner
                 double score = known is null ? gain - distance * 0.1 : -point.DistanceTo(known) * 5 + gain * 0.1;
                 candidates.Add((point, score - visits.GetValueOrDefault((x, y)) * 100, (x, y)));
             }
+        bool searchBudgetExceeded = false;
         foreach (var candidate in candidates.OrderByDescending(c => c.Score).ThenBy(c => c.Point.Y).ThenBy(c => c.Point.X))
         {
             RoutePlan route = new RoutePlanner().Find(field, candidate.Point);
-            if (route.Status != RouteStatus.Found) continue;
+            if (route.Status != RouteStatus.Found)
+            {
+                searchBudgetExceeded |= route.Status == RouteStatus.BudgetExceeded;
+                continue;
+            }
             visits[candidate.Cell] = visits.GetValueOrDefault(candidate.Cell) + 1;
             return candidate.Point;
         }
-        throw new InvalidOperationException("No reachable exploration frontier in the current collision map.");
+        if (searchBudgetExceeded) throw new InvalidOperationException("Exploration route search exceeded its budget; reachability remains unknown.");
+        throw new ExplorationBlockedException("No reachable exploration frontier in the current collision map.");
     }
 }

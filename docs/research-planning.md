@@ -10,4 +10,8 @@ Les déclencheurs `craft-item` sont traduits en objet natif et nombre à fabriqu
 
 Dans le monde normal, la lecture entre les ticks 461 609 et 461 650 a décomposé `automation` en une prochaine étape `craft-trigger` : fabriquer un `lab` pour déclencher `automation-science-pack`. Les prérequis `electronics` et `steam-power` étaient déjà acquis. Le rapport complet reste privé dans le répertoire de session.
 
-La fabrication automatique du déclencheur, l'installation et l'alimentation du laboratoire, l'approvisionnement des packs, la sélection de recherche et la vérification de son achèvement restent à relier à ce planificateur. La commande ne démontre donc pas encore une progression scientifique autonome.
+`prepare-research --session FILE --technology NAME` exécute les déclencheurs de fabrication pris en charge. Le stock cible demandé à la production est le stock actuellement porté plus le nombre du déclencheur. Le contrôleur relit ensuite la technologie et exige son état natif `researched=true`. Une hausse du stock sans déblocage ne déclenche pas une nouvelle fabrication aveugle : elle arrête la préparation pour réconciliation.
+
+La préparation s'arrête lorsqu'une recherche en laboratoire devient la prochaine étape, avec le statut `ready-for-lab`, ou lorsque la technologie demandée est déjà acquise, avec `researched`. Son délai est de 45 minutes et son budget de 32 étapes. Les tests vérifient qu'un stock déjà possédé ne remplace pas un déclencheur encore incomplet et qu'une production sans déblocage natif n'est pas présentée comme une réussite.
+
+L'exécution de cette nouvelle commande reste à qualifier en jeu. L'installation et l'alimentation du laboratoire, l'approvisionnement des packs, la sélection de recherche et la vérification de son achèvement restent à relier au planificateur. Il ne s'agit donc pas encore d'une progression scientifique autonome complète.

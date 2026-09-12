@@ -20,6 +20,17 @@ public sealed record SteamPowerPlan(ActorScope Scope, long ObservedTick, IReadOn
 
 public sealed class SteamPowerPlanner
 {
+    public static MapPosition? FactoryAnchor(IEnumerable<(string Name, MapPosition Position)> knownEntities,
+        ProductionCatalog catalog)
+    {
+        var productionNames = catalog.Items.Values.Where(i => i.PlaceEntityType is "furnace" or "mining-drill" or "assembling-machine" or "lab")
+            .Select(i => i.PlaceEntity).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        MapPosition[] positions = knownEntities.Where(e => productionNames.Contains(e.Name)).Select(e => e.Position).ToArray();
+        if (positions.Any(p => !double.IsFinite(p.X) || !double.IsFinite(p.Y)))
+            throw new InvalidDataException("Invalid known factory position.");
+        return positions.Length == 0 ? null : new(positions.Average(p => p.X), positions.Average(p => p.Y));
+    }
+
     public SteamPowerPlan? Find(SpatialSnapshot map, PowerEquipment equipment)
     {
         var placements = new PlacementPlanner();

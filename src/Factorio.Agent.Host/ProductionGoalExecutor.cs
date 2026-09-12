@@ -5,7 +5,12 @@ namespace Factorio.Agent.Host;
 public sealed record StockGoalResult(string Method, string Item, int TargetStock, long InitialStock, long FinalStock,
     long StartTick, long EndTick);
 
-public sealed class ProductionGoalExecutor(IGameClient game, IControllerJournal journal)
+public interface IStockGoalExecutor
+{
+    Task<StockGoalResult> RunAsync(string item, int targetStock, CancellationToken token = default);
+}
+
+public sealed class ProductionGoalExecutor(IGameClient game, IControllerJournal journal) : IStockGoalExecutor
 {
     public async Task<StockGoalResult> RunAsync(string item, int targetStock, CancellationToken token = default)
     {

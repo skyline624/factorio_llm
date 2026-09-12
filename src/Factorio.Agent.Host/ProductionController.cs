@@ -86,9 +86,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     await SmeltAsync(step, state, catalog, map);
                     break;
                 case "unavailable":
-                    MapPosition frontier = exploration.Choose(map, step.Item, catalog);
-                    await journal.AppendAsync("exploration-frontier", new { step.Item, frontier, map.CollectedTick }, deadline.Token);
-                    await controller.NavigateAsync(frontier, cancellationToken: deadline.Token);
+                    ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, step.Item, token: deadline.Token);
+                    await journal.AppendAsync("exploration-frontier", new { step.Item, frontier = next.Position, next.CollectedTick }, deadline.Token);
+                    await controller.NavigateAsync(next.Position, cancellationToken: deadline.Token);
                     break;
                 default: throw new InvalidOperationException($"{step.Kind}: {step.Item}: {step.Reason}");
             }
@@ -114,9 +114,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     await controller.NavigateAsync(position, distance, deadline.Token);
                     return;
                 }
-                MapPosition waypoint = exploration.Choose(currentMap, "", catalog, position);
-                await journal.AppendAsync("travel-segment", new { position, waypoint, currentMap.CollectedTick }, deadline.Token);
-                await controller.NavigateAsync(waypoint, cancellationToken: deadline.Token);
+                ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, "", position, deadline.Token);
+                await journal.AppendAsync("travel-segment", new { position, waypoint = next.Position, next.CollectedTick }, deadline.Token);
+                await controller.NavigateAsync(next.Position, cancellationToken: deadline.Token);
             }
             throw new InvalidOperationException("Travel to a known entity exhausted its local segment budget.");
         }
@@ -178,9 +178,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                             string? wantedFuel = fuels.FirstOrDefault(p => catalog.Mining.Values.Any(products =>
                                 products.Any(material => material.Name == p.Key && material.DeterministicItem))).Key;
                             if (wantedFuel is null) throw new InvalidOperationException("No known solid extraction route for compatible fuel.");
-                            MapPosition frontier = exploration.Choose(map, wantedFuel, catalog);
-                            await journal.AppendAsync("fuel-exploration-frontier", new { wantedFuel, frontier, map.CollectedTick }, deadline.Token);
-                            await controller.NavigateAsync(frontier, cancellationToken: deadline.Token);
+                            ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, wantedFuel, token: deadline.Token);
+                            await journal.AppendAsync("fuel-exploration-frontier", new { wantedFuel, frontier = next.Position, next.CollectedTick }, deadline.Token);
+                            await controller.NavigateAsync(next.Position, cancellationToken: deadline.Token);
                             continue;
                         }
                         await TravelAsync(fuelStep.Source!.Position, MiningDistance(fuelStep.Source, map), catalog);

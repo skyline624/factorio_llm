@@ -45,15 +45,27 @@ public sealed class SteamPowerController(IGameClient game, IControllerJournal jo
         await executor.RunAsync(fuel, 5, token);
         await using var controller = new SpatialController(game, journal);
         SteamPowerPlan? plan = resume;
-        for (int attempt = 0; plan is null && attempt < 64; attempt++)
+        MapPosition? factoryAnchor = SteamPowerPlanner.FactoryAnchor(prepared.Entities.Select(e => (e.Name, e.Position)), catalog);
+        bool approachingFactory = factoryAnchor is not null;
+        await journal.AppendAsync("power-search-origin", new { factoryAnchor, prepared.Scope, prepared.Tick }, token);
+        for (int step = 0, searches = 0; plan is null && step < 128 && searches < 64; step++)
         {
             map = await spatial.CaptureAsync(equipment.Items, 48, token);
             RequireScope(map.Scope);
-            plan = new SteamPowerPlanner().Find(map, equipment);
-            if (plan is not null) break;
-            MapPosition frontier = exploration.Choose(map, "", catalog);
-            await journal.AppendAsync("power-exploration", new { map.CollectedTick, frontier }, token);
-            await controller.NavigateAsync(frontier, cancellationToken: token);
+            if (approachingFactory && map.Actor.Position.DistanceTo(factoryAnchor!) <= 24)
+            {
+                approachingFactory = false;
+                exploration = new ExplorationPlanner();
+            }
+            if (!approachingFactory)
+            {
+                searches++;
+                plan = new SteamPowerPlanner().Find(map, equipment);
+                if (plan is not null) break;
+            }
+            ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, "", approachingFactory ? factoryAnchor : null, token);
+            await journal.AppendAsync("power-exploration", new { next.CollectedTick, frontier = next.Position, approachingFactory }, token);
+            await controller.NavigateAsync(next.Position, cancellationToken: token);
         }
         if (plan is null) throw new InvalidOperationException("No observed reachable shore supports the first steam installation within the search budget.");
         await journal.AppendAsync("steam-power-plan", plan, token);
@@ -135,7 +147,8 @@ public sealed class SteamPowerController(IGameClient game, IControllerJournal jo
                     await controller.NavigateAsync(destination, distance, token);
                     return;
                 }
-                await controller.NavigateAsync(exploration.Choose(current, "", catalog, destination), cancellationToken: token);
+                ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
+                await controller.NavigateAsync(next.Position, cancellationToken: token);
             }
             throw new InvalidOperationException("Travel to the planned power installation exhausted its segment budget.");
         }

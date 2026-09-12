@@ -4,6 +4,8 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
+public sealed record ExplorationWaypoint(MapPosition Position, long CollectedTick);
+
 /// <summary>Executes C# spatial plans while yielding actor operations to the deterministic defense loop.</summary>
 public sealed class SpatialController(IGameClient game, IControllerJournal journal) : IAsyncDisposable
 {
@@ -21,7 +23,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         deadline.CancelAfter(TimeSpan.FromMinutes(2));
         var receipts = new List<OperationReceipt>();
         var remaining = new List<MapPosition>();
-        int plans = 0;
+        int plans = 0, clearedTrees = 0;
         while (plans < 256)
         {
             deadline.Token.ThrowIfCancellationRequested();
@@ -51,6 +53,17 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 route = route with { Waypoints = Subdivide(map.Actor.Position, route.Waypoints) };
             plans++;
             await journal.AppendAsync("route-plan", new { map.Scope, map.CollectedTick, destination, arrivalDistance, reused = reusable, route }, deadline.Token);
+            if (route.Status == RouteStatus.NoRouteOnKnownGrid && clearedTrees < 16)
+            {
+                ProductionCatalog catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), deadline.Token));
+                if (catalog.Scope != map.Scope) throw new InvalidDataException("Actor changed before clearing the route.");
+                if (await ClearTreeAsync(map, catalog, destination, deadline.Token))
+                {
+                    clearedTrees++;
+                    remaining.Clear();
+                    continue;
+                }
+            }
             if (route.Status != RouteStatus.Found || route.Waypoints.Count == 0)
                 throw new NavigationPlanningException(route.Status, $"{route.Status}: no executable route under the current snapshot and search budget.");
             MapPosition waypoint = SelectWaypoint(field, route);
@@ -78,6 +91,38 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             start = corner;
         }
         return result.AsReadOnly();
+    }
+
+    public async Task<ExplorationWaypoint> FindExplorationWaypointAsync(ExplorationPlanner planner, ProductionCatalog catalog,
+        string wanted, MapPosition? destination = null, CancellationToken token = default)
+    {
+        for (int cleared = 0; ; cleared++)
+        {
+            SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
+            RequireAi(map);
+            if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during exploration clearance.");
+            try { return new(planner.Choose(map, wanted, catalog, destination), map.CollectedTick); }
+            catch (ExplorationBlockedException) when (cleared < 16)
+            {
+                if (!await ClearTreeAsync(map, catalog, destination, token)) throw;
+            }
+        }
+    }
+
+    private async Task<bool> ClearTreeAsync(SpatialSnapshot map, ProductionCatalog catalog, MapPosition? destination, CancellationToken token)
+    {
+        SpatialEntity? tree = new TreeClearancePlanner().Select(map, catalog, destination);
+        if (tree is null) return false;
+        await journal.AppendAsync("navigation-clearance-plan", new { map.Scope, map.CollectedTick, tree, destination }, token);
+        OperationReceipt receipt = await WorkAsync("mine", new { name = tree.Name, position = tree.Position, count = 1 }, 3600, token: token);
+        if (receipt.Status != "completed" || receipt.Effects.GetProperty("targetId").GetString() != tree.Id
+            || receipt.Effects.GetProperty("produced").GetDouble() <= 0)
+            throw new InvalidOperationException("Tree clearance did not establish completed native mining; reconcile partial effects.");
+        SpatialSnapshot after = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
+        if (after.Scope != map.Scope || !after.Bounds.Contains(tree.Position) || after.Entities.Any(e => e.Id == tree.Id))
+            throw new InvalidDataException("The mined tree's disappearance could not be verified in the current scope.");
+        await journal.AppendAsync("navigation-tree-cleared", new { tree.Id, beforeTick = map.CollectedTick, afterTick = after.CollectedTick, receipt }, token);
+        return true;
     }
 
     public static MapPosition SelectWaypoint(SpatialCollisionField field, RoutePlan route)
