@@ -99,3 +99,8 @@ Une machine posée sur le réseau par le planificateur C# a réalisé dix circui
 ## Mémoire persistante : fixture
 
 Une nouvelle commande a retrouvé un gisement hors de sa vue actuelle à partir d’une observation conservée sur disque, puis a extrait son unique minerai après retour et observation locale. Une nouvelle photographie a invalidé le souvenir du gisement épuisé. La préparation de terrain, ressource et position est artificielle et explicitement consignée. Voir [mémoire des ressources](resource-memory.md) pour les garanties, bornes et mesures.
+
+
+## Assemblage et mémoire : monde normal
+
+Après restauration de souvenirs depuis des reçus de minage corrélés, l’agent a revu le cuivre avant extraction, fabriqué un assembleur, étendu le réseau électrique et produit cinq circuits par cinq cycles natifs. La lecture indépendante au tick 847 143 confirme cinq circuits portés, des inventaires machine vides, aucune fabrication engagée, un réseau électrique commun au générateur, 250 points de vie et aucun joueur connecté. Le mod rapporte zéro intervention humaine et zéro fusée ; pollution active et mode pacifique désactivé. L’essai conserve son statut de monde de développement corrigé. Voir [assemblage](assembly.md) et [mémoire](resource-memory.md).

@@ -26,3 +26,8 @@ L'ancienne partie de développement n'avait pas de mémoire persistante de ses g
 `restore-resource-memory --session FILE` reconstruit des souvenirs depuis les journaux privés antérieurs à cette mémoire. L’import exige une commande de minage et un reçu terminé portant le même identifiant, une empreinte de commande cohérente, le même monde, un tick non futur et une production positive reconnue par le catalogue natif. L’identifiant natif de la cible doit aussi confirmer la surface, le nom et les coordonnées exactes de la commande. Les lignes incomplètes ou non corrélées ne fournissent aucune position.
 
 Cette restauration nécessite le contrôle exclusif du personnage et écrit un rapport de provenance ; elle ne modifie ni le personnage, ni les stocks, ni le monde. Les souvenirs restaurés conservent leurs anciens ticks et restent soumis à la nouvelle observation locale. La lecture est bornée à 1 024 journaux et 512 Mio. Dans le monde de développement, 37 journaux ont fourni 31 opérations de minage confirmées, dont deux points de cuivre anciens.
+
+
+## Reprise en économie normale
+
+Le souvenir restauré a guidé le retour vers le cuivre. Au tick 796 564, une nouvelle photographie a identifié une source voisine contenant 162 minerais ; le contrôleur a utilisé cette observation fraîche pour miner. Les observations suivantes ont enrichi la mémoire et le besoin de cuivre suivant a réutilisé cette connaissance. La fabrication, la pose et l’approvisionnement de l’assembleur ont finalement produit cinq circuits dans le monde normal de développement. Les [preuves d’assemblage](assembly.md) distinguent ce résultat des campagnes finales encore à réaliser.

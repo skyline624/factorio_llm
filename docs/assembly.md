@@ -22,4 +22,12 @@ La régression du laboratoire avec le composant électrique partagé a égalemen
 
 Cette capacité traite un produit solide déterministe et jusqu'à huit ingrédients solides distincts. Les fluides, coproduits, transports continus par tapis/bras, dimensionnement industriel du réseau et coordination de machines restent à implémenter. Le compteur de cycles est une mesure native, distincte du stock final : une reprise peut récupérer des produits déjà terminés sans nouveau cycle. Une erreur ou un transfert partiel impose une réconciliation ; aucune répétition aveugle ne démarre une autre méthode.
 
-Dans le monde normal de développement, l'essai a préparé neuf plaques de fer et cinq engrenages pour la machine, puis a été interrompu après plus de vingt étapes d'exploration du cuivre. L'acteur a été vérifié immobile et le dernier état sauvegardé. Aucun assembleur n'a encore été installé dans ce monde : la mémoire persistante des ressources doit corriger ces recherches répétées avant de reprendre la qualification. Aucun lancement de fusée n'est qualifié.
+## Essai en économie normale
+
+Après une première interruption due à des explorations répétées, la [mémoire des ressources](resource-memory.md) et la restauration de reçus natifs anciens ont permis de retrouver le cuivre. Le moteur a ensuite fourni une nouvelle observation locale avant minage ; aucun stock ni gisement n'a été ajouté à la partie.
+
+Entre les ticks 789 893 et 844 485, le C# a fabriqué l'assembleur avec les ingrédients réellement disponibles ou produits, posé le poteau 648 et la machine 649 en (-34,5 ; -17,5), puis chargé deux unités de charbon dans la chaudière existante. Il a produit et livré cinq plaques de fer et quinze câbles à la machine. La recette native de câble ayant un rendement de deux, un câble est resté dans l'inventaire du personnage.
+
+La lecture indépendante au tick 847 143 confirme cinq circuits portés, cinq cycles terminés dans la machine, aucune fabrication engagée et des inventaires d'entrée et de sortie vides. La machine et le générateur sont sur le réseau 1, avec une énergie positive. Le personnage a 250 points de vie et aucun joueur n'est connecté. Le mod rapporte zéro intervention humaine, le mode pacifique est désactivé et la pollution est active.
+
+Cet essai valide l'assemblage dans l'économie du monde de développement. Les corrections et reprises antérieures empêchent de le compter comme campagne finale autonome depuis le départ. Aucun lancement de fusée n'est qualifié.
