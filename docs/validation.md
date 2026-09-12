@@ -5,7 +5,7 @@ Ce document décrit des essais de composants et des fixtures synthétiques sur F
 ## Vérifications réalisées
 
 - Compilation Release des sept projets .NET, sans avertissement.
-- 106 tests hors ligne réussis : 58 pour l'adaptateur Ollama, 30 pour l'infrastructure, 18 pour le host. Ils couvrent notamment transport/reçus, continuité des photographies d'usine, détection de régression, contrôle exclusif, priorité du transport et transitions de défense. L'appel cloud est exclu de la suite ordinaire.
+- 118 tests hors ligne réussis : 58 pour l'adaptateur Ollama, 30 pour l'infrastructure, 30 pour le host. Ils couvrent notamment transport/reçus, continuité des photographies d'usine, détection de régression, contrôle exclusif, priorité du transport, transitions de défense, collisions spatiales et arrêt d'un mouvement malgré des réponses de mutation perdues. L'appel cloud est exclu de la suite ordinaire.
 - Un appel réel à `glm-5.3-flash:cloud` via Ollama sur des faits synthétiques a produit un objectif valide : 200 plaques de fer. Une tentative, 672 tokens d'entrée et 92 de sortie, environ 1,575 seconde côté client. Il ne commande pas le jeu.
 - Une fixture native démarre sans client : marche avec position réellement changée et temps écoulé, fabrication de deux engrenages consommant quatre plaques, minage de trois minerais avec durée native, refus de minage hors portée, soumission répétée sans nouvel effet, conflit d'identifiant refusé et annulation persistée.
 - La fixture étendue vérifie construction d'un coffre avec consommation d'un objet, refus d'un second placement au même endroit sans perte, insertion/retrait exacts et transfert partiel limité à 90 plaques par la capacité restante du coffre. Un four produit cinq plaques à partir de cinq minerais et de combustible réellement transférés ; ses sorties sont reprises par l'acteur. Réglage de recette et rotation de tapis sont relus dans le moteur. Une recherche dont le prérequis manque est refusée sans sélection ni déblocage.
@@ -19,6 +19,9 @@ Ce document décrit des essais de composants et des fixtures synthétiques sur F
 - Dans le client graphique connecté, le pilote est attaché au même identifiant d'entité que l'IA. Le bouton manuel incrémente le compteur d'assistance et les commandes IA sont refusées avec `manual_control`. Le retour IA permet la marche scriptée du personnage connecté. La déconnexion conserve le personnage, qui marche ensuite sans client.
 - Le premier raccordement a révélé une duplication provenant du scénario freeplay. La configuration du scénario supprime désormais les kits destinés à de nouveaux joueurs et le crash tardif ; le corps temporaire vide du nouveau pilote est retiré. Le jeu affiche un seul personnage après connexion. Un ancien personnage possédant des objets reste préservé.
 - Les réglages observés conservent pollution, évolution et expansion actives ; le mode pacifique est désactivé. La défense est qualifiée seulement contre l'attaquant isolé de la fixture.
+
+- La fixture spatiale a réussi en headless puis avec pilote connecté : détour calculé autour de 28 tuiles d'eau et 13 murs, ajout de cinq murs pendant un segment accepté, arrêt natif `path_blocked`, dégagement au contact et nouveau trajet. Le personnage atteint (19,98828125 ; 0,0078125) pour une destination (20 ; 0), puis construit un four et un coffre à des positions distinctes choisies en C#, en consommant exactement un objet de chaque type. Le retour conserve les 18 murs, l'eau et les deux bâtiments.
+- Une nouvelle marche de cette fixture est interrompue côté C# juste après acceptation. La libération du contrôleur obtient un reçu `cancelled` ; deux lectures natives séparées de 500 ms montrent des ticks croissants et une position inchangée. Avec le client, un seul personnage est présent et son identifiant reste celui du pilote pendant les trajets, les constructions et l'arrêt. Ces preuves concernent une fixture locale, pas la synthèse d'une usine ni une campagne.
 
 Les rapports JSON/JSONL bruts restent dans `.runtime/`, avec sauvegardes, identités de session et journaux locaux. Ils ne sont pas publiés. Les coûts et positions ont été comparés à des lectures natives indépendantes des reçus du mod.
 
@@ -44,7 +47,7 @@ Les douze kinds annoncés par le mod sont des capacités implémentées ; seuls 
 
 La photographie complète du registre connu, les inventaires natifs, le transit des tapis/bras et la déduplication des segments fluides sont implémentés avec les preuves limitées ci-dessus. La découverte globale de l'usine, les objets au sol et les réservations C# restent incomplets. Les filtres et capacités de machines particulières, la collecte sous forte charge et les grands réseaux fluides restent à qualifier.
 
-La fuite et la défense de l'usine, les routes et implantations calculées en C#, la mémoire SQLite et la traduction des objectifs libres en progression scientifique restent à développer. Les indicateurs de couverture du protocole annoncent ces lacunes.
+La navigation locale et le placement individuel en C# sont implémentés avec les preuves ci-dessus. L'exploration, les implantations complètes et leurs réseaux, la fuite et la défense de l'usine, la mémoire SQLite et la traduction des objectifs libres en progression scientifique restent à développer.
 
 Le watermark local refuse une régression observée de tick, d'incarnation ou de génération et un autre monde. Il ne démontre pas une détection universelle d'une ancienne sauvegarde restaurée puis avancée au-delà du dernier tick connu. La reprise gérée des sessions reste à implémenter.
 

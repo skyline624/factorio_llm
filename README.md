@@ -79,6 +79,16 @@ dotnet $hostDll factory --session $sessionFile --capacity-items iron-plate,coppe
 
 Le fichier produit contient les enregistrements détaillés ; la console sépare stocks des inventaires, objets en transit et fluides. Les pages restent immuables pendant la lecture. Les capacités d'insertion sont explicitement marquées comme estimations natives et la fabrication engagée est séparée des produits disponibles. `verify-factory --session $sessionFile` prépare une **fixture headless destructible** avec 230 coffres et vérifie la pagination malgré une insertion et une destruction entre deux pages. Voir le [contrat d'état de l'usine](docs/factory-state.md).
 
+Pour observer la géométrie native, calculer un trajet ou choisir la position d'un bâtiment :
+
+```powershell
+dotnet $hostDll spatial --session $sessionFile --items stone-furnace,wooden-chest
+dotnet $hostDll navigate --session $sessionFile --x 20 --y 0
+dotnet $hostDll build --session $sessionFile --item wooden-chest --x 23 --y 0
+```
+
+Ces commandes calculent leurs routes et placements en C#, à partir de la zone actuellement observée. La construction consomme un objet possédé ; ses coordonnées sont une préférence, la position réelle figure dans le reçu. `verify-spatial --session $sessionFile` prépare une **fixture** qui vérifie contournement d'eau et de murs, blocage par un obstacle ajouté pendant la marche, recalcul, placement avec coût réel et arrêt après annulation du contrôleur. Elle a réussi sans client et avec le pilote connecté. Voir la [navigation et le placement](docs/spatial.md), notamment leurs limites ; une implantation complète d'usine n'est pas encore disponible.
+
 Pour sauvegarder puis arrêter le serveur :
 
 ```powershell

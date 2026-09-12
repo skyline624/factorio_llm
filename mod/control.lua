@@ -8,6 +8,7 @@ local Pilot = require("scripts.pilot")
 local Visibility = require("scripts.visibility")
 local Recovery = require("scripts.recovery")
 local FactorySnapshot = require("scripts.factory_snapshot")
+local Spatial = require("scripts.spatial")
 
 script.on_init(Actor.initialize)
 script.on_configuration_changed(Actor.initialize)
@@ -41,6 +42,7 @@ local function hello(args)
 end
 
 local handlers = {hello = hello, observe = Observation.observe, factory_snapshot = FactorySnapshot.page, submit = Operations.submit,
+  spatial = Spatial.observe, validate_placement = Spatial.validate_placement,
   mark_fixture = function(args)
     local reason = U.string(args.reason, "reason")
     local s = Actor.state()

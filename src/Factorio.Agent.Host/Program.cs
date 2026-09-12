@@ -8,7 +8,22 @@ using var shutdown = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; shutdown.Cancel(); };
 try
 {
-    if (args.Length == 0) throw new ArgumentException("Commands: start [--fixture] [--seed N] [--root PATH] [--installation PATH]; observe --session FILE; factory --session FILE [--capacity-items item1,item2]; rpc --session FILE --action ACTION [--json-file FILE]; connect --session FILE; submit --session FILE --kind KIND --json-file FILE [--ticks N]; defend --session FILE [--seconds N]; verify-native --session FILE; verify-defense --session FILE; verify-factory --session FILE; verify-pilot --session FILE --phase manual|ai|standalone; stop --session FILE.");
+    if (args.Length == 0) throw new ArgumentException("""
+        Commands:
+          start [--fixture] [--seed N] [--root PATH] [--installation PATH]
+          observe --session FILE
+          factory --session FILE [--capacity-items item1,item2]
+          spatial --session FILE [--items item1,item2]
+          navigate --session FILE --x N --y N [--distance N]
+          build --session FILE --item NAME --x N --y N
+          rpc --session FILE --action ACTION [--json-file FILE]
+          connect --session FILE
+          submit --session FILE --kind KIND --json-file FILE [--ticks N]
+          defend --session FILE [--seconds N]
+          verify-native|verify-defense|verify-factory|verify-spatial --session FILE
+          verify-pilot --session FILE --phase manual|ai|standalone
+          stop --session FILE
+        """);
     var options = Parse(args[1..]);
     string? Option(string name) => options.GetValueOrDefault(name);
     string Required(string name) => Option(name) ?? throw new ArgumentException($"Missing --{name}.");
@@ -71,6 +86,40 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new FactoryQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "spatial":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            string[]? items = Option("items")?.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            SpatialSnapshot map = await new SpatialClient(session.CreateClient()).CaptureAsync(items, cancellationToken: shutdown.Token);
+            string output = Path.Combine(session.Directory, $"spatial-{Guid.NewGuid():N}.json");
+            await File.WriteAllTextAsync(output, JsonSerializer.Serialize(map, Protocol.Json), shutdown.Token);
+            Print(new { map.CollectedTick, map.Bounds, map.Actor, entityCount = map.Entities.Count, output });
+            break;
+        }
+        case "navigate":
+        case "build":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"spatial-operations-{Guid.NewGuid():N}.jsonl");
+            await using var controller = new SpatialController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var target = new MapPosition(double.Parse(Required("x"), CultureInfo.InvariantCulture),
+                double.Parse(Required("y"), CultureInfo.InvariantCulture));
+            if (args[0] == "navigate")
+            {
+                NavigationResult result = await controller.NavigateAsync(target,
+                    double.Parse(Option("distance") ?? "0.4", CultureInfo.InvariantCulture), shutdown.Token);
+                Print(new { result.Position, result.Plans, operations = result.Receipts.Count, journalPath });
+            }
+            else Print(await controller.BuildAsync(Required("item"), target, shutdown.Token));
+            break;
+        }
+        case "verify-spatial":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new SpatialQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "stop":
