@@ -50,6 +50,17 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
         return await new ResourceMemoryStore(session.Directory).ReadAsync(current, token);
     }
 
+    public async Task<ResourceMemorySnapshot> ImportResourceHistoryAsync(SpatialSnapshot current, IReadOnlyList<ResourceSighting> history, CancellationToken token)
+    {
+        if (controllerLease is null) throw new InvalidOperationException("Historical import requires exclusive actor control.");
+        controllerLease.Validate(session.Directory);
+        if (current.Scope.WorldId != session.ProposedWorldId || current.Scope.SessionId != session.SessionId)
+            throw new SessionDivergenceException("Historical import belongs to another world or controller session.");
+        using IDisposable priority = await AcquireCallAsync(control: false, token);
+        await using FileStream guard = await AcquireLockAsync(token);
+        return await new ResourceMemoryStore(session.Directory).ImportAsync(current, history, token);
+    }
+
     // A stock page cannot interrupt a call already in flight, but it yields the
     // next slot to queued control/observation calls in this controller instance.
     private async Task<IDisposable> AcquireCallAsync(bool control, CancellationToken token)

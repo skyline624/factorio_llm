@@ -14,6 +14,7 @@ try
           start [--fixture] [--seed N] [--root PATH] [--installation PATH]
           resume --session FILE [--root PATH]
           observe --session FILE
+          restore-resource-memory --session FILE
           factory --session FILE [--capacity-items item1,item2]
           spatial --session FILE [--items item1,item2]
           navigate --session FILE --x N --y N [--distance N]
@@ -103,6 +104,21 @@ try
             var controller = new DefenseController(session.CreateClient(lease), new ControllerJournal(journalPath));
             await controller.RunAsync(TimeSpan.FromSeconds(int.Parse(Option("seconds") ?? "60", CultureInfo.InvariantCulture)), shutdown.Token);
             Print(new { journal = journalPath });
+            break;
+        }
+        case "restore-resource-memory":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            var game = (SessionGameClient)session.CreateClient(lease);
+            var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), shutdown.Token));
+            var map = await new SpatialClient(game).CaptureAsync(cancellationToken: shutdown.Token);
+            if (catalog.Scope != map.Scope) throw new InvalidDataException("Actor changed before history import.");
+            var recovered = await ResourceHistoryImporter.ReadAsync(session.Directory, catalog, map, shutdown.Token);
+            var memory = await game.ImportResourceHistoryAsync(map, recovered.Resources, shutdown.Token);
+            string reportPath = Path.Combine(session.Directory, $"resource-history-import-{Guid.NewGuid():N}.json");
+            await LocalJson.WriteAsync(reportPath, new { map.Scope, map.SurfaceIndex, map.CollectedTick, recovered, memory }, shutdown.Token);
+            Print(new { recovered.FilesRead, recovered.ConfirmedOperations, rememberedResources = memory.Resources.Count, reportPath });
             break;
         }
         case "factory":

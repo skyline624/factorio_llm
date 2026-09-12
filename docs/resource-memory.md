@@ -19,3 +19,10 @@ Dans une fixture explicitement préparée, un minerai de cuivre a été créé s
 La photographie suivante, au tick 79 304, constate la disparition du gisement et retire son souvenir. L'inventaire conserve le minerai extrait. Le terrain, la ressource et les déplacements de préparation sont artificiels ; cet essai ne compte pas comme campagne autonome normale.
 
 L'ancienne partie de développement n'avait pas de mémoire persistante de ses gisements. La reprise utilise les recettes des fours connus comme indices, puis enrichit la mémoire uniquement avec de nouvelles observations natives. Aucun historique de position n'est inventé ou importé depuis des journaux dépourvus de surface vérifiable.
+
+
+## Restauration des anciens journaux
+
+`restore-resource-memory --session FILE` reconstruit des souvenirs depuis les journaux privés antérieurs à cette mémoire. L’import exige une commande de minage et un reçu terminé portant le même identifiant, une empreinte de commande cohérente, le même monde, un tick non futur et une production positive reconnue par le catalogue natif. L’identifiant natif de la cible doit aussi confirmer la surface, le nom et les coordonnées exactes de la commande. Les lignes incomplètes ou non corrélées ne fournissent aucune position.
+
+Cette restauration nécessite le contrôle exclusif du personnage et écrit un rapport de provenance ; elle ne modifie ni le personnage, ni les stocks, ni le monde. Les souvenirs restaurés conservent leurs anciens ticks et restent soumis à la nouvelle observation locale. La lecture est bornée à 1 024 journaux et 512 Mio. Dans le monde de développement, 37 journaux ont fourni 31 opérations de minage confirmées, dont deux points de cuivre anciens.

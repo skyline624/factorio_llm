@@ -23,6 +23,16 @@ internal sealed class ResourceMemoryStore(string directory)
         memory.ValidateFor(map);
         return memory;
     }
+    public async Task<ResourceMemorySnapshot> ImportAsync(SpatialSnapshot map, IReadOnlyList<ResourceSighting> history, CancellationToken token)
+    {
+        var prior = await ReadAsync(map, token);
+        var combined = prior.Resources.Concat(history).GroupBy(r => r.EntityId)
+            .Select(g => g.OrderByDescending(r => r.ObservedTick).First()).OrderByDescending(r => r.ObservedTick).ToArray();
+        var updated = (prior with { LastTick = map.CollectedTick, Resources = combined.Take(8192).ToArray(),
+            Truncated = prior.Truncated || combined.Length > 8192 }).Merge(map);
+        await LocalJson.WriteAsync(FilePath(map), updated, token);
+        return updated;
+    }
     public async Task RecordAsync(SpatialSnapshot map, CancellationToken token)
     {
         var previous = await ReadAsync(map, token);
