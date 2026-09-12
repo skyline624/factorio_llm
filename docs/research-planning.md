@@ -24,4 +24,10 @@ Les ingrédients directs doivent être présents avant fabrication ; une file r�
 
 `verify-crafting --session FILE` exige une fixture et y injecte les ingrédients et prérequis nécessaires au test. La qualification headless réussie couvre un laboratoire produit/compté une fois, le déblocage scientifique natif, la répétition sans double effet, une annulation après un engrenage sur cent avec restitution des ingrédients inutilisés, quatre câbles pour deux fabrications et le refus préalable d'une fabrication récursive. Les stocks et compteurs sont relus directement dans le moteur, indépendamment des reçus. Ces apports de fixture l'excluent des campagnes normales.
 
-L'exécution de cette nouvelle commande reste à qualifier en jeu. L'installation et l'alimentation du laboratoire, l'approvisionnement des packs, la sélection de recherche et la vérification de son achèvement restent à relier au planificateur. Il ne s'agit donc pas encore d'une progression scientifique autonome complète.
+## Préparation vérifiée dans le monde normal
+
+Après correction, `prepare-research automation` a réussi entre les ticks 648 325 et 667 952 dans le même monde normal de développement. L'agent a récolté et fondu les ressources nécessaires aux ingrédients, puis fabriqué un laboratoire supplémentaire. L'opération finale a duré 121 ticks et consommé dix engrenages, quatre tapis et dix circuits. Le stock de laboratoires est passé de un à deux ; le compteur natif de production a augmenté de zéro à un, sans réécriture de l'ancienne fabrication omise.
+
+La relecture entre les ticks 667 940 et 667 944 confirme `automation-science-pack.researched=true`. La commande a terminé avec `ready-for-lab` pour `automation`. Une lecture indépendante au tick 689 873 confirme encore deux laboratoires portés, une production comptée et la recette de science rouge disponible. Aucun apport artificiel, sélection forcée de recherche ou joueur connecté n'a été nécessaire dans ce monde. Il s'agit d'une partie de développement ayant reçu plusieurs corrections ; elle ne compte pas comme campagne finale sans assistance.
+
+L'installation et l'alimentation du laboratoire, l'approvisionnement des packs, la sélection de recherche et la vérification de son achèvement restent à relier au planificateur. Il ne s'agit donc pas encore d'une progression scientifique autonome complète.

@@ -70,3 +70,10 @@ La reprise de checkpoints préparés est implémentée avec empreinte du fichier
 Le watermark local refuse une régression observée de tick, d'incarnation ou de génération et un autre monde. Il ne démontre pas une détection universelle d'une ancienne sauvegarde restaurée puis avancée au-delà du dernier tick connu. La reprise de l'objectif stratégique, la mémoire persistante et la récupération automatique après crash restent à implémenter.
 
 Les trois campagnes normales jusqu'à la fusée, sans assistance, restent entièrement à qualifier.
+
+
+## Déclencheur scientifique du personnage autonome
+
+La qualification `verify-crafting` reproduit puis vérifie la correction des sorties de fabrication omises des statistiques natives par Factorio 2.0.77 lorsqu’aucun joueur ne contrôle le personnage. Elle couvre le déblocage natif de la science rouge, le crédit unique, l’annulation partielle avec remboursement, les sorties multiples et le refus des files récursives implicites. La compensation est explicite dans le reçu et repose sur la file native et le stock effectivement produit ; elle ne modifie pas les drapeaux de recherche. Voir [research-planning.md](research-planning.md) pour la méthode et ses limites.
+
+Dans le monde normal de développement, `prepare-research automation` a ensuite réussi entre les ticks 648 325 et 667 952. Un laboratoire supplémentaire a consommé dix engrenages, quatre tapis et dix circuits en 121 ticks, puis le moteur a débloqué la science rouge. La commande a terminé avec `ready-for-lab`, sans recherche en laboratoire exécutée. L’ancien laboratoire produit avant correction reste présent et ses statistiques ne sont pas reconstituées. Ce résultat ne compte pas parmi les trois campagnes finales.
