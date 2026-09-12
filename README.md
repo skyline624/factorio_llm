@@ -97,7 +97,7 @@ dotnet $hostDll run-goal --session $sessionFile
 dotnet $hostDll automate-smelting --session $sessionFile --item iron-plate --quantity 100
 ```
 
-La première commande reçoit un stock cible explicite dans l'inventaire du personnage. La seconde demande un objectif libre au modèle cloud puis vérifie s'il est actuellement exécutable. `automate-smelting` calcule la pose d'une foreuse à combustible vers un four compatible déjà construit, ou réutilise une connexion existante ; le personnage ravitaille les machines et collecte leurs produits. Ce chemin exige un gisement adapté autour du four et n'est pas encore sélectionné automatiquement par `run-goal`. La production relit les stocks et les cuissons engagées ; ses positions sont calculées en C#. Cette boucle ne synthétise pas encore une chaîne automatisée jusqu'à la fusée. Voir les [capacités et preuves de production](docs/production.md).
+La première commande reçoit un stock cible explicite dans l'inventaire du personnage. La seconde demande un objectif libre au modèle cloud puis vérifie s'il est actuellement exécutable. Les deux choisissent en C# entre une extraction directe vers un four compatible et la production par le personnage, après lecture des stocks et de la géométrie. `automate-smelting` permet également de demander explicitement le chemin foreuse–four. Celui-ci exige un gisement adapté autour d'un four déjà construit ; le personnage ravitaille les machines et collecte leurs produits. Une erreur d'exécution n'entraîne pas de basculement automatique vers une autre méthode. Cette boucle ne synthétise pas encore une chaîne automatisée jusqu'à la fusée. Voir les [capacités et preuves de production](docs/production.md).
 
 Pour sauvegarder puis arrêter le serveur :
 

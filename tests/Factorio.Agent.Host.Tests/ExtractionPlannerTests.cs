@@ -73,7 +73,7 @@ public sealed class ExtractionPlannerTests
         Assert.Equal(new MapPosition(-1.85, 0), ExtractionPlanner.Rotate(new(0, -1.85), 12));
     }
 
-    private static (SpatialSnapshot, ProductionCatalog) Setup(double x, double y)
+    internal static (SpatialSnapshot, ProductionCatalog) Setup(double x, double y)
     {
         var scope = new ActorScope("world", "session", "actor", 1, 1);
         var ground = new CollisionMask([], false, false, false);

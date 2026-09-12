@@ -108,8 +108,8 @@ try
             using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
             var planner = new OllamaStrategicPlanner(http, new OllamaOptions { MaxAttempts = 1 });
             var controller = new StrategicProductionController(session.CreateClient(lease), planner, new ControllerJournal(journalPath));
-            ProductionResult result = await controller.RunOnceAsync(shutdown.Token);
-            Print(new { result.Item, result.TargetStock, result.InitialStock, result.FinalStock, result.StartTick, result.EndTick, journalPath });
+            StockGoalResult result = await controller.RunOnceAsync(shutdown.Token);
+            Print(new { result.Method, result.Item, result.TargetStock, result.InitialStock, result.FinalStock, result.StartTick, result.EndTick, journalPath });
             break;
         }
         case "automate-smelting":
@@ -127,11 +127,11 @@ try
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
             string journalPath = Path.Combine(session.Directory, $"production-{Guid.NewGuid():N}.jsonl");
-            var controller = new ProductionController(session.CreateClient(lease), new ControllerJournal(journalPath));
-            ProductionResult result = await controller.ProduceAsync(Required("item"),
+            var controller = new ProductionGoalExecutor(session.CreateClient(lease), new ControllerJournal(journalPath));
+            StockGoalResult result = await controller.RunAsync(Required("item"),
                 int.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token);
-            Print(new { result.Item, result.TargetStock, result.InitialStock, result.FinalStock,
-                result.StartTick, result.EndTick, result.Steps, journalPath });
+            Print(new { result.Method, result.Item, result.TargetStock, result.InitialStock, result.FinalStock,
+                result.StartTick, result.EndTick, journalPath });
             break;
         }
         case "spatial":
