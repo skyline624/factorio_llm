@@ -1,0 +1,21 @@
+# Instructions du projet
+
+- Travailler depuis la racine du dépôt, sans chemin personnel imposé aux contributeurs.
+- Lorsque RTK est disponible, préfixer les commandes shell par `rtk`. Respecter les instructions propres à l'environnement ; aucun fichier de configuration personnel n'est requis pour contribuer.
+- C# pour l'agent, les transports, la planification et les outils. Lua uniquement pour les API natives de Factorio.
+- Appliquer SOLID, DRY et KISS : responsabilités courtes, interfaces aux frontières, aucune abstraction sans usage.
+- Garder les binaires/assets/documentations livrés avec le jeu, les modèles, secrets, sauvegardes, bases d'état et journaux privés hors Git. Utiliser `.runtime/` pour les données d'exécution ; seules les fixtures synthétiques documentées sont publiables.
+- Tester avec Factorio 2.0.77 réel en headless et vérifier également un client graphique connecté.
+- Le modèle du projet est `glm-5.3-flash:cloud`, accessible par Ollama local comme passerelle vers Ollama Cloud. Ce choix remplace l'inférence exclusivement locale ; aucun changement automatique de modèle.
+- Avec Ollama Cloud, ne pas promettre de génération contrainte par JSON Schema. Valider les appels d'outils et leurs arguments en C# avant de créer des opérations ; maintenir la défense indépendamment de l'inférence.
+- L'implémentation, les essais et le dépôt public `skyline624/factorio_llm` sont autorisés selon `docs/execution-plan.md`. Ce plan prévaut sur les anciennes propositions ; ne déclarer un jalon acquis qu'avec une preuve réelle.
+- Le LLM propose des objectifs libres ; C# les valide et les décompose en plans mesurables. Toutes les positions, orientations et routes sont synthétisées en C#, sans gabarits prédéfinis. V1 avec tapis et tuyaux ; trains et robots différés.
+- Priorités : survie, défense, récupération, production. Maintenir les plans encore valides et la défense pendant une indisponibilité LLM. Un seul arbitre contrôle le personnage.
+- Viser le même avatar pour IA autonome et pilote connecté, bouton IA/Manuel et reprise par observation. Après mort : réapparition normale et récupération/reconstruction dans le même monde, sans effacer la défaite par restauration.
+- Observer exactement les stocks de l'usine propre connue, avec périmètre et date. Exporter les ennemis seulement selon la visibilité normale ; ne pas enrichir celle-ci par un observateur supplémentaire.
+- Ne pas confondre validation des infrastructures, exécution LLM et réussite jusqu'à la fusée. Documenter séparément les preuves.
+- Ne jamais créer de ressources ou débloquer des recherches pour prétendre avoir progressé. Les fixtures de test doivent être explicites et distinctes d'une partie normale.
+- La qualification finale exige trois graines documentées, ennemis actifs et lancement constaté sans assistance. Les ébauches, tests de composants et scénarios préparés ne remplacent pas ces campagnes.
+- Garder des journaux structurés, des délais et des budgets bornés ; ne pas réessayer aveuglément une mutation dont le résultat est inconnu.
+- Aucun jeu ni appel cloud dans la compilation ou la CI ordinaire. Les intégrations réelles sont déclenchées séparément sur un poste configuré.
+- Le code original est sous MIT. Préserver les notices des composants réellement incorporés et vérifier leurs licences ; une source étudiée n'est pas automatiquement une dépendance.

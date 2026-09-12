@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Factorio.Agent.Infrastructure/Factorio.Agent.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

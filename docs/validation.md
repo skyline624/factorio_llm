@@ -1,0 +1,33 @@
+# Qualification du socle — 12 septembre 2026
+
+Ce document décrit des essais de composants et des fixtures synthétiques sur Factorio **2.0.77** de base, graine **424242**. Aucune de ces parties ne constitue une campagne autonome jusqu'à la fusée.
+
+## Vérifications réalisées
+
+- Compilation Release des sept projets .NET, sans avertissement.
+- 79 tests hors ligne réussis : 58 pour l'adaptateur Ollama, 18 pour le transport et les reçus, 3 pour la détection de régression d'état côté host. L'appel cloud est exclu de la suite ordinaire.
+- Un appel réel à `glm-5.3-flash:cloud` via Ollama sur des faits synthétiques a produit un objectif valide : 200 plaques de fer. Une tentative, 672 tokens d'entrée et 92 de sortie, environ 1,575 seconde côté client. Il ne commande pas le jeu.
+- Une fixture native démarre sans client : marche avec position réellement changée et temps écoulé, fabrication de deux engrenages consommant quatre plaques, minage de trois minerais avec durée native, refus de minage hors portée, soumission répétée sans nouvel effet, conflit d'identifiant refusé et annulation persistée.
+- Dans le client graphique connecté, le pilote est attaché au même identifiant d'entité que l'IA. Le bouton manuel incrémente le compteur d'assistance et les commandes IA sont refusées avec `manual_control`. Le retour IA permet la marche scriptée du personnage connecté. La déconnexion conserve le personnage, qui marche ensuite sans client.
+- Le premier raccordement a révélé une duplication provenant du scénario freeplay. La configuration du scénario supprime désormais les kits destinés à de nouveaux joueurs et le crash tardif ; le corps temporaire vide du nouveau pilote est retiré. Le jeu affiche un seul personnage après connexion. Un ancien personnage possédant des objets reste préservé.
+- Les réglages observés conservent pollution, évolution et expansion actives ; le mode pacifique est désactivé. Ces fixtures ne qualifient pas encore la défense sous attaque.
+
+Les rapports JSON/JSONL bruts restent dans `.runtime/`, avec sauvegardes, identités de session et journaux locaux. Ils ne sont pas publiés. Les coûts et positions ont été comparés à des lectures natives indépendantes des reçus du mod.
+
+## Défauts rencontrés et corrigés
+
+Factorio ignore une commande RCON vide. Une barrière non vide est nécessaire ; elle est envoyée après la première réponse de la commande pour éviter la perte observée d'une réponse lors de commandes enchaînées. Les tests conservent la couverture des réponses fragmentées et des caractères UTF-8 partagés entre paquets.
+
+Sur une carte neuve, la première commande Lua a renvoyé une chaîne vide sans initialiser l'acteur. Le démarrage vérifie désormais une impression fixe, sans effet sur le personnage, au plus deux fois avant le handshake. La réponse exacte est journalisée localement. Aucune action métier n'est répétée pour contourner cette condition.
+
+Un arrêt avant la première sauvegarde automatique a aussi révélé que `/server-save` échoue si le dossier `saves` est absent. Le host crée ce répertoire lors de la préparation du profil et avant la demande de checkpoint.
+
+## Limites restantes
+
+Les douze kinds annoncés par le mod sont des capacités implémentées ; seuls les mécanismes explicitement listés ci-dessus ont une preuve moteur dans cette livraison. Construction, transferts, réglage de recette, tir, mort/réapparition, récupération et lancement du silo nécessitent encore leurs qualifications.
+
+L'observation complète de l'usine, la comptabilité du transit et des segments fluides, la défense autonome, les routes et implantations calculées en C#, la mémoire SQLite et la traduction des objectifs libres en progression scientifique restent à développer. Les indicateurs de couverture du protocole annoncent ces lacunes.
+
+Le watermark local refuse une régression observée de tick, d'incarnation ou de génération et un autre monde. Il ne démontre pas une détection universelle d'une ancienne sauvegarde restaurée puis avancée au-delà du dernier tick connu. La reprise gérée des sessions reste à implémenter.
+
+Les trois campagnes normales jusqu'à la fusée, sans assistance, restent entièrement à qualifier.

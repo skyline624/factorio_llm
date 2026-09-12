@@ -1,0 +1,69 @@
+name: CI CSharp
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Installer le SDK du projet
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Verifier les projets de la solution
+        run: |
+          $listing = dotnet sln Factorio.Agent.sln list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $projects = @($listing | Where-Object { $_ -match '\.csproj$' })
+          if ($projects.Count -eq 0) { throw 'La solution ne contient aucun projet C#.' }
+          foreach ($project in $projects) {
+            if (-not (Test-Path -LiteralPath $project.Trim())) {
+              throw "Projet de solution introuvable : $project"
+            }
+          }
+
+      - name: Restaurer
+        run: dotnet restore Factorio.Agent.sln
+
+      - name: Compiler
+        run: dotnet build Factorio.Agent.sln --configuration Release --no-restore
+
+      - name: Executer les tests sans jeu ni cloud
+        run: |
+          dotnet test Factorio.Agent.sln --configuration Release --no-build --logger 'trx;LogFilePrefix=ci' --results-directory .ci/TestResults
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $reports = @(Get-ChildItem -LiteralPath .ci/TestResults -Filter *.trx -File -Recurse -ErrorAction SilentlyContinue)
+          if ($reports.Count -eq 0) { throw 'Aucun rapport de test produit.' }
+          $executed = 0L
+          foreach ($report in $reports) {
+            [xml]$result = Get-Content -LiteralPath $report.FullName -Raw
+            $count = $result.TestRun.ResultSummary.Counters.executed
+            if ($null -eq $count) { throw "Rapport TRX sans compteur : $($report.Name)" }
+            $executed += [long]$count
+          }
+          if ($executed -le 0) { throw 'Aucun test execute : la CI ne peut pas reussir.' }
+          Write-Output "$executed tests executes."

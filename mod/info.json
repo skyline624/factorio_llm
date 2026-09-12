@@ -1,0 +1,9 @@
+{
+  "name": "factorio_agent",
+  "version": "0.1.0",
+  "title": "Factorio Agent",
+  "author": "skyline624",
+  "description": "Native character operations and measured telemetry for a C# agent.",
+  "factorio_version": "2.0",
+  "dependencies": ["base >= 2.0.77", "! space-age", "! quality", "! elevated-rails"]
+}

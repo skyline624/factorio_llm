@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Factorio.Agent.Core/Factorio.Agent.Core.csproj" />
+  </ItemGroup>
+</Project>
