@@ -29,6 +29,7 @@ try
           assemble --session FILE --item NAME --quantity N
           produce-fluid --session FILE --fluid NAME --quantity N
           connect-fluid --session FILE --source ID --target ID --fluid NAME
+          fuel-feeder --session FILE --boiler ID [--reserve N] [--ticks N]
           rpc --session FILE --action ACTION [--json-file FILE]
           connect --session FILE
           submit --session FILE --kind KIND --json-file FILE [--ticks N]
@@ -42,6 +43,16 @@ try
     string Required(string name) => Option(name) ?? throw new ArgumentException($"Missing --{name}.");
     switch (args[0])
     {
+        case "fuel-feeder":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"fuel-feeder-{Guid.NewGuid():N}.jsonl");
+            var controller = new FuelFeederController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            Print(new { result = await controller.RunAsync(Required("boiler"), int.Parse(Option("reserve") ?? "50", CultureInfo.InvariantCulture),
+                int.Parse(Option("ticks") ?? "3600", CultureInfo.InvariantCulture), shutdown.Token), journalPath });
+            break;
+        }
         case "start":
         {
             var session = await FactorioRuntime.StartAsync(Option("root") ?? Environment.CurrentDirectory, Option("installation"),

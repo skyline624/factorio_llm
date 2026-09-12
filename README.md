@@ -142,3 +142,5 @@ La commande `run-campaign --session FILE --max-goals 10` ajoute une [continuité
 La recherche prend également en charge le [déblocage du raffinage par extraction électrique native](docs/resource-research.md), qualifié dans une fixture avec un chevalet placé et alimenté par C#. Les réseaux distants, le raffinage et la chimie restent à développer.
 
 Le [raffinage et le routage des tuyaux](docs/fluid-production.md) sont accessibles par `produce-fluid` et `connect-fluid`. Une fixture a vérifié la production native de gaz, la réutilisation de la raffinerie et le dimensionnement du stockage de sortie. Les recettes mixtes à produit solide disposent d’un [essai natif de plastique](docs/chemical-production.md). La production industrielle continue reste incomplète.
+
+`fuel-feeder --session FILE --boiler ID --reserve 50 --ticks 3600` construit et vérifie un ravitaillement par coffre et bras. Un [essai dans l’économie normale](docs/fuel-feeder.md) confirme les transferts natifs et une alimentation sous faible charge pendant plus d’une minute. Le renouvellement autonome de la réserve reste à intégrer.

@@ -27,6 +27,11 @@ local function prototype(value)
     result.resourceCategories = value.resource_categories
     result.fuelCategories = value.burner_prototype and value.burner_prototype.fuel_categories
   end
+  if value.type == "inserter" then
+    local pickup, drop = value.inserter_pickup_position, value.inserter_drop_position
+    result.inserterPickup = pickup and {x = pickup[1], y = pickup[2]}
+    result.inserterDrop = drop and {x = drop[1], y = drop[2]}
+  end
   if #value.fluidbox_prototypes > 0 then
     result.fluidBoxes = {}
     for _, fluidbox in ipairs(value.fluidbox_prototypes) do
@@ -106,10 +111,15 @@ function M.observe(args)
         bounds = box(entity.bounding_box), boundsOrientation = entity.bounding_box.orientation or 0,
         direction = entity.direction, force = entity.force.name}
       if entity.type == "resource" then value.amount = entity.amount end
-      if entity.type == "mining-drill" then
+      if entity.type == "mining-drill" or entity.type == "inserter" then
         value.dropPosition = U.copy(entity.drop_position)
         local target = entity.drop_target
         if target and Visibility.is_visible(c, target) then value.dropTargetId = U.entity_id(target) end
+      end
+      if entity.type == "inserter" then
+        value.pickupPosition = U.copy(entity.pickup_position)
+        local target = entity.pickup_target
+        if target and Visibility.is_visible(c, target) then value.pickupTargetId = U.entity_id(target) end
       end
       if #entity.fluidbox > 0 then
         value.fluidConnections = {}
