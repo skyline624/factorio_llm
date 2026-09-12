@@ -1,0 +1,158 @@
+using System.Text.Json;
+using Factorio.Agent.Core;
+using Factorio.Agent.Infrastructure;
+
+namespace Factorio.Agent.Host;
+
+public sealed record AutomatedSmeltingResult(string Item, int TargetStock, long InitialStock, long FinalStock,
+    string DrillId, string FurnaceId, long StartTick, long EndTick);
+
+/// <summary>Installs direct native extraction into an existing compatible furnace and observes real production.</summary>
+public sealed class AutomatedSmeltingController(IGameClient game, IControllerJournal journal)
+{
+    public async Task<AutomatedSmeltingResult> RunAsync(string item, int targetStock, CancellationToken token = default)
+    {
+        if (targetStock is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(targetStock));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromMinutes(15));
+        token = deadline.Token;
+        var production = new ProductionController(game, journal);
+        var spatial = new SpatialClient(game);
+        await using var controller = new SpatialController(game, journal);
+        ProductionState initial = await production.ObserveAsync(token);
+        await journal.AppendAsync("automated-smelting-start", new { item, targetStock, initial }, token);
+        if (initial.Inventory.GetValueOrDefault(item) >= targetStock) throw new InvalidOperationException("The requested stock is already available.");
+        ProductionCatalog catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+        NativeRecipe recipe = catalog.Recipes.FirstOrDefault(r => r.Enabled && r.Products.Count == 1 && r.Products[0].Name == item
+            && r.Products[0].DeterministicItem && r.Ingredients.Count == 1 && r.Ingredients[0].DeterministicItem
+            && !catalog.CanHandCraft(r) && catalog.Machines.Values.Any(m => m.Categories.ContainsKey(r.Category)))
+            ?? throw new InvalidOperationException("Direct smelting requires an enabled recipe with one deterministic solid ingredient and product.");
+        RequireScope(catalog.Scope);
+        string[] drillItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "mining-drill")
+            .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
+        if (drillItems.Length is 0 or > 16) throw new InvalidOperationException("Mining drill geometry is unavailable or exceeds the snapshot budget.");
+        SpatialSnapshot map = await spatial.CaptureAsync(drillItems, radius: 48, cancellationToken: token);
+        RequireScope(map.Scope);
+        string[] eligible = initial.Entities.Where(e => (e.Recipe is null || e.Recipe == recipe.Name)
+            && catalog.Machines.Values.Any(m => m.EntityName == e.Name && m.Categories.ContainsKey(recipe.Category))).Select(e => e.Id).ToArray();
+        SpatialEntity[] receivers = map.Entities.Where(e => eligible.Contains(e.Id)).ToArray();
+        SpatialEntity? connected = map.Entities.FirstOrDefault(e => map.Prototypes[e.Name].Type == "mining-drill"
+            && map.Prototypes[e.Name].FuelCategories is { Count: > 0 } && initial.Entities.Any(owned => owned.Id == e.Id)
+            && e.DropPosition is not null && receivers.Any(r => ExtractionPlanner.DropTile(e.DropPosition).Overlaps(r.Bounds)
+                && (e.DropTargetId is null || r.Id == e.DropTargetId)));
+        SpatialEntity drill;
+        SpatialEntity receiver;
+        if (connected is not null)
+        {
+            drill = connected;
+            receiver = receivers.Single(r => ExtractionPlanner.DropTile(drill.DropPosition!).Overlaps(r.Bounds)
+                && (drill.DropTargetId is null || r.Id == drill.DropTargetId));
+            string drillItem = drillItems.First(i => map.Items[i].EntityName == drill.Name);
+            var withoutDrill = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != drill.Id).ToArray() });
+            if (!new ExtractionPlanner().Find(withoutDrill, drillItem, recipe.Ingredients[0].Name, catalog, [receiver])
+                .Any(p => p.Drill.Position == drill.Position && p.Drill.Direction == drill.Direction))
+                throw new InvalidOperationException("Existing drill cannot safely supply the requested resource.");
+            await journal.AppendAsync("extraction-reuse", new { drill.Id, receiverId = receiver.Id, map.CollectedTick }, token);
+        }
+        else
+        {
+            var plans = drillItems.Where(i => initial.Inventory.GetValueOrDefault(i) > 0 && map.Prototypes[map.Items[i].EntityName].FuelCategories is { Count: > 0 })
+                .SelectMany(i => new ExtractionPlanner().Find(new SpatialCollisionField(map), i, recipe.Ingredients[0].Name, catalog, receivers)
+                    .Select(p => (Item: i, Plan: p))).OrderBy(p => p.Plan.Drill.Score).ToArray();
+            if (plans.Length == 0) throw new InvalidOperationException("No observed resource patch supports direct extraction into a compatible existing furnace.");
+            var chosen = plans[0];
+            await journal.AppendAsync("extraction-plan", new { map.Scope, map.CollectedTick, chosen.Item, chosen.Plan }, token);
+            await controller.NavigateAsync(chosen.Plan.Drill.Position, 3, token);
+            map = await spatial.CaptureAsync([chosen.Item], radius: 48, cancellationToken: token);
+            RequireScope(map.Scope);
+            receiver = map.Entities.Single(e => e.Id == chosen.Plan.ReceiverId);
+            if (!new ExtractionPlanner().Find(new SpatialCollisionField(map), chosen.Item, recipe.Ingredients[0].Name, catalog, [receiver])
+                .Any(p => p.Drill.Position == chosen.Plan.Drill.Position && p.Drill.Direction == chosen.Plan.Drill.Direction))
+                throw new InvalidOperationException("Extraction geometry changed before construction; replan from observations.");
+            PlacementValidation validation = await spatial.ValidateAsync(map.Scope, chosen.Item, [chosen.Plan.Drill], token);
+            if (!validation.Candidates[0].Allowed || !validation.Candidates[0].InReach) throw new InvalidOperationException("Native drill placement was refused.");
+            OperationReceipt built = await WorkAsync("build", new { item = chosen.Item, chosen.Plan.Drill.Position, chosen.Plan.Drill.Direction });
+            string builtId = built.Effects.GetProperty("entityId").GetString()!;
+            map = await spatial.CaptureAsync(cancellationToken: token);
+            RequireScope(map.Scope);
+            drill = map.Entities.Single(e => e.Id == builtId);
+            receiver = map.Entities.Single(e => e.Id == receiver.Id);
+            if (drill.DropPosition is null || !ExtractionPlanner.DropTile(drill.DropPosition).Overlaps(receiver.Bounds)
+                || (drill.DropTargetId is not null && drill.DropTargetId != receiver.Id)
+                || drill.DropPosition.DistanceTo(chosen.Plan.OutputPosition) > 0.01)
+                throw new InvalidDataException("Native drill output does not match the computed connection.");
+        }
+        string drillId = drill.Id;
+        await journal.AppendAsync("extraction-connection", new
+        {
+            drill.Id,
+            drill.Position,
+            drill.Direction,
+            drill.DropPosition,
+            drill.DropTargetId,
+            receiverId = receiver.Id,
+            receiver.Bounds,
+            status = "geometry-verified-awaiting-production"
+        }, token);
+        var drillFuel = map.Prototypes[drill.Name].FuelCategories!;
+        var furnaceFuel = catalog.Machines.Values.First(m => m.EntityName == receiver.Name).FuelCategories;
+        for (int iteration = 0; iteration < 600; iteration++)
+        {
+            ProductionState state = await production.ObserveAsync(token);
+            RequireScope(state.Scope);
+            if (state.Inventory.GetValueOrDefault(item) >= targetStock)
+            {
+                var result = new AutomatedSmeltingResult(item, targetStock, initial.Inventory.GetValueOrDefault(item),
+                    state.Inventory.GetValueOrDefault(item), drillId, receiver.Id, initial.Tick, state.Tick);
+                await journal.AppendAsync("automated-smelting-result", result, token);
+                return result;
+            }
+            ProductionEntity furnace = state.Entities.Single(e => e.Id == receiver.Id);
+            if (furnace.Count("output", item) > 0)
+            {
+                await controller.NavigateAsync(receiver.Position, 3, token);
+                await WorkAsync("take", new
+                {
+                    entityId = receiver.Id,
+                    inventory = "output",
+                    item,
+                    count = Math.Min(furnace.Count("output", item), targetStock - state.Inventory.GetValueOrDefault(item))
+                });
+                continue;
+            }
+            await FuelAsync(drillId, drill.Position, drillFuel);
+            await FuelAsync(receiver.Id, receiver.Position, furnaceFuel);
+            await controller.WorkAsync("wait", new { ticks = 60 }, 180, token: token);
+        }
+        throw new TimeoutException("Automated smelting exhausted its observation budget; inspect the installed machines.");
+
+        void RequireScope(ActorScope scope)
+        {
+            if (scope != initial.Scope) throw new InvalidOperationException("Actor scope changed; reconcile before continuing installation or production.");
+        }
+
+        async Task<OperationReceipt> WorkAsync(string kind, object arguments)
+        {
+            OperationReceipt receipt = await controller.WorkAsync(kind, arguments, 600, token: token);
+            if (receipt.Status != "completed") throw new InvalidOperationException($"{kind} ended with {receipt.Status}: {receipt.Error?.Code}. Inspect partial effects before replanning.");
+            return receipt;
+        }
+
+        async Task FuelAsync(string entityId, MapPosition position, IReadOnlyDictionary<string, bool> categories)
+        {
+            ProductionState state = await production.ObserveAsync(token);
+            RequireScope(state.Scope);
+            if (state.Entities.Single(e => e.Id == entityId).InventoryTotal("fuel") > 0) return;
+            var fuels = catalog.Items.Where(i => i.Value.FuelValue > 0 && i.Value.FuelCategory is { } category && categories.ContainsKey(category)).ToArray();
+            string? fuel = fuels.FirstOrDefault(p => state.Inventory.GetValueOrDefault(p.Key) > 0).Key;
+            if (fuel is null)
+            {
+                fuel = fuels.FirstOrDefault(p => catalog.Mining.Values.Any(products => products.Any(m => m.Name == p.Key && m.DeterministicItem))).Key
+                    ?? throw new InvalidOperationException("No extractable compatible fuel.");
+                await production.ProduceAsync(fuel, 2, token);
+            }
+            await controller.NavigateAsync(position, 3, token);
+            await WorkAsync("insert", new { entityId, inventory = "fuel", item = fuel, count = 1 });
+        }
+    }
+}

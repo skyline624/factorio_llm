@@ -19,6 +19,7 @@ try
           navigate --session FILE --x N --y N [--distance N]
           build --session FILE --item NAME --x N --y N
           produce --session FILE --item NAME --quantity N
+          automate-smelting --session FILE --item NAME --quantity N
           run-goal --session FILE
           rpc --session FILE --action ACTION [--json-file FILE]
           connect --session FILE
@@ -109,6 +110,16 @@ try
             var controller = new StrategicProductionController(session.CreateClient(lease), planner, new ControllerJournal(journalPath));
             ProductionResult result = await controller.RunOnceAsync(shutdown.Token);
             Print(new { result.Item, result.TargetStock, result.InitialStock, result.FinalStock, result.StartTick, result.EndTick, journalPath });
+            break;
+        }
+        case "automate-smelting":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"automated-smelting-{Guid.NewGuid():N}.jsonl");
+            var controller = new AutomatedSmeltingController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var result = await controller.RunAsync(Required("item"), int.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token);
+            Print(new { result, journalPath });
             break;
         }
         case "produce":

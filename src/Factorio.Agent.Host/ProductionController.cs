@@ -195,7 +195,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
     private static double MiningDistance(SpatialEntity source, SpatialSnapshot map) =>
         map.Prototypes[source.Name].Type == "resource" ? 1 : 3;
 
-    private async Task<ProductionState> ObserveAsync(CancellationToken token)
+    internal async Task<ProductionState> ObserveAsync(CancellationToken token)
     {
         GameResponse response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 64, limit = 200 }), token);
         if (!response.Ok) throw new GameRpcException(response.Error!);

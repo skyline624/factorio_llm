@@ -16,8 +16,17 @@ local function mask(value)
 end
 
 local function prototype(value)
-  return {name = value.name, type = value.type, collisionBox = box(value.collision_box),
+  local result = {name = value.name, type = value.type, collisionBox = box(value.collision_box),
     mask = mask(value.collision_mask), tileWidth = value.tile_width, tileHeight = value.tile_height}
+  if value.type == "resource" then result.resourceCategory = value.resource_category end
+  if value.type == "mining-drill" then
+    result.miningRadius = value.mining_drill_radius
+    local output = value.vector_to_place_result
+    if output then result.miningOutput = {x = output[1], y = output[2]} end
+    result.resourceCategories = value.resource_categories
+    result.fuelCategories = value.burner_prototype and value.burner_prototype.fuel_categories
+  end
+  return result
 end
 
 function M.observe(args)
@@ -62,6 +71,11 @@ function M.observe(args)
       local value = {id = U.entity_id(entity), name = entity.name, position = U.copy(entity.position),
         bounds = box(entity.bounding_box), direction = entity.direction, force = entity.force.name}
       if entity.type == "resource" then value.amount = entity.amount end
+      if entity.type == "mining-drill" then
+        value.dropPosition = U.copy(entity.drop_position)
+        local target = entity.drop_target
+        if target and Visibility.is_visible(c, target) then value.dropTargetId = U.entity_id(target) end
+      end
       result.entities[#result.entities + 1] = value
     end
   end

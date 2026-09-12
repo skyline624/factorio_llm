@@ -14,7 +14,7 @@ public sealed record NativeRecipe(string Name, bool Enabled, string Category, do
     [property: JsonConverter(typeof(NativeArrayConverter<NativeMaterial>))] IReadOnlyList<NativeMaterial> Ingredients,
     [property: JsonConverter(typeof(NativeArrayConverter<NativeMaterial>))] IReadOnlyList<NativeMaterial> Products,
     bool HandCraftingDisabled);
-public sealed record NativeItem(double FuelValue, int StackSize, string? FuelCategory = null, string? PlaceEntity = null);
+public sealed record NativeItem(double FuelValue, int StackSize, string? FuelCategory = null, string? PlaceEntity = null, string? PlaceEntityType = null);
 public sealed record NativeFurnace(string EntityName, IReadOnlyDictionary<string, bool> Categories,
     IReadOnlyDictionary<string, bool> FuelCategories, double CraftingSpeed);
 public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,

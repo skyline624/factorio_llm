@@ -35,6 +35,22 @@ dotnet $hostDll run-goal --session $sessionFile
 
 ## Preuves et limites
 
+### Extraction directe vers un four
+
+`automate-smelting --session FILE --item iron-plate --quantity 100` vise le stock total du personnage. Le C# lit le rayon de minage, les catégories de ressources, les masques, les dimensions et le vecteur de sortie natifs. Il énumère les positions alignées sur les tuiles et les quatre orientations vers les fours compatibles observés. Un gisement mixte susceptible de contaminer la recette est refusé. Aucune position ni aucun gabarit n'est fourni par le LLM.
+
+La validation utilise la case de dépose : la boîte du receveur doit intersecter cette case. Les vecteurs de prototypes sont des tableaux flottants, tandis que les positions effectives du moteur sont quantifiées. Après construction, la position réelle de sortie et la cible native, lorsqu'elle est disponible, sont contrôlées. Cette cible peut rester absente tant que la foreuse manque de combustible ; seule l'observation des produits établit ensuite la réussite de production.
+
+Une foreuse déjà posée est réutilisée après vérification de sa connexion et des ressources encore observées. Le personnage récolte du combustible si nécessaire, ravitaille les machines et reprend les plaques. La foreuse extrait et dépose le minerai sans opération de minage du fer par le personnage. Ce mécanisme ne pose pas encore les fours prérequis, les tapis ou les bras ; il ne relocalise pas les machines lors de l'épuisement d'un gisement. Le choix du combustible et les trajets de ravitaillement restent à optimiser.
+
+Le premier essai normal a atteint 85 plaques à partir de 80 entre les ticks 184 060 et 187 335. Le journal contient uniquement du minage de bois pour le combustible. Une lecture native ultérieure confirme quatre plaques supplémentaires en sortie du four, neuf nouvelles plaques produites au total et la cible de dépose correspondant au four. Le calcul initial de connexion avait été trop strict ; la foreuse construite a été conservée puis réutilisée après correction, sans resoumission de la construction. Cet essai de développement ne constitue pas une campagne sans correction.
+
+Avec le pilote ensuite connecté au même avatar, un deuxième objectif a porté le stock de 85 à 100 plaques entre les ticks 192 779 et 199 630. Seuls deux arbres ont été minés par le personnage pour le combustible. La lecture native finale retrouve un seul avatar, la même foreuse déposant dans le même four, 100 plaques transportées et six supplémentaires en sortie. Le four compte alors 118 produits depuis sa construction, contre 92 avant les essais d'extraction automatique. Le mode pacifique reste désactivé. Ce chemin explicite C# n'est pas encore choisi automatiquement par `run-goal`.
+
+Une fixture distincte, avec 99 entités de minerai et du bois ajoutés explicitement pour le test, a ensuite vérifié l'installation neuve avec le code corrigé : construction de la foreuse, alimentation en combustible et stock de huit à treize plaques, ticks 29 786 à 31 344. Aucun correctif ni nouvelle soumission manuelle n'a été nécessaire pendant cette exécution. Cette préparation artificielle exclut la fixture des campagnes normales.
+
+### Production initiale et LLM
+
 Dans la partie normale de développement sur la graine 424242, le contrôleur a trouvé le fer, extrait 12 minerais, construit un four et atteint 20 plaques à partir des huit plaques initiales. Une lecture indépendante du moteur confirme un four, 12 produits terminés, aucun minerai ni plaque restant dans ses inventaires d'entrée/sortie et 20 plaques dans le personnage. Le client est connecté au même personnage. Pollution, évolution et expansion restent actives, mode pacifique désactivé.
 
 Plusieurs corrections et relances du contrôleur ont été nécessaires dans ce même monde : tolérance des points de passage, oscillation des coins, guidage oblique, portée de minage et cuisson déjà engagée. Aucun retour à une ancienne sauvegarde ni apport artificiel n'a été utilisé pour ces résultats. Cet essai n'est donc pas présenté comme une campagne autonome sans interruption.

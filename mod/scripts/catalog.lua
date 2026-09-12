@@ -78,7 +78,8 @@ function M.production()
   table.sort(result.recipes, function(a, b) return a.name < b.name end)
   for name, item in pairs(prototypes.item) do
     result.items[name] = {fuelValue = item.fuel_value, fuelCategory = item.fuel_category,
-      placeEntity = item.place_result and item.place_result.name, stackSize = item.stack_size}
+      placeEntity = item.place_result and item.place_result.name, placeEntityType = item.place_result and item.place_result.type,
+      stackSize = item.stack_size}
     local entity = item.place_result
     if entity and entity.type == "furnace" and entity.burner_prototype then
       result.machines[name] = {entityName = entity.name, categories = entity.crafting_categories,

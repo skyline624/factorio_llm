@@ -49,10 +49,13 @@ public sealed record CollisionMask(
     }
 }
 
-public sealed record EntityGeometry(string Name, string Type, WorldBox CollisionBox, CollisionMask Mask, int TileWidth, int TileHeight);
+public sealed record EntityGeometry(string Name, string Type, WorldBox CollisionBox, CollisionMask Mask, int TileWidth, int TileHeight,
+    double? MiningRadius = null, MapPosition? MiningOutput = null, string? ResourceCategory = null,
+    IReadOnlyDictionary<string, bool>? ResourceCategories = null, IReadOnlyDictionary<string, bool>? FuelCategories = null);
 public sealed record SpatialActor(string Id, string Name, MapPosition Position, double BuildDistance, double ReachDistance, string ControlMode);
 public sealed record TileRun(int X, int Y, int Length, string Name);
-public sealed record SpatialEntity(string Id, string Name, MapPosition Position, WorldBox Bounds, int Direction, string Force, double? Amount = null);
+public sealed record SpatialEntity(string Id, string Name, MapPosition Position, WorldBox Bounds, int Direction, string Force, double? Amount = null,
+    MapPosition? DropPosition = null, string? DropTargetId = null);
 public sealed record PlaceableItem(string EntityName, int StackSize);
 public sealed record SpatialCoverage(bool Atomic, bool Complete, string Visibility, int Radius);
 public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int SurfaceIndex, WorldBox Bounds, SpatialActor Actor,

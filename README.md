@@ -94,9 +94,10 @@ Une première boucle peut extraire des ingrédients, fabriquer à la main et ali
 ```powershell
 dotnet $hostDll produce --session $sessionFile --item iron-plate --quantity 20
 dotnet $hostDll run-goal --session $sessionFile
+dotnet $hostDll automate-smelting --session $sessionFile --item iron-plate --quantity 100
 ```
 
-La première commande reçoit un stock cible explicite dans l'inventaire du personnage. La seconde demande un objectif libre au modèle cloud puis vérifie s'il est actuellement exécutable. La production relit les stocks et les cuissons engagées ; ses positions sont calculées en C#. Cette boucle ne synthétise pas encore une chaîne automatisée jusqu'à la fusée. Voir les [capacités et preuves de production](docs/production.md).
+La première commande reçoit un stock cible explicite dans l'inventaire du personnage. La seconde demande un objectif libre au modèle cloud puis vérifie s'il est actuellement exécutable. `automate-smelting` calcule la pose d'une foreuse à combustible vers un four compatible déjà construit, ou réutilise une connexion existante ; le personnage ravitaille les machines et collecte leurs produits. Ce chemin exige un gisement adapté autour du four et n'est pas encore sélectionné automatiquement par `run-goal`. La production relit les stocks et les cuissons engagées ; ses positions sont calculées en C#. Cette boucle ne synthétise pas encore une chaîne automatisée jusqu'à la fusée. Voir les [capacités et preuves de production](docs/production.md).
 
 Pour sauvegarder puis arrêter le serveur :
 
