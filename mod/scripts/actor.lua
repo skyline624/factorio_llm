@@ -72,8 +72,10 @@ end
 function M.on_death(entity)
   local s = storage.agent
   if entity ~= s.character then return false end
-  s.lastDeath = {tick = game.tick, position = U.copy(entity.position)}
-  s.respawnTick = game.tick + entity.prototype.respawn_time
+  s.lastDeath = {tick = game.tick, position = U.copy(entity.position),
+    unitNumber = entity.unit_number, incarnation = s.incarnation, surfaceIndex = entity.surface.index}
+  -- The character prototype expresses this duration in seconds, not ticks.
+  s.respawnTick = game.tick + entity.prototype.respawn_time * 60
   s.deaths = s.deaths + 1
   s.character = nil
   s.generation = s.generation + 1

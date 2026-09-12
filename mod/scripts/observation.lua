@@ -2,6 +2,7 @@ local U = require("scripts.util")
 local Actor = require("scripts.actor")
 local Operations = require("scripts.operations")
 local Visibility = require("scripts.visibility")
+local Recovery = require("scripts.recovery")
 local M = {}
 
 local inventory_names = {"fuel", "output", "chest", "input", "lab", "ammo", "rocket", "corpse"}
@@ -71,6 +72,19 @@ function M.observe(args)
       fixtureReason = s.fixtureReason, fixtureTick = s.fixtureTick}}
   for _, player in pairs(game.players) do
     result.players[#result.players + 1] = {index = player.index, name = player.name, connected = player.connected}
+  end
+  result.recovery = {lastDeath = s.lastDeath, corpses = {}, knownCorpsesComplete = true}
+  local corpse_ids = {}
+  local corpses = Recovery.records()
+  for id in pairs(corpses) do corpse_ids[#corpse_ids + 1] = id end
+  table.sort(corpse_ids)
+  for _, id in ipairs(corpse_ids) do
+    local record = corpses[id]
+    local corpse = M.entity(record.entity, true)
+    corpse.id, corpse.deathTick = id, record.deathTick
+    corpse.incarnation, corpse.actorUnitNumber = record.incarnation, record.actorUnitNumber
+    corpse.surfaceIndex = record.entity.surface.index
+    result.recovery.corpses[#result.recovery.corpses + 1] = corpse
   end
   if not c then return result end
   result.agent.position, result.agent.health = U.copy(c.position), c.health

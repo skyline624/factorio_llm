@@ -67,6 +67,7 @@ public sealed class NativeQualification(RuntimeSession session)
             evidence.Add(new { check = "explicit-cancellation", receipt = queried.Evidence });
             await QualifyFactoryAsync(token);
             await QualifyCombatAsync(token);
+            await QualifyDeathAndRecoveryAsync(token);
             await SaveReportAsync(report, true, null, token);
             return report;
         }
@@ -242,6 +243,84 @@ public sealed class NativeQualification(RuntimeSession session)
             ?? throw new InvalidDataException("Missing native combat state.");
     }
 
+    private async Task QualifyDeathAndRecoveryAsync(CancellationToken token)
+    {
+        DeathNativeState before = await ReadDeathStateAsync(token);
+        GameResponse hello = await session.HelloAsync(token);
+        ActorScope originalScope = hello.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
+        var interrupted = OperationSubmission.Create(originalScope, "wait", new { ticks = 1200 }, hello.Tick + 1800);
+        await File.AppendAllTextAsync(Path.Combine(session.Directory, "qualification-operations.jsonl"),
+            JsonSerializer.Serialize(interrupted, Protocol.Json) + "\n", token);
+        var operations = new OperationClient(game);
+        Require(!(await operations.SubmitAsync(interrupted, token)).IsTerminal, "Death fixture requires an active operation.");
+        const string kill = """
+            /silent-command local c=game.surfaces.nauvis.find_entities_filtered{type="character",force="factorio_agent"}[1]; assert(c); c.die(game.forces.enemy); rcon.print("native-death-fixture");
+            """;
+        Require((await session.CreateRcon().ExecuteAsync(kill, token)).Trim() == "native-death-fixture", "Fixture death not acknowledged.");
+        evidence.Add(new { check = "synthetic-native-death", disqualifiedAsCampaign = true,
+            setup = "Called native die on the fixture character while a wait operation was active. No save is restored." });
+        DeathNativeState dead = await ReadDeathStateAsync(token);
+        Require(dead.CharacterId == 0 && dead.CorpseCount == 1 && dead.CorpsePlates == before.ActorPlates,
+            "Native death did not preserve the actor's plates in exactly one corpse.");
+        OperationReceipt stopped = await operations.QueryAsync(interrupted.OperationId, token);
+        Require(stopped.Status == "failed", "Death did not fail the interrupted operation.");
+        DeathNativeState respawned = dead;
+        for (int sample = 0; sample < 40 && respawned.CharacterId == 0; sample++)
+        {
+            await Task.Delay(500, token);
+            respawned = await ReadDeathStateAsync(token);
+        }
+        Require(respawned.CharacterId != 0 && respawned.CharacterId != before.CharacterId && respawned.Tick - dead.Tick >= 550,
+            "Native respawn did not produce a replacement character after the normal delay.");
+        Require(respawned.ActorPlates == 0 && respawned.CorpsePlates == before.ActorPlates && respawned.CorpseCount == 1,
+            "Respawn copied corpse stock or lost the corpse.");
+        GameResponse observed = await game.ExecuteAsync(GameRequest.Create("observe"), token);
+        ActorScope replacementScope = observed.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
+        Require(replacementScope.Incarnation == originalScope.Incarnation + 1 && replacementScope.Generation > originalScope.Generation,
+            "Respawn did not invalidate the previous actor scope.");
+        evidence.Add(new { check = "native-death-and-respawn", before, dead, respawned,
+            originalScope, replacementScope, interrupted = stopped.Evidence });
+        JsonElement corpses = observed.Data.GetProperty("recovery").GetProperty("corpses");
+        Require(corpses.ValueKind == JsonValueKind.Array && corpses.GetArrayLength() == 1,
+            "Observation did not identify exactly one proven agent corpse.");
+        JsonElement corpse = corpses[0];
+        string corpseId = corpse.GetProperty("id").GetString()!;
+        Require(corpseId.StartsWith("corpse:", StringComparison.Ordinal)
+            && corpse.GetProperty("actorUnitNumber").GetInt64() == before.CharacterId
+            && corpse.GetProperty("inventories").GetProperty("corpse").GetProperty("items")
+                .GetProperty("iron-plate").GetInt32() == before.ActorPlates,
+            "Corpse provenance or observed plate stock differs from native state.");
+        var recovery = await ExecuteAsync("take", new { entityId = corpseId,
+            inventory = "corpse", item = "iron-plate", count = before.ActorPlates }, 600, token);
+        DeathNativeState recovered = await ReadDeathStateAsync(token);
+        Require(recovery.Receipt.Status == "completed" && recovered.ActorPlates == before.ActorPlates && recovered.CorpsePlates == 0,
+            "Corpse recovery did not conserve plate stock.");
+        Require(recovery.Receipt.Effects.GetProperty("targetId").GetString() == corpseId,
+            "Recovery receipt lost the proven corpse identity.");
+        evidence.Add(new { check = "native-corpse-plate-recovery", after = recovered, receipt = recovery.Receipt.Evidence });
+
+        const string unrelatedDeath = """
+            /silent-command local s=game.surfaces.nauvis; local c=s.create_entity{name="character",position={-2,0},force="player"}; assert(c); c.insert{name="iron-plate",count=3}; c.die(game.forces.enemy); rcon.print("unrelated-corpse-fixture");
+            """;
+        Require((await session.CreateRcon().ExecuteAsync(unrelatedDeath, token)).Trim() == "unrelated-corpse-fixture",
+            "Unrelated corpse fixture was not acknowledged.");
+        var forbidden = await ExecuteAsync("take", new { position = new MapPosition(-2, 0),
+            name = "character-corpse", inventory = "corpse", item = "iron-plate", count = 3 }, 600, token);
+        Require(forbidden.Receipt.Status == "failed" && forbidden.Receipt.Error?.Code == "wrong_force",
+            "An unrelated neutral corpse was accepted as the agent's own corpse.");
+        evidence.Add(new { check = "unrelated-neutral-corpse-refused", disqualifiedAsCampaign = true,
+            setup = "Created and killed an unrelated character holding three plates.", receipt = forbidden.Receipt.Evidence });
+    }
+
+    private async Task<DeathNativeState> ReadDeathStateAsync(CancellationToken token)
+    {
+        const string command = """
+            /silent-command local s=game.surfaces.nauvis; local c=s.find_entities_filtered{type="character",force="factorio_agent"}[1]; local corpses=s.find_entities_filtered{type="character-corpse"}; local corpse=corpses[1]; rcon.print(helpers.table_to_json({tick=game.tick,characterId=c and c.unit_number or 0,actorPlates=c and c.get_main_inventory().get_item_count("iron-plate") or 0,corpseCount=#corpses,corpsePlates=corpse and corpse.get_inventory(defines.inventory.character_corpse).get_item_count("iron-plate") or 0,corpsePosition=corpse and corpse.position}));
+            """;
+        return JsonSerializer.Deserialize<DeathNativeState>(await session.CreateRcon().ExecuteAsync(command, token), Protocol.Json)
+            ?? throw new InvalidDataException("Missing native death/respawn state.");
+    }
+
     public async Task<NativeState> ReadStateAsync(CancellationToken token)
     {
         const string command = """
@@ -276,3 +355,6 @@ public sealed record FactoryNativeState(long Tick, Dictionary<string, int> Actor
 }
 
 public sealed record CombatNativeState(long Tick, double Health, int Rounds, int Enemies);
+
+public sealed record DeathNativeState(long Tick, long CharacterId, int ActorPlates, int CorpseCount,
+    int CorpsePlates, MapPosition? CorpsePosition = null);

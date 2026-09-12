@@ -202,7 +202,7 @@ local function transfer(r, c, args, taking)
     end
     if moved >= requested then break end
   end
-  r.receipt.effects.targetId, r.receipt.effects.inventory = U.entity_id(entity), slot
+  r.receipt.effects.targetId, r.receipt.effects.inventory = T.id(entity), slot
   r.receipt.effects.item, r.receipt.effects.requested, r.receipt.effects.transferred = item, requested, moved
   r.receipt.effects.direction = taking and "to_actor" or "from_actor"
   U.check(moved > 0, "transfer_blocked", "No matching stock or no compatible destination capacity")

@@ -1,4 +1,5 @@
 local U = require("scripts.util")
+local Recovery = require("scripts.recovery")
 local M = {}
 
 function M.find(character, args)
@@ -8,6 +9,7 @@ function M.find(character, args)
     -- Many base buildings do not set get-by-unit-number, even though they have a
     -- unit_number. Retain the native references registered during build/observation.
     target = storage.agent and storage.agent.known[reference]
+    if not target then target = Recovery.find(reference) end
     if not target and storage.agent and storage.agent.observedTargets then
       local observed = storage.agent.observedTargets[reference]
       if observed then target = observed.entity end
@@ -41,8 +43,11 @@ function M.reachable(character, target)
 end
 
 function M.owned(character, target)
-  U.check(target.force == character.force, "wrong_force", "Only the agent's own entities may be changed")
+  U.check(target.force == character.force or Recovery.id(target) ~= nil, "wrong_force",
+    "Only the agent's own entities or proven character corpses may be changed")
 end
+
+function M.id(entity) return Recovery.id(entity) or U.entity_id(entity) end
 
 function M.inventory(entity, slot)
   if slot == "fuel" then return entity.get_fuel_inventory() end
