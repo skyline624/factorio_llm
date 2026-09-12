@@ -44,7 +44,10 @@ local function prototype(value)
     local offset = value.fluid_source_offset
     result.fluidSourceOffset = {x = offset[1], y = offset[2]}
   end
-  if value.type == "electric-pole" then result.supplyArea = value.get_supply_area_distance("normal") end
+  if value.type == "electric-pole" then
+    result.supplyArea = value.get_supply_area_distance("normal")
+    result.maxWireDistance = value.get_max_wire_distance("normal")
+  end
   if value.burner_prototype then result.fuelCategories = value.burner_prototype.fuel_categories end
   if #value.tile_buildability_rules > 0 then
     result.tileBuildability = {}

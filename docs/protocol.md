@@ -31,6 +31,7 @@ Les 2048 derniers reçus sont conservés dans la sauvegarde, sans éviction de l
 - `submit`, `operation`, `cancel` : registre décrit ci-dessus.
 - `recipes` : `{name?:string,filter?:string,enabledOnly?:boolean=true,offset?:integer=0,limit?:integer=50}` ; données réelles du moteur, pagination au même appel uniquement.
 - `technologies` : `{name?:string,filter?:string,availableOnly?:boolean=false,offset?:integer=0,limit?:integer=50}`.
+- `research_state` : `{technology:string}`. Photographie atomique de la recherche demandée, de la sélection/progression courante, des prototypes de laboratoires et des laboratoires propres connus de la surface du personnage (au plus 256). Elle expose énergie, réseau électrique, stocks comptés et unités scientifiques restantes calculées avec la durabilité native, y compris les packs portés. `consumed` reprend les compteurs natifs de consommation de la force pour cette surface ; ce n'est pas un débit instantané ni une mesure des fractions actuellement engagées. La complétude concerne le registre connu, pas les laboratoires encore non découverts.
 
 ## Kinds implémentés
 

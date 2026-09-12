@@ -14,6 +14,25 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     private readonly DefenseController defense = new(game, journal);
     private string? ownedOperation;
 
+    public async Task TravelAsync(MapPosition destination, double arrivalDistance, ProductionCatalog catalog,
+        CancellationToken token = default)
+    {
+        var exploration = new ExplorationPlanner();
+        for (int segment = 0; segment < 64; segment++)
+        {
+            SpatialSnapshot map = await spatial.CaptureAsync(cancellationToken: token);
+            if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during travel to a known destination.");
+            if (map.Actor.Position.DistanceTo(destination) <= 24)
+            {
+                await NavigateAsync(destination, arrivalDistance, token);
+                return;
+            }
+            ExplorationWaypoint next = await FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
+            await NavigateAsync(next.Position, cancellationToken: token);
+        }
+        throw new InvalidOperationException("Travel exhausted its local segment budget.");
+    }
+
     public async Task<NavigationResult> NavigateAsync(MapPosition destination, double arrivalDistance = 0.4,
         CancellationToken cancellationToken = default)
     {

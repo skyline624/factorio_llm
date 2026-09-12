@@ -55,7 +55,7 @@ public sealed record EntityGeometry(string Name, string Type, WorldBox Collision
     [property: JsonConverter(typeof(NativeArrayConverter<FluidBoxGeometry>))] IReadOnlyList<FluidBoxGeometry>? FluidBoxes = null,
     MapPosition? FluidSourceOffset = null,
     [property: JsonConverter(typeof(NativeArrayConverter<TileBuildRule>))] IReadOnlyList<TileBuildRule>? TileBuildability = null,
-    double? SupplyArea = null);
+    double? SupplyArea = null, double? MaxWireDistance = null);
 public sealed record FluidBoxGeometry(int Index, string ProductionType,
     [property: JsonConverter(typeof(NativeArrayConverter<FluidPortGeometry>))] IReadOnlyList<FluidPortGeometry> Connections,
     string? Filter = null, double? MinimumTemperature = null, double? MaximumTemperature = null);

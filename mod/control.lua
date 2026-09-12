@@ -9,6 +9,7 @@ local Visibility = require("scripts.visibility")
 local Recovery = require("scripts.recovery")
 local FactorySnapshot = require("scripts.factory_snapshot")
 local Spatial = require("scripts.spatial")
+local Research = require("scripts.research")
 
 script.on_init(Actor.initialize)
 script.on_configuration_changed(Actor.initialize)
@@ -49,7 +50,7 @@ local function hello(args)
     gameVersion = script.active_mods.base, receiptCapacity = Operations.capacity}
 end
 
-local handlers = {hello = hello, observe = Observation.observe, factory_snapshot = FactorySnapshot.page, submit = Operations.submit,
+local handlers = {hello = hello, observe = Observation.observe, research_state = Research.observe, factory_snapshot = FactorySnapshot.page, submit = Operations.submit,
   spatial = Spatial.observe, validate_placement = Spatial.validate_placement,
   prepare_checkpoint = function(args)
     local s = Actor.state()
