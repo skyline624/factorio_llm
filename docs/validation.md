@@ -148,3 +148,7 @@ Dans la fixture chimique, le contrôleur a déplacé une usine inutilisée aprè
 ## Nouvelle source d’eau sans pompe préexistante
 
 Une fixture distincte confirme le calcul commun des raccordements d’eau et de gaz avant construction d’une pompe. Le contrôleur fabrique une pompe, construit neuf tuyaux puis livre dix soufres. Une deuxième collecte porte le stock à vingt, sans seconde pompe ni tuyau supplémentaire. Les [coûts, compteurs et préparations artificielles](chemical-production.md) sont documentés ; l’eau est extraite nativement, le gaz et l’énergie étaient préparés. La fixture est sauvegardée au tick 14545 puis arrêtée.
+
+## Transport solide et évacuation de sortie
+
+Une fixture distincte confirme une liaison calculée de onze tapis, deux bras et deux extensions électriques entre un coffre de fer et un assembleur. Lorsque la sortie de l’assembleur est pleine, le contrôleur installe un coffre et une deuxième liaison de trois tapis et deux bras. La lecture native indépendante au tick 44325 retrouve les 40 plaques initiales transformées en 20 engrenages stockés, sans objet restant dans les machines ou en transit. Les [preuves, corrections de fixture et limites du bilan](belt-transport.md) sont documentées. Le monde est sauvegardé et arrêté au tick 44369 ; ce scénario préparé ne qualifie aucune campagne finale.

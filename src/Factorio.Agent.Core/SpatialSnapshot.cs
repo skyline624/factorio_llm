@@ -56,7 +56,7 @@ public sealed record EntityGeometry(string Name, string Type, WorldBox Collision
     MapPosition? FluidSourceOffset = null,
     [property: JsonConverter(typeof(NativeArrayConverter<TileBuildRule>))] IReadOnlyList<TileBuildRule>? TileBuildability = null,
     double? SupplyArea = null, double? MaxWireDistance = null, bool IsElectric = false,
-    MapPosition? InserterPickup = null, MapPosition? InserterDrop = null);
+    MapPosition? InserterPickup = null, MapPosition? InserterDrop = null, double? BeltSpeed = null);
 public sealed record FluidBoxGeometry(int Index, string ProductionType,
     [property: JsonConverter(typeof(NativeArrayConverter<FluidPortGeometry>))] IReadOnlyList<FluidPortGeometry> Connections,
     string? Filter = null, double? MinimumTemperature = null, double? MaximumTemperature = null);
@@ -69,7 +69,11 @@ public sealed record TileRun(int X, int Y, int Length, string Name);
 public sealed record SpatialEntity(string Id, string Name, MapPosition Position, WorldBox Bounds, int Direction, string Force, double? Amount = null,
     MapPosition? DropPosition = null, string? DropTargetId = null,
     [property: JsonConverter(typeof(NativeArrayConverter<ObservedFluidConnection>))] IReadOnlyList<ObservedFluidConnection>? FluidConnections = null,
-    ObservedPower? Power = null, double BoundsOrientation = 0, MapPosition? PickupPosition = null, string? PickupTargetId = null);
+    ObservedPower? Power = null, double BoundsOrientation = 0, MapPosition? PickupPosition = null, string? PickupTargetId = null,
+    ObservedBeltConnections? BeltConnections = null, string? Status = null);
+public sealed record ObservedBeltConnections(
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Inputs,
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Outputs);
 public sealed record ObservedFluidConnection(int BoxIndex, int PortIndex, MapPosition Position, MapPosition TargetPosition,
     string? TargetEntityId = null, int? TargetBoxIndex = null,
     string? Type = null, string? FlowDirection = null, string? Filter = null);

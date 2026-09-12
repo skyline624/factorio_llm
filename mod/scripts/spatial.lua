@@ -2,6 +2,8 @@ local U = require("scripts.util")
 local Actor = require("scripts.actor")
 local Visibility = require("scripts.visibility")
 local M = {}
+local status_names = {}
+for name, value in pairs(defines.entity_status) do status_names[value] = name end
 
 local function box(value)
   return {min = U.copy(value.left_top), max = U.copy(value.right_bottom)}
@@ -32,6 +34,7 @@ local function prototype(value)
     result.inserterPickup = pickup and {x = pickup[1], y = pickup[2]}
     result.inserterDrop = drop and {x = drop[1], y = drop[2]}
   end
+  if value.type == "transport-belt" then result.beltSpeed = value.belt_speed end
   if #value.fluidbox_prototypes > 0 then
     result.fluidBoxes = {}
     for _, fluidbox in ipairs(value.fluidbox_prototypes) do
@@ -110,6 +113,9 @@ function M.observe(args)
       local value = {id = U.entity_id(entity), name = entity.name, position = U.copy(entity.position),
         bounds = box(entity.bounding_box), boundsOrientation = entity.bounding_box.orientation or 0,
         direction = entity.direction, force = entity.force.name}
+      if entity.type == "assembling-machine" or entity.type == "furnace" or entity.type == "inserter" then
+        value.status = status_names[entity.status]
+      end
       if entity.type == "resource" then value.amount = entity.amount end
       if entity.type == "mining-drill" or entity.type == "inserter" then
         value.dropPosition = U.copy(entity.drop_position)
@@ -120,6 +126,18 @@ function M.observe(args)
         value.pickupPosition = U.copy(entity.pickup_position)
         local target = entity.pickup_target
         if target and Visibility.is_visible(c, target) then value.pickupTargetId = U.entity_id(target) end
+      end
+      if entity.type == "transport-belt" or entity.type == "underground-belt" or entity.type == "splitter" then
+        value.beltConnections = {inputs = {}, outputs = {}}
+        local neighbours = entity.belt_neighbours
+        for _, side in ipairs{"inputs", "outputs"} do
+          for _, target in pairs(neighbours[side]) do
+            if target.valid and Visibility.is_visible(c, target) then
+              value.beltConnections[side][#value.beltConnections[side] + 1] = U.entity_id(target)
+            end
+          end
+          table.sort(value.beltConnections[side])
+        end
       end
       if #entity.fluidbox > 0 then
         value.fluidConnections = {}

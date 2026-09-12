@@ -29,6 +29,7 @@ try
           assemble --session FILE --item NAME --quantity N
           produce-fluid --session FILE --fluid NAME --quantity N
           connect-fluid --session FILE --source ID --target ID --fluid NAME
+          transport --session FILE --source ID --target ID --item NAME --quantity N
           fuel-feeder --session FILE --boiler ID [--reserve N] [--ticks N]
           rpc --session FILE --action ACTION [--json-file FILE]
           connect --session FILE
@@ -43,6 +44,16 @@ try
     string Required(string name) => Option(name) ?? throw new ArgumentException($"Missing --{name}.");
     switch (args[0])
     {
+        case "transport":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"belt-transport-{Guid.NewGuid():N}.jsonl");
+            var controller = new BeltTransportController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            Print(new { result = await controller.RunAsync(Required("source"), Required("target"), Required("item"),
+                int.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token), journalPath });
+            break;
+        }
         case "fuel-feeder":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);

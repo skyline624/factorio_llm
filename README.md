@@ -126,6 +126,8 @@ Le manifeste contient un secret RCON local et reste ignoré par Git. Le serveur 
 
 ## Documents
 
+La commande `transport --session FILE --source ID --target ID --item NAME --quantity N` installe ou réutilise une liaison par tapis et bras. Elle vérifie les connexions natives et conserve un bilan des stocks, du transit et des fabrications. Un [essai natif de transport et stockage de sortie](docs/belt-transport.md) a transformé 40 plaques de fer en 20 engrenages stockés dans une fixture préparée.
+
 - [Plan d'exécution et critères d'acceptation](docs/execution-plan.md)
 - [Conception](docs/design.md)
 - [Feuille de route](docs/implementation-plan.md)

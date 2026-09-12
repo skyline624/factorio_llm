@@ -83,6 +83,8 @@ Ressources et obstacles naturels sont découverts dans le rayon local demandé ;
 
 ## Vérifications et statut
 
-Les fichiers Lua ont passé une vérification syntaxique locale et la représentation canonique a été vérifiée sur permutations de clés et nombres doubles voisins. Ces contrôles ne qualifient pas le moteur. Les rapports d'intégration du host constituent la preuve des actions réellement essayées, de leur version de mod et de leurs effets. Aucun chargement seul, inventaire injecté de fixture ou RPC accepté ne vaut progression autonome jusqu'à la fusée.
+`spatial_snapshot` expose aussi `beltSpeed` pour les prototypes de tapis ordinaires et `beltConnections.inputs/outputs` pour les voisins natifs observés des tapis, souterrains et répartiteurs. Ces identités décrivent le graphe reconnu par le moteur. Le transport C# actuel accepte uniquement les tapis ordinaires et vérifie chaque arête avant d’annoncer une livraison. `status` expose le nom natif de l’état des assembleurs, fours et bras, notamment `full_output` ; l’absence de ce champ empêche une nouvelle installation vers une machine avec le contrôleur de transport. Les bilans utilisent les inventaires, fabrications et voies de transit de `factory_snapshot`, collectés atomiquement, et non une estimation visuelle.
+
+Les fichiers Lua ont passé une vérification syntaxique locale et la représentation canonique a été vérifiée sur permutations de clés et nombres doubles voisins. Ces contrôles ne qualifient pas le moteur. Les rapports d’intégration du host constituent la preuve des actions réellement essayées, de leur version de mod et de leurs effets. Aucun chargement seul, inventaire injecté de fixture ou RPC accepté ne vaut progression autonome jusqu’à la fusée.
 
 Les premières qualifications natives et du pilote sont décrites dans [validation.md](validation.md), avec leurs limites.
