@@ -45,6 +45,7 @@ function M.cancel_active(reason)
 end
 
 local function preconditions(request, c)
+  U.check(not Actor.state().awaitingController, "controller_reconciliation_required", "Resume the prepared checkpoint before submitting work")
   U.check(U.canonical(request.scope) == U.canonical(Actor.scope()), "stale_scope", "Actor scope has changed")
   U.check(Actor.state().controlMode == "ai", "manual_control", "A human pilot owns the actor")
   U.check(not Actor.state().stopUnconfirmed, "stop_unconfirmed", "Previous native action has not been confirmed stopped")

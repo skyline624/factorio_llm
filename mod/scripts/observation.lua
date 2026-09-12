@@ -62,6 +62,7 @@ function M.observe(args)
   s.snapshotSequence = s.snapshotSequence + 1
   local result = {scope = Actor.scope(), snapshotId = s.snapshotSequence, collectedTick = game.tick,
     agent = {alive = c ~= nil, controlMode = s.controlMode, deaths = s.deaths, respawnTick = s.respawnTick,
+      awaitingController = s.awaitingController == true, checkpointId = s.checkpointId,
       pilotIndex = s.pilotIndex, pilotError = s.pilotError, stopUnconfirmed = s.stopUnconfirmed == true,
       respawnError = s.respawnError},
     operation = Operations.last_receipt(), entities = {}, resources = {}, enemies = {}, players = {},

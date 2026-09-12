@@ -16,9 +16,15 @@ script.on_configuration_changed(Actor.initialize)
 
 local function hello(args)
   local s = Actor.state()
+  local restore_pause
+  if s.awaitingController then restore_pause = s.checkpointWasPaused end
   local session = U.string(args.sessionId, "sessionId")
   local world = s.worldId or U.string(args.worldId, "worldId (required on first hello)")
   if args.worldId then U.check(args.worldId == world, "world_mismatch", "The loaded save belongs to a different world") end
+  if s.awaitingController then
+    U.check(args.checkpointId == s.checkpointId, "checkpoint_mismatch", "Resume must acknowledge the prepared checkpoint")
+    U.check(session ~= s.sessionId, "new_session_required", "Resume requires a fresh controller session")
+  end
   if not s.freeplayConfigured then
     -- The one agent receives the normal no-intro kit. Connecting its pilot must not
     -- generate another kit or a late crash site in an already running factory.
@@ -35,6 +41,8 @@ local function hello(args)
     s.sessionId, s.generation = session, s.generation + 1
   end
   if s.incarnation == 0 then Actor.spawn(true) end
+  s.awaitingController = false
+  if restore_pause ~= nil then game.tick_paused = restore_pause end
   Pilot.ensure_attached()
   return {scope = Actor.scope(), capabilities = Actions.capabilities,
     actorAlive = Actor.get() ~= nil, controlMode = s.controlMode, protocolVersion = 1,
@@ -43,6 +51,24 @@ end
 
 local handlers = {hello = hello, observe = Observation.observe, factory_snapshot = FactorySnapshot.page, submit = Operations.submit,
   spatial = Spatial.observe, validate_placement = Spatial.validate_placement,
+  prepare_checkpoint = function(args)
+    local s = Actor.state()
+    if not s.awaitingController then
+      local id = U.string(args.checkpointId, "checkpointId")
+      Operations.cancel_active("Controller preparing a checkpoint")
+      U.check(not s.stopUnconfirmed, "stop_unconfirmed", "Character stop is unconfirmed")
+      Actor.stop(false)
+      -- The engine disconnects saved players when loading a headless server. Detach
+      -- before sealing so that transition cannot change the saved control scope.
+      if s.pilotIndex then Pilot.before_leave{player_index = s.pilotIndex} end
+      s.checkpointWasPaused = game.tick_paused
+      game.tick_paused = true
+      s.generation, s.awaitingController, s.checkpointId = s.generation + 1, true, id
+      s.checkpointTick = game.tick
+    end
+    return {scope = Actor.scope(), checkpointId = s.checkpointId, preparedTick = s.checkpointTick,
+      awaitingController = true, operation = Operations.last_receipt()}
+  end,
   mark_fixture = function(args)
     local reason = U.string(args.reason, "reason")
     local s = Actor.state()

@@ -7,7 +7,7 @@ namespace Factorio.Agent.Host;
 /// <summary>Serializes calls across CLI processes and detects observed world-history regressions.</summary>
 public sealed class SessionGameClient(RuntimeSession session, IGameClient inner, ActorControlLease? controllerLease = null) : IGameClient
 {
-    private static readonly HashSet<string> Mutations = ["hello", "submit", "cancel", "mark_fixture"];
+    private static readonly HashSet<string> Mutations = ["hello", "submit", "cancel", "mark_fixture", "prepare_checkpoint"];
     private readonly SemaphoreSlim callGate = new(1, 1);
     private int controlWaiters;
     private string WatermarkPath => Path.Combine(session.Directory, "observation-watermark.json");
@@ -85,17 +85,7 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
             scope?.Incarnation ?? previous?.Incarnation ?? 0, scope?.Generation ?? previous?.Generation ?? 0);
     }
 
-    private async Task PersistAsync(Watermark value, CancellationToken token)
-    {
-        string temporary = WatermarkPath + ".pending";
-        await using (var file = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
-        {
-            await JsonSerializer.SerializeAsync(file, value, Protocol.Json, token);
-            await file.FlushAsync(token);
-            file.Flush(flushToDisk: true);
-        }
-        File.Move(temporary, WatermarkPath, overwrite: true);
-    }
+    private Task PersistAsync(Watermark value, CancellationToken token) => LocalJson.WriteAsync(WatermarkPath, value, token);
 
     private async Task<FileStream> AcquireLockAsync(CancellationToken token)
     {

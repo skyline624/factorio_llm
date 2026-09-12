@@ -22,11 +22,7 @@ public sealed record RuntimeSession(string Directory, string Executable, string 
         JsonSerializer.Deserialize<RuntimeSession>(await File.ReadAllTextAsync(file, token), new JsonSerializerOptions(JsonSerializerDefaults.Web))
         ?? throw new InvalidDataException("Session file is empty.");
 
-    public async Task WriteAsync(CancellationToken token = default)
-    {
-        string json = JsonSerializer.Serialize(this, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
-        await File.WriteAllTextAsync(ManifestPath, json, new UTF8Encoding(false), token);
-    }
+    public Task WriteAsync(CancellationToken token = default) => LocalJson.WriteAsync(ManifestPath, this, token);
 
     public async Task<GameResponse> HelloAsync(CancellationToken token = default)
     {
@@ -36,7 +32,7 @@ public sealed record RuntimeSession(string Directory, string Executable, string 
     }
 }
 
-public static class FactorioRuntime
+public static partial class FactorioRuntime
 {
     public static async Task<RuntimeSession> StartAsync(string root, string? installation, uint seed,
         bool fixture, CancellationToken token = default)
@@ -116,8 +112,21 @@ public static class FactorioRuntime
 
     public static async Task<int> ConnectClientAsync(RuntimeSession session, CancellationToken token = default)
     {
-        string directory = Path.Combine(session.Directory, "client");
-        if (Directory.Exists(directory)) throw new IOException("A client profile already exists for this session; inspect its process before opening another.");
+        using var lease = ActorControlLease.Acquire(session.Directory);
+        await RequireCurrentManifestAsync(session, token);
+        GameResponse observed = await session.CreateClient(lease).ExecuteAsync(GameRequest.Create("observe"), token);
+        if (!observed.Ok) throw new GameRpcException(observed.Error!);
+        JsonElement players = observed.Data.GetProperty("players");
+        if (players.ValueKind == JsonValueKind.Array && players.EnumerateArray().Any(player => player.GetProperty("connected").GetBoolean()))
+            throw new IOException("A player is already connected to this session.");
+        foreach (string profile in Directory.EnumerateDirectories(session.Directory, "client*"))
+        {
+            string processFile = Path.Combine(profile, "process-id.txt");
+            if (File.Exists(processFile) && int.TryParse(await File.ReadAllTextAsync(processFile, token), out int id)
+                && IsManagedProcessAlive(id, session.Executable, null))
+                throw new IOException("A managed client is still running; inspect it before opening another.");
+        }
+        string directory = Path.Combine(session.Directory, "client-" + Guid.NewGuid().ToString("N"));
         string install = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(session.Executable)!, "..", ".."));
         string source = Directory.EnumerateDirectories(session.ModsDirectory).Single(path => File.Exists(Path.Combine(path, "info.json")));
         await PrepareProfileAsync(install, directory, source, token);
@@ -135,24 +144,50 @@ public static class FactorioRuntime
 
     public static async Task<string> StopAsync(RuntimeSession session, CancellationToken token = default)
     {
+        using var lease = ActorControlLease.Acquire(session.Directory);
+        await RequireCurrentManifestAsync(session, token);
         using Process process = Process.GetProcessById(session.ServerProcessId);
         if (process.HasExited || !string.Equals(process.MainModule?.FileName, session.Executable, StringComparison.OrdinalIgnoreCase)
             || (session.ServerStartTimeUtc is { } expected && process.StartTime.ToUniversalTime() != expected))
             throw new InvalidOperationException("The saved process identity does not match the running Factorio server.");
-        string checkpoint = Path.Combine(session.Directory, "saves", "agent-checkpoint.zip");
+        IGameClient client = session.CreateClient(lease);
+        GameResponse prepared = await client.ExecuteAsync(GameRequest.Create("prepare_checkpoint", new { checkpointId = Guid.NewGuid().ToString("N") }), token);
+        if (!prepared.Ok) throw new GameRpcException(prepared.Error!);
+        string checkpointId = prepared.Data.GetProperty("checkpointId").GetString()!;
+        long preparedTick = prepared.Data.GetProperty("preparedTick").GetInt64();
+        if (!prepared.Data.GetProperty("awaitingController").GetBoolean() || prepared.Tick != preparedTick)
+            throw new InvalidDataException("Native checkpoint preparation was not confirmed at a fixed tick.");
+        string checkpoint = CheckpointStore.SavePath(session);
+        string saveName = "prepared-" + Guid.NewGuid().ToString("N");
+        string pending = Path.Combine(session.Directory, "saves", saveName + ".zip");
         Directory.CreateDirectory(Path.GetDirectoryName(checkpoint)!);
-        DateTime requested = DateTime.UtcNow;
-        await session.CreateRcon().ExecuteAsync("/server-save agent-checkpoint", token);
+        await session.CreateRcon().ExecuteAsync("/server-save " + saveName, token);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
-        while (!File.Exists(checkpoint) || new FileInfo(checkpoint).Length == 0 || File.GetLastWriteTimeUtc(checkpoint) < requested.AddSeconds(-1))
+        while (!File.Exists(pending) || new FileInfo(pending).Length == 0)
             await Task.Delay(100, deadline.Token);
+        GameResponse frozen = await client.ExecuteAsync(GameRequest.Create("observe"), deadline.Token);
+        var seal = new CheckpointSeal(checkpointId, prepared.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!,
+            preparedTick, await CheckpointStore.HashAsync(pending, deadline.Token), DateTime.UtcNow);
+        CheckpointStore.VerifyLoaded(frozen, session, seal, null);
+        File.Move(pending, checkpoint, overwrite: true);
+        await LocalJson.WriteAsync(CheckpointStore.SealPath(session), seal, deadline.Token);
+        // Native networking teardown can outlast the save itself. Preserve its real
+        // process identity and wait; a slow shutdown never authorizes another server.
+        deadline.CancelAfter(TimeSpan.FromMinutes(3));
+        string shutdownRecord = Path.Combine(session.Directory, $"shutdown-{checkpointId}.json");
+        await LocalJson.WriteAsync(shutdownRecord, new { phase = "checkpoint-saved", session.ServerProcessId, seal }, deadline.Token);
         try
         {
             await session.CreateRcon().ExecuteAsync("/quit", deadline.Token);
         }
         catch (Exception error) when (error is EndOfStreamException or SocketException or TimeoutException) { }
-        await process.WaitForExitAsync(deadline.Token);
+        try { await process.WaitForExitAsync(deadline.Token); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Checkpoint saved at {checkpoint}, but shutdown of process {process.Id} is not confirmed. Inspect the existing process before resuming.");
+        }
+        await LocalJson.WriteAsync(shutdownRecord, new { phase = "process-exited", session.ServerProcessId, seal, confirmedUtc = DateTime.UtcNow }, CancellationToken.None);
         return checkpoint;
     }
 
@@ -165,7 +200,7 @@ public static class FactorioRuntime
         return Path.GetDirectoryName(candidates[0])!;
     }
 
-    private static async Task PrepareProfileAsync(string install, string directory, string modSource, CancellationToken token)
+    private static async Task PrepareProfileAsync(string install, string directory, string modSource, CancellationToken token, string? writeDirectory = null)
     {
         Directory.CreateDirectory(directory);
         // Factorio's /server-save can terminate the server if this folder is absent
@@ -182,7 +217,7 @@ public static class FactorioRuntime
         }
         await File.WriteAllTextAsync(Path.Combine(mods, "mod-list.json"),
             "{\"mods\":[{\"name\":\"base\",\"enabled\":true},{\"name\":\"factorio_agent\",\"enabled\":true},{\"name\":\"space-age\",\"enabled\":false},{\"name\":\"quality\",\"enabled\":false},{\"name\":\"elevated-rails\",\"enabled\":false}]}", token);
-        string config = $"[path]\nread-data={Path.Combine(install, "data").Replace('\\', '/')}\nwrite-data={directory.Replace('\\', '/')}\n[other]\ncheck-updates=false\n[graphics]\nfull-screen=false\n";
+        string config = $"[path]\nread-data={Path.Combine(install, "data").Replace('\\', '/')}\nwrite-data={(writeDirectory ?? directory).Replace('\\', '/')}\n[other]\ncheck-updates=false\n[graphics]\nfull-screen=false\n";
         await File.WriteAllTextAsync(Path.Combine(directory, "config.ini"), config, new UTF8Encoding(false), token);
     }
 

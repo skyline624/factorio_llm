@@ -12,6 +12,7 @@ try
     if (args.Length == 0) throw new ArgumentException("""
         Commands:
           start [--fixture] [--seed N] [--root PATH] [--installation PATH]
+          resume --session FILE [--root PATH]
           observe --session FILE
           factory --session FILE [--capacity-items item1,item2]
           spatial --session FILE [--items item1,item2]
@@ -36,6 +37,13 @@ try
         {
             var session = await FactorioRuntime.StartAsync(Option("root") ?? Environment.CurrentDirectory, Option("installation"),
                 uint.Parse(Option("seed") ?? "424242", CultureInfo.InvariantCulture), options.ContainsKey("fixture"), shutdown.Token);
+            Print(new { session.ManifestPath, session.ServerProcessId, session.GamePort, session.RconPort, session.Seed, session.IsFixture });
+            break;
+        }
+        case "resume":
+        {
+            var prior = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            var session = await FactorioRuntime.ResumeAsync(prior, Option("root") ?? Environment.CurrentDirectory, shutdown.Token);
             Print(new { session.ManifestPath, session.ServerProcessId, session.GamePort, session.RconPort, session.Seed, session.IsFixture });
             break;
         }
