@@ -16,4 +16,12 @@ La boucle signale `rocket-observed` uniquement lorsque le compteur natif de fus�
 
 Les tests hors ligne vérifient le transfert du résultat précédent entre objectifs, la persistance entre instances, l'arrêt sur fusée native, l'arrêt de budget, le refus d'une nouvelle exécution après timeout, les mondes ou dates incompatibles, une opération native encore active, les changements de portée pendant une exécution et la détection des propositions répétées. Le contrôleur stratégique concret transmet les objectifs scientifiques et renvoie les propositions non prises en charge sans effectuer leurs actions.
 
-L'enchaînement de plusieurs objectifs avec le modèle réel dans le jeu reste à qualifier. Cette commande ne comble pas les limitations actuelles de production des fluides, de transport industriel, de défense et de récupération de campagne.
+Deux objectifs successifs ont été qualifiés avec le modèle réel dans une fixture, comme décrit ci-dessous. Cette commande ne comble pas les limitations actuelles de production des fluides, de transport industriel, de défense et de récupération de campagne.
+
+## Essai réel de deux objectifs
+
+Sur la fixture explicitement approvisionnée de Factorio 2.0.77, `glm-5.3-flash:cloud` a choisi successivement la recherche `electric-mining-drill`, puis un stock porté de 50 packs rouges. Le premier appel a pris 1,513 seconde côté client (5063 tokens d’entrée, 85 de sortie), le second 2,067 secondes (5231 et 124 tokens). Le deuxième contexte contient le résultat natif vérifié de la première recherche dans `previousResult`.
+
+La recherche a terminé entre les ticks 146990 et 162490, avec 25 packs consommés et 193 relevés de laboratoire alimenté. La deuxième exécution a fabriqué 49 packs à partir de 49 plaques de cuivre et 49 engrenages, portant le stock de 1 à 50 entre les ticks 162647 et 177421. Le fichier de mémoire au tick 177424 contient ce résultat avec `pending=false`. Une lecture indépendante au tick 178331 retrouve les 50 packs et le personnage à 250 points de vie.
+
+La commande s’est arrêtée normalement avec deux objectifs exécutés, `stopReason=goal-budget` et `rocketLaunched=false`. Aucun objectif n’a été choisi ou corrigé à la main entre ces deux appels. Les ressources initiales artificielles de la fixture interdisent de compter cet essai comme une campagne normale. La reprise après résultat incertain et la progression complète jusqu’à la fusée restent à développer et qualifier.

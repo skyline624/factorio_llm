@@ -124,3 +124,7 @@ La reprise dans le même monde a réutilisé la foreuse 613 et le four 222 pour 
 ## Recherche des tourelles en économie normale
 
 Après la correction du trajet, la recherche `gun-turret` a terminé dans le même monde normal entre les ticks 890722 et 911705. Le contrôleur a préparé les dix packs rouges, les a transportés et chargés dans le laboratoire 647, puis a observé 77 fois son alimentation. Le compteur natif de consommation a augmenté de dix packs. Une lecture indépendante au tick 913243 confirme le déblocage ; le personnage reste à 250 points de vie, avec `fixture=false`, zéro intervention humaine enregistrée et zéro fusée. Cette partie de développement conserve son historique d’erreurs et de reprises ; elle ne compte pas parmi les trois campagnes finales.
+
+## Deux décisions stratégiques successives
+
+La [boucle stratégique](strategic-campaign.md) a réussi un essai réel de deux objectifs choisis par `glm-5.3-flash:cloud` dans une fixture : recherche des foreuses électriques, puis stock de 50 packs rouges. Le deuxième appel reçoit la réussite vérifiée du premier. Les lectures natives confirment 25 packs consommés pour la recherche, puis 49 packs fabriqués avec leurs coûts, et un stock final de 50. La mémoire persistée termine avec `pending=false` au tick 177424. La borne de deux objectifs arrête normalement la commande ; `rocketLaunched=false`. Les apports artificiels de cette fixture ne qualifient aucune campagne finale.
