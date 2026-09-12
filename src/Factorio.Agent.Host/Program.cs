@@ -27,6 +27,8 @@ try
           prepare-research --session FILE --technology NAME
           research --session FILE --technology NAME
           assemble --session FILE --item NAME --quantity N
+          produce-fluid --session FILE --fluid NAME --quantity N
+          connect-fluid --session FILE --source ID --target ID --fluid NAME
           rpc --session FILE --action ACTION [--json-file FILE]
           connect --session FILE
           submit --session FILE --kind KIND --json-file FILE [--ticks N]
@@ -178,6 +180,26 @@ try
                 ? JsonSerializer.Deserialize<SteamPowerPlan>(await File.ReadAllTextAsync(planPath, shutdown.Token), Protocol.Json)
                     ?? throw new InvalidDataException("Missing power recovery plan.") : null;
             Print(new { result = await controller.RunAsync(shutdown.Token, resume), journalPath });
+            break;
+        }
+        case "produce-fluid":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"fluid-production-{Guid.NewGuid():N}.jsonl");
+            var result = await new FluidProductionController(session.CreateClient(lease), new ControllerJournal(journalPath))
+                .RunAsync(Required("fluid"), double.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token);
+            Print(new { result, journalPath });
+            break;
+        }
+        case "connect-fluid":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"pipe-connection-{Guid.NewGuid():N}.jsonl");
+            var result = await new PipeConnectionController(session.CreateClient(lease), new ControllerJournal(journalPath))
+                .RunAsync(Required("source"), Required("target"), Required("fluid"), shutdown.Token);
+            Print(new { result, journalPath });
             break;
         }
         case "run-goal":

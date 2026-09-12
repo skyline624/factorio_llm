@@ -5,6 +5,23 @@ public sealed record PlacementCandidate(MapPosition Position, int Direction, dou
 /// <summary>Enumerates native tile-aligned placements from geometry; no predefined layout coordinates.</summary>
 public sealed class PlacementPlanner
 {
+    public MapPosition? FindInteractionApproach(SpatialCollisionField field, SpatialEntity entity)
+    {
+        double reach = field.Map.Actor.ReachDistance - 1;
+        if (reach <= 0) return null;
+        MapPosition start = field.Map.Actor.Position;
+        if (start.DistanceTo(entity.Position) <= reach && field.Walkable(start)) return start;
+        var candidates = new List<MapPosition>();
+        for (double x = Math.Ceiling((entity.Position.X - reach) * 2) / 2; x <= entity.Position.X + reach; x += 0.5)
+            for (double y = Math.Ceiling((entity.Position.Y - reach) * 2) / 2; y <= entity.Position.Y + reach; y += 0.5)
+            {
+                var point = new MapPosition(x, y);
+                if (point.DistanceTo(entity.Position) <= reach && field.Walkable(point)) candidates.Add(point);
+            }
+        return candidates.OrderBy(p => p.DistanceTo(start)).ThenBy(p => p.DistanceTo(entity.Position))
+            .FirstOrDefault(p => new RoutePlanner().Find(field, p).Status == RouteStatus.Found);
+    }
+
     public MapPosition? FindApproach(SpatialCollisionField field, string item, PlacementCandidate placement)
     {
         EntityGeometry building = field.Map.Prototypes[field.Map.Items[item].EntityName];

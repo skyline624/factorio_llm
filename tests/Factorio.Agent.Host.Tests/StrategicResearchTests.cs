@@ -17,6 +17,7 @@ public sealed class StrategicResearchTests
         Assert.Equal("automation", result.Research.Target);
         Assert.DoesNotContain("submit", game.Actions);
         Assert.Contains("nativeTechnologyIdentifiers", planner.Context!.Facts);
+        Assert.Contains("physicalStocks", planner.Context.Facts);
         Assert.DoesNotContain("position", planner.Context.Facts);
     }
     [Fact]
@@ -54,12 +55,29 @@ public sealed class StrategicResearchTests
             var scope = new ActorScope("world", "session", "actor", 1, 1);
             object data = request.Action switch
             {
-                "observe" => new { scope, snapshotId = tick, agent = new { alive = true, health = 250, inventory = new Dictionary<string, long>(), ammoRounds = 100 },
-                    environment = new { }, enemies = Array.Empty<object>(), resources = Array.Empty<object>(), entities = Array.Empty<object>() },
+                "observe" => new
+                {
+                    scope,
+                    snapshotId = tick,
+                    agent = new { alive = true, health = 250, inventory = new Dictionary<string, long>(), ammoRounds = 100 },
+                    environment = new { },
+                    enemies = Array.Empty<object>(),
+                    resources = Array.Empty<object>(),
+                    entities = Array.Empty<object>()
+                },
+                "factory_snapshot" => new FactorySnapshotPage("factory", scope, scope, tick, tick + 1000, 0, 0, 0, true,
+                    Protocol.ToElement(new { atomic = true, knownInventoriesComplete = true, knownBeltAndInserterTransitComplete = true, fluidSegmentsDeduplicated = true }), []),
                 "production_catalog" => new ProductionCatalog(scope, tick, [], new Dictionary<string, NativeItem>(), new Dictionary<string, NativeMaterial[]>(),
                     new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>()),
-                "technologies" => new { items = new[] { new NativeTechnology("automation", true, true, false, [], [new("red", 1)], 10, 600) },
-                    total = 1, offset = 0, limit = request.Arguments.TryGetProperty("name", out _) ? 1 : 100, collectedTick = tick, complete = true },
+                "technologies" => new
+                {
+                    items = new[] { new NativeTechnology("automation", true, true, false, [], [new("red", 1)], 10, 600) },
+                    total = 1,
+                    offset = 0,
+                    limit = request.Arguments.TryGetProperty("name", out _) ? 1 : 100,
+                    collectedTick = tick,
+                    complete = true
+                },
                 _ => throw new InvalidOperationException("Unexpected execution outside research completion reading.")
             };
             return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(data)));

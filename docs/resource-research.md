@@ -20,7 +20,7 @@ Une lecture indépendante au tick 234998 confirme `oil-processing.researched=tru
 
 L'extraction qualifiée concerne un gisement proche d'un réseau existant, raccordable avec au plus un nouveau poteau. Les avant-postes éloignés, l'extension électrique sur plusieurs segments, la reprise d'une construction d'extraction partielle et les ressources solides nécessitant un fluide ne sont pas encore pris en charge. Le contrôleur peut explorer mais ne construit pas encore un réseau électrique distant.
 
-L'exécution exige un fluide présent dans le circuit observé et le déblocage natif ; elle n'est pas une mesure générale de débit et ne qualifie pas encore un circuit continuellement vidé par une raffinerie. Raffinage, chimie, tuyaux et production industrielle restent à implémenter. Les budgets scientifiques actuels et le laboratoire unique ne suffisent pas aux grandes recherches finales.
+L'exécution exige un fluide présent dans le circuit observé et le déblocage natif ; elle n'est pas une mesure générale de débit et ne qualifie pas encore un circuit continuellement vidé par une raffinerie. Un premier [raffinage avec tuyaux et stockage de sortie](fluid-production.md) est désormais qualifié en fixture ; chimie complète et production industrielle restent à implémenter. Les budgets scientifiques actuels et le laboratoire unique ne suffisent pas aux grandes recherches finales.
 
 ## Références
 

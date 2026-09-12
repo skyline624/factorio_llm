@@ -8,6 +8,18 @@ public sealed record FactoryRecord(string Id, string Kind, string EntityId, stri
 public sealed record FactorySnapshot(string SnapshotId, ActorScope Scope, long CollectedTick, long ExpiresTick,
     JsonElement Coverage, IReadOnlyList<FactoryRecord> Records)
 {
+    public IReadOnlyList<FactoryRecord> FluidRecordsAt(string entityId, int? boxIndex = null)
+    {
+        SummarizeStocks();
+        return Records.Where(r => r.Kind == "fluid" && ((boxIndex is null && r.EntityId == entityId)
+            || (r.Data.TryGetProperty("sourceBoxes", out var boxes) && boxes.ValueKind == JsonValueKind.Array
+                && boxes.EnumerateArray().Any(b => b.GetProperty("entityId").GetString() == entityId
+                    && (boxIndex is null || b.GetProperty("index").GetInt32() == boxIndex))))).ToArray();
+    }
+
+    public double FluidStockAt(string entityId, string fluid, int? boxIndex = null) => FluidRecordsAt(entityId, boxIndex)
+        .Sum(r => r.Data.GetProperty("contents").TryGetProperty(fluid, out var value) ? value.GetDouble() : 0);
+
     public FactoryStockSummary SummarizeStocks()
     {
         var inventories = new Dictionary<string, long>(StringComparer.Ordinal);

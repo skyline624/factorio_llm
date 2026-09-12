@@ -8,6 +8,9 @@ public sealed record NativeMaterial(string Name, string Type, double? Amount = n
     double? MinimumTemperature = null, double? MaximumTemperature = null)
 {
     [JsonIgnore]
+    public bool DeterministicFluid => Type == "fluid" && Amount is > 0 && double.IsFinite(Amount.Value) && Probability is null or 1;
+
+    [JsonIgnore]
     public bool DeterministicItem => Type == "item" && Amount is > 0
         && double.IsFinite(Amount.Value) && Amount == Math.Truncate(Amount.Value) && Probability is null or 1;
 }

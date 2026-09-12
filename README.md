@@ -140,3 +140,5 @@ Le code original du projet est sous [licence MIT](LICENSE), copyright skyline624
 La commande `run-campaign --session FILE --max-goals 10` ajoute une [continuité stratégique avec mémoire persistante](docs/strategic-campaign.md). Ses arrêts de budget ou de réconciliation ne sont pas des réussites de campagne. Deux objectifs successifs ont été exécutés avec le modèle réel dans une fixture : recherche des foreuses électriques, puis stock de 50 packs rouges.
 
 La recherche prend également en charge le [déblocage du raffinage par extraction électrique native](docs/resource-research.md), qualifié dans une fixture avec un chevalet placé et alimenté par C#. Les réseaux distants, le raffinage et la chimie restent à développer.
+
+Le [raffinage et le routage des tuyaux](docs/fluid-production.md) sont accessibles par `produce-fluid` et `connect-fluid`. Une fixture a vérifié la production native de gaz, la réutilisation de la raffinerie et le dimensionnement du stockage de sortie. Les recettes mixtes et la production industrielle continue restent incomplètes.

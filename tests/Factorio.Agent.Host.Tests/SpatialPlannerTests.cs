@@ -146,6 +146,19 @@ public sealed class SpatialPlannerTests
         Assert.InRange(approach.DistanceTo(new(0, 0)), 1, map.Actor.BuildDistance - 1);
     }
 
+    [Fact]
+    public void InteractionApproachForLargeMachineIsReachableOutsideItsBody()
+    {
+        var entity = new SpatialEntity("refinery", "wall", new(5, 0), new(new(2.6, -2.4), new(7.4, 2.4)), 0, "agent");
+        SpatialSnapshot map = Map([entity]);
+        map = map with { Actor = map.Actor with { ReachDistance = 5 } };
+        MapPosition? approach = new PlacementPlanner().FindInteractionApproach(new(map), entity);
+        Assert.NotNull(approach);
+        Assert.True(new SpatialCollisionField(map).Walkable(approach));
+        Assert.InRange(approach.DistanceTo(entity.Position), 0, map.Actor.ReachDistance - 1);
+        Assert.Equal(RouteStatus.Found, new RoutePlanner().Find(new(map), approach).Status);
+    }
+
     internal static SpatialSnapshot Map(IReadOnlyList<SpatialEntity> entities)
     {
         var prototypes = new Dictionary<string, EntityGeometry>

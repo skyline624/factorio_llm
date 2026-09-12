@@ -115,12 +115,14 @@ function M.observe(args)
         value.fluidConnections = {}
         for index = 1, #entity.fluidbox do
           for port, connection in ipairs(entity.fluidbox.get_pipe_connections(index)) do
+            local filter = entity.fluidbox.get_filter(index)
             local target = connection.target and connection.target.owner
             local visible = target and target.valid and Visibility.is_visible(c, target)
             value.fluidConnections[#value.fluidConnections + 1] = {boxIndex = index, portIndex = port,
               position = U.copy(connection.position), targetPosition = U.copy(connection.target_position),
               targetEntityId = visible and U.entity_id(target) or nil,
-              targetBoxIndex = visible and connection.target_fluidbox_index or nil}
+              targetBoxIndex = visible and connection.target_fluidbox_index or nil,
+              type = connection.connection_type, flowDirection = connection.flow_direction, filter = filter and filter.name}
           end
         end
       end

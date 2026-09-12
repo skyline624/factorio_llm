@@ -70,7 +70,8 @@ public sealed record SpatialEntity(string Id, string Name, MapPosition Position,
     [property: JsonConverter(typeof(NativeArrayConverter<ObservedFluidConnection>))] IReadOnlyList<ObservedFluidConnection>? FluidConnections = null,
     ObservedPower? Power = null, double BoundsOrientation = 0);
 public sealed record ObservedFluidConnection(int BoxIndex, int PortIndex, MapPosition Position, MapPosition TargetPosition,
-    string? TargetEntityId = null, int? TargetBoxIndex = null);
+    string? TargetEntityId = null, int? TargetBoxIndex = null,
+    string? Type = null, string? FlowDirection = null, string? Filter = null);
 public sealed record ObservedPower(double Energy, long? NetworkId = null, double? GeneratedLastTick = null);
 public sealed record PlaceableItem(string EntityName, int StackSize);
 public sealed record SpatialCoverage(bool Atomic, bool Complete, string Visibility, int Radius);

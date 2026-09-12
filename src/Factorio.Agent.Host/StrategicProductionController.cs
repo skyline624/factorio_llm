@@ -5,7 +5,7 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
-public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null);
+public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null, FluidProductionResult? Fluid = null);
 
 /// <summary>Grounds semantic production or research goals into verified native execution.</summary>
 public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal) : IStrategicGoalRunner
@@ -16,8 +16,9 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         if (!observation.Ok) throw new GameRpcException(observation.Error!);
         ProductionCatalog catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         TechnologyObservation science = await new TechnologyClient(game).ReadAllAsync(token);
+        FactorySnapshot factory = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         ActorScope scope = observation.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
-        if (catalog.Scope != scope || science.Scope != scope) throw new InvalidDataException("Strategic observations span different actor scopes.");
+        if (catalog.Scope != scope || science.Scope != scope || factory.Scope != scope) throw new InvalidDataException("Strategic observations span different actor scopes.");
         JsonElement agent = observation.Data.GetProperty("agent");
         string observationId = $"{observation.Data.GetProperty("snapshotId").GetInt64()}:{observation.Tick}";
         // Whitelist factual fields: no session credentials, player names or coordinates leave the machine.
@@ -38,6 +39,12 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             knownBuildings = Names(observation.Data.GetProperty("entities")),
             availableSolidRecipes = catalog.Recipes.Where(r => r.Enabled && r.Products.All(p => p.DeterministicItem) && r.Ingredients.All(p => p.DeterministicItem))
                 .Select(r => r.Name).ToArray(),
+            knownFactory = new { factory.CollectedTick, factory.Coverage, physicalStocks = factory.SummarizeStocks(),
+                interpretation = "Inventory totals INCLUDE the actor and known corpses; do not add them to agent.inventory. Physical stock is not a promise of immediate availability. Transit and fluids are separate." },
+            nativeFluidIdentifiers = catalog.Recipes.SelectMany(r => r.Ingredients.Concat(r.Products)).Where(m => m.Type == "fluid")
+                .Select(m => m.Name).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+            availableFluidConversions = catalog.Recipes.Where(r => r.Enabled && r.Ingredients.Count == 1 && r.Products.Count == 1
+                && r.Ingredients[0].DeterministicFluid && r.Products[0].DeterministicFluid).Select(r => r.Name).ToArray(),
             technologyCollection = new { science.StartTick, science.EndTick },
             nativeTechnologyIdentifiers = science.Technologies.Keys.Order(StringComparer.Ordinal).ToArray(),
             researchedTechnologies = science.Technologies.Values.Where(t => t.Researched).Select(t => t.Name).Order(StringComparer.Ordinal).ToArray(),
@@ -46,7 +53,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             executionCapabilities = "Production goals use category production, unit items and an exact native item identifier, up to 1000 carried items. " +
                 "C# explores, mines, hand-crafts, installs or reuses burner production, powered assemblers and local steam supply. " +
                 "Research goals use category research, unit completion, quantity 1 and an exact native technology identifier. C# resolves native prerequisites, supported craft-item triggers and laboratory research, including science production and power maintenance. It can also satisfy fluid resource mining triggers using a compatible electric extractor on an observed deposit near an existing network, with at most one new pole. Remote powered outposts and solid-resource mining triggers remain unsupported. " +
-                "Only deterministic solid production and bounded science batches are executable so far; fluid networks and industrial transport remain unsupported. " +
+                "Fluid production goals use category production, unit fluid_units and an exact native fluid identifier, up to 100000 units in the known factory. C# supports one-fluid-input/one-fluid-output conversion with an existing input source, native refinery configuration and ordinary pipe routes in the observed construction area. Long-distance fluid networks, mixed-material recipes and industrial item transport remain unsupported. " +
                 "Choose an unmet useful goal toward the rocket. Other meaningful goals remain permissible proposals with explicit unsupported results.",
             scope = "Local observed resources; known own buildings; exact actor inventory at observedTick. Hidden areas and enemies are unknown."
         }, Protocol.Json);
@@ -82,6 +89,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             return new(goal, UnsupportedReason: reason);
         }
         // Production recollects inventory, recipes and geometry before acting; the LLM context is never a precondition.
+        if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.FluidUnits)
+            return new(goal, Fluid: await new FluidProductionController(game, journal).RunAsync(goal.Target, (double)goal.Quantity, token));
         if (goal.Category == GoalCategory.Research)
             return new(goal, Research: await new ResearchGoalExecutor(game, journal).RunAsync(goal.Target, token));
         return new(goal, Production: await new ProductionGoalExecutor(game, journal).RunAsync(goal.Target, (int)goal.Quantity, token));
@@ -95,6 +104,13 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         {
             if (goal.Unit != GoalUnit.Completion || goal.Quantity != 1) return "Research requires a completion goal with quantity 1.";
             if (technologies is null || !technologies.ContainsKey(goal.Target)) return "The target is not an exact observed native technology identifier.";
+            return null;
+        }
+        if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.FluidUnits)
+        {
+            if (goal.Quantity is <= 0 or > 100000) return "Fluid stock requires a quantity greater than zero and at most 100000.";
+            if (!catalog.Recipes.SelectMany(r => r.Ingredients.Concat(r.Products)).Any(m => m.Type == "fluid" && m.Name == goal.Target))
+                return "The target is not an exact observed native fluid identifier.";
             return null;
         }
         if (goal.Category != GoalCategory.Production || goal.Unit != GoalUnit.Items)
