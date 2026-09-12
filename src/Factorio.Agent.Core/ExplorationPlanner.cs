@@ -40,8 +40,8 @@ public sealed class ExplorationPlanner
             foreach (var cell in observed)
                 foreach (var neighbor in new[] { (cell.X + 1, cell.Y), (cell.X - 1, cell.Y), (cell.X, cell.Y + 1), (cell.X, cell.Y - 1) })
                     if (!observed.Contains(neighbor) && frontierAttempts.GetValueOrDefault(neighbor) < 4) frontier.Add(neighbor);
-            var selected = frontier.OrderBy(p => new MapPosition(p.X * 4, p.Y * 4).DistanceTo(origin))
-                .ThenBy(p => new MapPosition(p.X * 4, p.Y * 4).DistanceTo(map.Actor.Position)).ThenBy(p => p.Y).ThenBy(p => p.X).FirstOrDefault();
+            var selected = frontier.OrderBy(p => new MapPosition(p.X * 4, p.Y * 4).DistanceTo(map.Actor.Position))
+                .ThenBy(p => new MapPosition(p.X * 4, p.Y * 4).DistanceTo(origin)).ThenBy(p => p.Y).ThenBy(p => p.X).FirstOrDefault();
             if (frontier.Count == 0) throw new InvalidOperationException("Exploration exhausted its attempted frontiers.");
             known = new(selected.X * 4, selected.Y * 4);
             frontierGoal = known;

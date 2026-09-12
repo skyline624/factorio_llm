@@ -10,6 +10,8 @@ La pompe doit avoir de l'eau à son point de prélèvement. Le calcul applique l
 
 La recherche reste bornée aux observations locales et aux candidats examinés. Une absence de solution n'est pas une preuve d'impossibilité globale. Cette version cherche des raccordements directs ; le routage par tuyaux, les obstacles à enlever et les installations comportant plusieurs générateurs restent à intégrer.
 
+L'exploration conserve une frontière tant que le personnage s'en approche et qu'elle reste accessible, avec abandon après stagnation bornée. La frontière suivante est choisie d'abord selon sa distance au personnage. Les essais dans le monde normal ont montré qu'une priorité donnée à la distance au point de départ provoquait des traversées répétées du terrain connu ; deux tests de régression couvrent désormais la poursuite d'une frontière et le choix local de la suivante. Cette mémoire d'exploration reste limitée à la commande en cours.
+
 ## Construction et preuve
 
 Le personnage rejoint un point calculé hors de l'emprise du futur bâtiment. Chaque placement est revérifié par `can_place_entity` avant la construction, puis exécuté par une opération identifiée avec consommation native de l'objet.

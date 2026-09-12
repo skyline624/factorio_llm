@@ -18,6 +18,19 @@ public sealed class ExplorationPlannerTests
         Assert.True(next.Y <= -44, $"The observed frontier is north; the next waypoint {next} should keep approaching it.");
     }
 
+    [Fact]
+    public void ReachedFrontierContinuesTowardNearbyUnknownSpaceInsteadOfTheOrigin()
+    {
+        var planner = new ExplorationPlanner();
+        SpatialSnapshot start = Map(new(0, 0));
+        var catalog = new ProductionCatalog(start.Scope, 1, [], new Dictionary<string, NativeItem>(),
+            new Dictionary<string, NativeMaterial[]>(), new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>());
+        MapPosition first = planner.Choose(start, "", catalog);
+        MapPosition second = planner.Choose(Map(first), "", catalog);
+        MapPosition third = planner.Choose(Map(second), "", catalog);
+        Assert.True(third.Y <= -48, $"After approaching the northern frontier at {second}, {third} returns across already observed terrain.");
+    }
+
     private static SpatialSnapshot Map(MapPosition actor)
     {
         SpatialSnapshot map = SpatialPlannerTests.Map([]);
