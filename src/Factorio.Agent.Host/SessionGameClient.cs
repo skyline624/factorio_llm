@@ -8,10 +8,13 @@ namespace Factorio.Agent.Host;
 public sealed class SessionGameClient(RuntimeSession session, IGameClient inner, ActorControlLease? controllerLease = null) : IGameClient
 {
     private static readonly HashSet<string> Mutations = ["hello", "submit", "cancel", "mark_fixture"];
+    private readonly SemaphoreSlim callGate = new(1, 1);
+    private int controlWaiters;
     private string WatermarkPath => Path.Combine(session.Directory, "observation-watermark.json");
 
     public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
     {
+        using IDisposable priority = await AcquireCallAsync(request.Action != "factory_snapshot", cancellationToken);
         await using FileStream guard = await AcquireLockAsync(cancellationToken);
         using ActorControlLease? callLease = Mutations.Contains(request.Action) && controllerLease is null
             ? ActorControlLease.Acquire(session.Directory) : null;
@@ -34,6 +37,38 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
             await PersistAsync(verified, cancellationToken);
         }
         return response;
+    }
+
+    // A stock page cannot interrupt a call already in flight, but it yields the
+    // next slot to queued control/observation calls in this controller instance.
+    private async Task<IDisposable> AcquireCallAsync(bool control, CancellationToken token)
+    {
+        if (control) Interlocked.Increment(ref controlWaiters);
+        try
+        {
+            while (true)
+            {
+                await callGate.WaitAsync(token);
+                if (control || Volatile.Read(ref controlWaiters) == 0) return new CallLease(callGate);
+                callGate.Release();
+                await Task.Delay(1, token);
+            }
+        }
+        finally
+        {
+            if (control) Interlocked.Decrement(ref controlWaiters);
+        }
+    }
+
+    private sealed class CallLease(SemaphoreSlim gate) : IDisposable
+    {
+        private bool disposed;
+        public void Dispose()
+        {
+            if (disposed) return;
+            disposed = true;
+            gate.Release();
+        }
     }
 
     private Watermark Verify(GameResponse response, Watermark? previous)

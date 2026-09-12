@@ -48,11 +48,18 @@ public sealed class DefenseQualification(RuntimeSession session)
             DefenseNativeState after = await ReadNativeAsync(token);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromSeconds(15));
-            while (after.Enemies > 0 && after.Health > 0)
+            Task<FactorySnapshot> factoryRead = new FactorySnapshotClient(game).CaptureAsync(pageSize: 37,
+                cancellationToken: deadline.Token);
+            await Task.WhenAll(factoryRead, ReactAsync());
+            FactorySnapshot concurrentSnapshot = await factoryRead;
+            async Task ReactAsync()
             {
-                steps.Add(await controller.StepAsync(deadline.Token));
-                await Task.Delay(150, deadline.Token);
-                after = await ReadNativeAsync(deadline.Token);
+                while (after.Enemies > 0 && after.Health > 0)
+                {
+                    steps.Add(await controller.StepAsync(deadline.Token));
+                    await Task.Delay(150, deadline.Token);
+                    after = await ReadNativeAsync(deadline.Token);
+                }
             }
             OperationReceipt interrupted = await operations.QueryAsync(work.OperationId, token);
             Require(interrupted.Status == "cancelled" && steps.Any(s => s.State == "preempted"),
@@ -68,6 +75,8 @@ public sealed class DefenseQualification(RuntimeSession session)
                 "Defense changed or duplicated the native character or lost pilot attachment.");
             evidence.Add(new { check = "native-reactive-preemption-and-defense", attackTick, firstShot,
                 before, after, interrupted = interrupted.Evidence, steps,
+                concurrentFactory = new { concurrentSnapshot.SnapshotId, concurrentSnapshot.CollectedTick,
+                    recordCount = concurrentSnapshot.Records.Count },
                 scope = "One synthetic attacker, no LLM dependency. Retreat and factory defense remain unqualified." });
             await controller.StopOwnedActionAsync(token);
             await SaveAsync(true, null, token);

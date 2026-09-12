@@ -8,7 +8,7 @@ using var shutdown = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; shutdown.Cancel(); };
 try
 {
-    if (args.Length == 0) throw new ArgumentException("Commands: start [--fixture] [--seed N] [--root PATH] [--installation PATH]; observe --session FILE; rpc --session FILE --action ACTION [--json-file FILE]; connect --session FILE; submit --session FILE --kind KIND --json-file FILE [--ticks N]; defend --session FILE [--seconds N]; verify-native --session FILE; verify-defense --session FILE; verify-pilot --session FILE --phase manual|ai|standalone; stop --session FILE.");
+    if (args.Length == 0) throw new ArgumentException("Commands: start [--fixture] [--seed N] [--root PATH] [--installation PATH]; observe --session FILE; factory --session FILE [--capacity-items item1,item2]; rpc --session FILE --action ACTION [--json-file FILE]; connect --session FILE; submit --session FILE --kind KIND --json-file FILE [--ticks N]; defend --session FILE [--seconds N]; verify-native --session FILE; verify-defense --session FILE; verify-factory --session FILE; verify-pilot --session FILE --phase manual|ai|standalone; stop --session FILE.");
     var options = Parse(args[1..]);
     string? Option(string name) => options.GetValueOrDefault(name);
     string Required(string name) => Option(name) ?? throw new ArgumentException($"Missing --{name}.");
@@ -49,10 +49,28 @@ try
             Print(new { journal = journalPath });
             break;
         }
+        case "factory":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            string[]? capacityItems = Option("capacity-items")?.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            FactorySnapshot snapshot = await new FactorySnapshotClient(session.CreateClient()).CaptureAsync(capacityItems,
+                cancellationToken: shutdown.Token);
+            string output = Path.Combine(session.Directory, $"factory-{Guid.NewGuid():N}.json");
+            await File.WriteAllTextAsync(output, JsonSerializer.Serialize(snapshot, Protocol.Json), shutdown.Token);
+            Print(new { snapshot.SnapshotId, snapshot.CollectedTick, recordCount = snapshot.Records.Count,
+                coverage = snapshot.Coverage, stocks = snapshot.SummarizeStocks(), output });
+            break;
+        }
         case "verify-defense":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new DefenseQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-factory":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new FactoryQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "stop":

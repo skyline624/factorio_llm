@@ -71,6 +71,14 @@ dotnet $hostDll defend --session $sessionFile --seconds 60
 
 Elle observe les ennemis visibles dans la portée de l'arme à balles équipée, interrompt le travail en cours avec confirmation, puis tire sans appel au LLM. Elle prend le contrôle exclusif des commandes host ; le bouton manuel conserve la priorité du pilote. Elle ne réalise pas encore la fuite, le réapprovisionnement ou la protection de toute l'usine. `verify-defense --session $sessionFile` vérifie la préemption et le combat dans une **fixture** en injectant équipement et attaquant ; ce test fonctionne sans client et avec le pilote connecté. Voir le [contrôleur de défense](docs/defense.md).
 
+Pour lire une photographie complète des inventaires et du transit de l'usine **connue**, collectée à un tick unique :
+
+```powershell
+dotnet $hostDll factory --session $sessionFile --capacity-items iron-plate,copper-plate
+```
+
+Le fichier produit contient les enregistrements détaillés ; la console sépare stocks des inventaires, objets en transit et fluides. Les pages restent immuables pendant la lecture. Les capacités d'insertion sont explicitement marquées comme estimations natives et la fabrication engagée est séparée des produits disponibles. `verify-factory --session $sessionFile` prépare une **fixture headless destructible** avec 230 coffres et vérifie la pagination malgré une insertion et une destruction entre deux pages. Voir le [contrat d'état de l'usine](docs/factory-state.md).
+
 Pour sauvegarder puis arrêter le serveur :
 
 ```powershell

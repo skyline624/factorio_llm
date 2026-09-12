@@ -24,4 +24,6 @@ Les interruptions de transport peuvent suspendre les décisions jusqu'à une nou
 
 Le test a réussi sans joueur et avec le pilote connecté au même avatar. Les mesures et les autres validations figurent dans [validation.md](validation.md). Les tests hors ligne couvrent notamment perte de réponse lors du tir ou de l'annulation, changement vers contrôle manuel après préemption, données anciennes et impossibilité de persister une intention.
 
+La qualification effectue également une lecture de photographie d'usine en parallèle de la réaction. Sur la fixture de 230 coffres avec pilote, 507 enregistrements ont été récupérés pendant le combat. Les appels de contrôle passent devant les pages en attente du même client de session ; l'appel natif déjà engagé n'est pas interrompu.
+
 La fuite, les tirs en mouvement, le choix d'équipement, le réapprovisionnement, la protection des bâtiments et les attaques multiples sous charge restent à développer ou qualifier. La politique courante n'est pas une stratégie de survie complète. Elle n'effectue pas automatiquement la reprise du travail interrompu ; celle-ci appartient au futur planificateur après réconciliation des effets.

@@ -27,6 +27,7 @@ Les 2048 derniers reçus sont conservés dans la sauvegarde, sans éviction de l
 - `hello` : initialisation et découverte décrites ci-dessus.
 - `mark_fixture` : `{reason:string}` marque irréversiblement la sauvegarde comme fixture avant toute injection de test. Retour `{fixture:true,reason,markedTick}` ; le premier motif/tick est conservé, et aucun RPC ne remet ce marqueur à faux. `observe.goal` le restitue avec `fixtureReason` et `fixtureTick`.
 - `observe` : `{radius?:number=32,limit?:integer=100}` ; rayon 1 à 64, limite 1 à 200. Retour : `scope`, `snapshotId`, `collectedTick`, `agent`, `operation`, `entities`, `resources`, `enemies`, `players`, `coverage`, `goal`, `recovery`.
+- `factory_snapshot` : collecte atomique paginée des stocks propres connus ; contrat détaillé dans [factory-state.md](factory-state.md). Le scope courant de l'enveloppe reste distinct du scope de la photographie.
 - `submit`, `operation`, `cancel` : registre décrit ci-dessus.
 - `recipes` : `{name?:string,filter?:string,enabledOnly?:boolean=true,offset?:integer=0,limit?:integer=50}` ; données réelles du moteur, pagination au même appel uniquement.
 - `technologies` : `{name?:string,filter?:string,availableOnly?:boolean=false,offset?:integer=0,limit?:integer=50}`.
@@ -70,6 +71,8 @@ Avant déconnexion (`on_pre_player_left_game`), le pilote est détaché et l'ass
 ## Limites précises de l'observation initiale
 
 Chaque appel `observe` collecte dans un seul traitement moteur ; `snapshotId` distingue deux observations au même tick. `agent.inventory` est un dictionnaire objet→quantité du principal. Les listes vides sont sérialisées selon le comportement natif de `helpers.table_to_json` ; le consommateur tolère une collection vide sous forme de table vide.
+
+Les limites ci-dessous concernent l'observation locale rapide `observe`. La commande `factory_snapshot` fournit désormais une lecture distincte de tous les inventaires du registre connu et du transit, avec pages immuables et fluides dédupliqués. Elle ne transforme pas les échantillons fluides de `observe` en valeurs additionnables.
 
 Le registre d'usine contient les entités construites par l'agent et celles de sa force vues localement. Il ne prétend pas découvrir toute une carte ni tous les objets propres anciens. Les compartiments rendus sont lus réellement et les inventaires identiques ne sont pas additionnés sous plusieurs noms. Le nombre d'entités connues et le nombre rendu sont distincts ; au-delà de `limit`, `knownInventoriesComplete` est faux. La version initiale ne possède pas encore de pagination d'instantané immuable.
 

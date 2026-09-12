@@ -7,6 +7,7 @@ local Catalog = require("scripts.catalog")
 local Pilot = require("scripts.pilot")
 local Visibility = require("scripts.visibility")
 local Recovery = require("scripts.recovery")
+local FactorySnapshot = require("scripts.factory_snapshot")
 
 script.on_init(Actor.initialize)
 script.on_configuration_changed(Actor.initialize)
@@ -39,7 +40,7 @@ local function hello(args)
     gameVersion = script.active_mods.base, receiptCapacity = Operations.capacity}
 end
 
-local handlers = {hello = hello, observe = Observation.observe, submit = Operations.submit,
+local handlers = {hello = hello, observe = Observation.observe, factory_snapshot = FactorySnapshot.page, submit = Operations.submit,
   mark_fixture = function(args)
     local reason = U.string(args.reason, "reason")
     local s = Actor.state()

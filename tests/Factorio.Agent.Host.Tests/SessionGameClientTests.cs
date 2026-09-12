@@ -66,6 +66,21 @@ public sealed class SessionGameClientTests : IDisposable
         await Assert.ThrowsAsync<ObjectDisposedException>(() => controller.ExecuteAsync(GameRequest.Create("submit")));
         Assert.Empty(game.Calls);
     }
+
+    [Fact]
+    public async Task ControlObservationOvertakesQueuedFactoryPages()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var game = new BlockingGame();
+        var client = new SessionGameClient(Session(), game);
+        Task<GameResponse> first = client.ExecuteAsync(GameRequest.Create("factory_snapshot"), timeout.Token);
+        await game.Started.Task.WaitAsync(timeout.Token);
+        Task<GameResponse> nextPage = client.ExecuteAsync(GameRequest.Create("factory_snapshot"), timeout.Token);
+        Task<GameResponse> defense = client.ExecuteAsync(GameRequest.Create("observe"), timeout.Token);
+        game.Release.SetResult();
+        await Task.WhenAll(first, nextPage, defense);
+        Assert.Equal(["factory_snapshot", "observe", "factory_snapshot"], game.Calls);
+    }
     public void Dispose() => Directory.Delete(directory, recursive: true);
 
     private sealed class FakeGame : IGameClient
@@ -78,6 +93,23 @@ public sealed class SessionGameClientTests : IDisposable
             Calls.Add(request.Action);
             return Task.FromResult(new GameResponse(1, request.RequestId, true, Tick,
                 Protocol.ToElement(new { scope = new ActorScope(World, "session", "actor", 1, 1) })));
+        }
+    }
+
+    private sealed class BlockingGame : IGameClient
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<string> Calls { get; } = [];
+        public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            Calls.Add(request.Action);
+            if (Calls.Count == 1)
+            {
+                Started.SetResult();
+                await Release.Task.WaitAsync(cancellationToken);
+            }
+            return new(1, request.RequestId, true, 10, Protocol.ToElement(new { scope = new ActorScope("world", "session", "actor", 1, 1) }));
         }
     }
 }
