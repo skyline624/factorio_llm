@@ -7,7 +7,8 @@ namespace Factorio.Agent.Host;
 /// <summary>Early solid production from observed resources and native recipes, with no injected stock.</summary>
 public sealed class ProductionController(IGameClient game, IControllerJournal journal)
 {
-    public async Task<ProductionResult> ProduceAsync(string item, int targetStock, CancellationToken token = default)
+    public async Task<ProductionResult> ProduceAsync(string item, int targetStock, CancellationToken token = default,
+        IReadOnlySet<string>? reservedEntityIds = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(item);
         if (targetStock is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(targetStock));
@@ -37,7 +38,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             if (drillItems.Length > 16) throw new InvalidOperationException("Mining drill geometry exceeds the snapshot budget.");
             SpatialSnapshot map = await spatial.CaptureAsync(drillItems, radius: 48, cancellationToken: deadline.Token);
             if (catalog.Scope != state.Scope || map.Scope != state.Scope) throw new InvalidDataException("Production observations span different actor scopes.");
-            ProductionEntity? ready = state.Entities.FirstOrDefault(e => e.Count("output", item) > 0);
+            ProductionEntity? ready = state.AvailableOutput(item, reservedEntityIds);
             if (ready is not null)
             {
                 await TravelAsync(ready.Position, 3, catalog);
@@ -230,7 +231,11 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
 public sealed record ProductionResult(string Item, int TargetStock, long StartTick, long EndTick, long InitialStock,
     long FinalStock, int Steps, IReadOnlyList<OperationReceipt> Receipts);
 internal sealed record ProductionState(ActorScope Scope, long Tick, string ControlMode, IReadOnlyDictionary<string, long> Inventory,
-    IReadOnlyList<ProductionEntity> Entities);
+    IReadOnlyList<ProductionEntity> Entities)
+{
+    public ProductionEntity? AvailableOutput(string item, IReadOnlySet<string>? reservedEntityIds = null) =>
+        Entities.FirstOrDefault(e => reservedEntityIds?.Contains(e.Id) != true && e.Count("output", item) > 0);
+}
 internal sealed record ProductionEntity(string Id, string Name, MapPosition Position, string? Recipe, JsonElement Inventories, string? PreviousRecipe = null)
 {
     public KnownProductionMachine AsMachine() => new(Id, Name, Recipe, Items("input"), Items("output"));

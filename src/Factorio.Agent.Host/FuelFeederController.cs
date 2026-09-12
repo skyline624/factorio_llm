@@ -81,7 +81,8 @@ public sealed class FuelFeederController(IGameClient game, IControllerJournal jo
         if (chestState.InventoryTotal("chest") != chestState.Count("chest", fuel))
             throw new InvalidDataException("The feeder chest contains unrelated items; refuse to mix its supply.");
         int missing = checked((int)Math.Max(0, reserve - chestState.Count("chest", fuel)));
-        await producer.RunAsync(fuel, Math.Max(1, missing + 2), token);
+        await production.ProduceAsync(fuel, Math.Max(1, missing + 2), token,
+            new HashSet<string>(StringComparer.Ordinal) { chestId });
         await controller.ApproachEntityAsync(chestId, selected.Container.Position, catalog, token);
         var factory = new FactorySnapshotClient(game);
         FactorySnapshot capacity = await factory.CaptureAsync([fuel], cancellationToken: token);

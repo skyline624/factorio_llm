@@ -31,8 +31,24 @@ La première tentative de lecture indépendante avait échoué sur une recherche
 
 Les journaux et preuves restent privés, avec la sauvegarde du monde. Le serveur a été arrêté proprement. Les fenêtres graphiques existantes ont été conservées, sans en ouvrir d'autre.
 
+## Renouvellement pendant la production
+
+La maintenance des assembleuses, laboratoires et machines à fluides reconnaît un ravitailleur existant par ses cibles natives et son réseau électrique. Elle conserve le combustible du coffre ou de la main. Un coffre partagé, un mélange de matériaux ou une observation de stock manquante sont refusés.
+
+Au début d’un lot, elle prépare une réserve calculée depuis son énergie attendue, avec une marge de 25 %, bornée entre 50 et 500 unités. Les passages suivants demandent un complément lorsque le coffre passe sous 80 % de cette cible. Le personnage collecte le manque, revient au coffre, revérifie les identités, les stocks et la capacité native, puis insère la quantité disponible. Le coffre à renouveler est exclu des sources de collecte afin d’éviter un prélèvement suivi d’une remise des mêmes objets.
+
+Le reçu doit confirmer la quantité effectivement transférée. Une nouvelle photographie donne le stock du coffre et de la main après transfert ; le contrôleur ne déduit pas ce résultat en additionnant la quantité demandée à un stock ancien. La consommation pendant les trajets peut laisser un stock inférieur à la cible après un passage.
+
+## Qualification du renouvellement
+
+Un premier essai a révélé un prélèvement circulaire : le collecteur prenait cinq unités dans le coffre destiné au remplissage, puis y remettait six unités. Les reçus étaient exacts, mais le gain net ne satisfaisait pas le renouvellement demandé. Cet essai ne constitue pas une preuve de réapprovisionnement. Deux tests reproduisent le défaut et vérifient désormais l’exclusion du coffre, avec ou sans autre stock disponible. La commande de préparation du ravitailleur utilise la même exclusion.
+
+L’essai corrigé réutilise le monde normal et les entités 637, 661 et 662. Au tick **974611**, le coffre contient 44 unités de bois pour une cible de 50. Le personnage porte trois unités ; une récolte native en apporte quatre de plus entre les ticks **975808 et 975874**. Le transfert corrélé au tick **976205** insère six unités : la photographie passe de **44 à 50 dans le coffre**, avec une main vide. Aucun prélèvement dans ce coffre ne précède ce remplissage.
+
+Une lecture native indépendante au tick **977718** confirme 50 unités au coffre, cinq à la chaudière, les mêmes cibles du bras et le réseau électrique 1. Le personnage conserve 250 points de vie ; pollution active, mode pacifique désactivé et aucun joueur connecté.
+
 ## Limites
 
-Cet essai vérifie un approvisionnement sur réserve finie et une faible charge, pas une centrale industrielle ni un débit maximal. Le renouvellement automatique de la réserve, les tapis depuis une extraction de combustible et l'intégration de l'installation de ce ravitailleur dans la stratégie restent à réaliser. La maintenance de production existante ne doit pas être présentée comme un remplissage automatique du nouveau coffre.
+Cet essai vérifie un approvisionnement sur réserve finie et une faible charge, pas une centrale industrielle ni un débit maximal. Le renouvellement intervient aux points de maintenance de la production ; il ne tourne pas pendant un long trajet de collecte ou une indisponibilité du contrôleur. Les tapis depuis une extraction de combustible et l’intégration de l’installation du ravitailleur dans la stratégie restent à réaliser. La borne de réserve ne garantit pas l’énergie totale d’un lot industriel.
 
 Une implantation locale peut être refusée faute de place, même si une réorganisation générale de l'usine serait possible. Le plan actuel autorise un seul nouveau poteau. Les réparations après destruction et les changements d'alimentation pendant une attaque restent à qualifier. Ce monde comporte des corrections de développement antérieures ; cet essai ne compte pas comme une des trois campagnes autonomes jusqu'à la fusée.

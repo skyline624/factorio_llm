@@ -92,7 +92,6 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         RequireScope(owned.Scope, catalog);
         ObservedPower power = map.Entities.Single(e => e.Id == machineId).Power
             ?? throw new InvalidDataException("Missing power observation for the consumer.");
-        if (!reserve && power.Energy > 0) return;
         var generators = map.Entities.Where(e => map.Prototypes[e.Name].Type == "generator" && e.Power?.NetworkId == power.NetworkId).ToArray();
         SpatialEntity? boiler = map.Entities.FirstOrDefault(e => map.Prototypes[e.Name].Type == "boiler" && owned.Entities.Any(o => o.Id == e.Id)
             && generators.Any(g => e.FluidConnections?.Any(f => f.TargetEntityId == g.Id) == true || g.FluidConnections?.Any(f => f.TargetEntityId == e.Id) == true));
@@ -101,6 +100,9 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
             if (power.Energy > 0) return;
             throw new InvalidOperationException("No observed maintainable steam supply for the unpowered consumer.");
         }
+        if (power.NetworkId is { } networkId && await new FuelReserveController(game, journal)
+            .TryMaintainAsync(boiler.Id, networkId, map, catalog, controller, expectedEnergy, reserve, power.Energy <= 0, token)) return;
+        if (!reserve && power.Energy > 0) return;
         var categories = map.Prototypes[boiler.Name].FuelCategories;
         string fuel = catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.FuelCategory is { } category && categories?.ContainsKey(category) == true
                 && catalog.Mining.Values.Any(products => products.Any(m => m.Name == p.Key && m.DeterministicItem)))
