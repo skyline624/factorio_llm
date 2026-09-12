@@ -22,4 +22,4 @@ La régression du laboratoire avec le composant électrique partagé a égalemen
 
 Cette capacité traite un produit solide déterministe et jusqu'à huit ingrédients solides distincts. Les fluides, coproduits, transports continus par tapis/bras, dimensionnement industriel du réseau et coordination de machines restent à implémenter. Le compteur de cycles est une mesure native, distincte du stock final : une reprise peut récupérer des produits déjà terminés sans nouveau cycle. Une erreur ou un transfert partiel impose une réconciliation ; aucune répétition aveugle ne démarre une autre méthode.
 
-L'essai en économie normale est encore en cours. Aucun lancement de fusée n'est qualifié.
+Dans le monde normal de développement, l'essai a préparé neuf plaques de fer et cinq engrenages pour la machine, puis a été interrompu après plus de vingt étapes d'exploration du cuivre. L'acteur a été vérifié immobile et le dernier état sauvegardé. Aucun assembleur n'a encore été installé dans ce monde : la mémoire persistante des ressources doit corriger ces recherches répétées avant de reprendre la qualification. Aucun lancement de fusée n'est qualifié.
