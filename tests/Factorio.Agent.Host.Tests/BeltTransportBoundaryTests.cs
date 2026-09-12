@@ -65,7 +65,7 @@ public sealed class BeltTransportBoundaryTests
         Assert.Throws<InvalidOperationException>(() => BeltTransportBoundary.From(map, Snapshot(2, 10, 8, 1, 0, 0), catalog, "source", "target", "gear"));
     }
 
-    private static SpatialSnapshot Map()
+    internal static SpatialSnapshot Map()
     {
         var map = BeltTransportPlannerTests.Map(true);
         return map with
@@ -83,16 +83,17 @@ public sealed class BeltTransportBoundaryTests
         new(id, "arm", new(0, 0), new(new(0, 0), new(1, 1)), 0, "own", Power: new(10, 1), PickupTargetId: source, DropTargetId: target);
     private static SpatialEntity Belt(string id) =>
         new(id, "belt", new(0, 0), new(new(0, 0), new(1, 1)), 4, "own", BeltConnections: new([], []));
-    private static ProductionCatalog Catalog(SpatialSnapshot map) => new(map.Scope, 0,
+    internal static ProductionCatalog Catalog(SpatialSnapshot map) => new(map.Scope, 0,
         [new("gear", true, "crafting", .5, [new("iron", "item", 2)], [new("gear", "item", 1)], false)],
         new Dictionary<string, NativeItem>(), new Dictionary<string, NativeMaterial[]>(),
         new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>());
 
-    private static FactorySnapshot Snapshot(long rootStock, long cycles, long bufferStock, long upstreamTransit, long downstreamTransit, long targetStock)
+    internal static FactorySnapshot Snapshot(long rootStock, long cycles, long bufferStock, long upstreamTransit, long downstreamTransit, long targetStock)
     {
         var records = new List<FactoryRecord>();
         Add("root", "entity", "root", new { type = "assembling-machine" });
-        Add("root:work", "work", "root", new { recipe = "gear", outputInventoryId = "root:inventory", productsFinished = cycles, inProcess = false });
+        Add("root:work", "work", "root", new { recipe = "gear", inputInventoryId = "root:input", outputInventoryId = "root:inventory", productsFinished = cycles, inProcess = false });
+        Add("root:input", "inventory", "root", new { items = new { iron = 0 } });
         foreach (var (id, stock) in new[] { ("root", rootStock), ("source", bufferStock), ("target", targetStock) })
         {
             if (id != "root") Add(id, "entity", id, new { type = "container" });

@@ -36,6 +36,15 @@ public sealed class AssemblyPlanner
 public sealed record AssemblyRequirements(IReadOnlyDictionary<string, int> InputsToInsert, long ReadyOutput, bool InProcess,
     IReadOnlyDictionary<string, double> FluidUnitsToSupply)
 {
+    public static int BatchesAfterTransit(long targetStock, long carried, long outputTransit, double yield, int batchLimit)
+    {
+        if (targetStock < 0 || carried < 0 || outputTransit < 0 || !double.IsFinite(yield) || yield <= 0 || batchLimit < 1)
+            throw new ArgumentOutOfRangeException(nameof(targetStock));
+        long missing = Math.Max(0, targetStock - carried);
+        if (outputTransit >= missing) return 0;
+        return checked((int)Math.Min(batchLimit, Math.Ceiling((missing - outputTransit) / yield)));
+    }
+
     public static AssemblyRequirements From(FactorySnapshot snapshot, string entityId, NativeRecipe recipe, int batches)
     {
         if (batches < 1 || recipe.Products.Count != 1 || !recipe.Products[0].DeterministicItem

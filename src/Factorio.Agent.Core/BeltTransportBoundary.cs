@@ -25,6 +25,11 @@ public sealed class BeltTransportBoundary
 
     public static BeltTransportBoundary From(SpatialSnapshot map, FactorySnapshot stock, ProductionCatalog catalog,
         string sourceId, string targetId, string item)
+        => TryFrom(map, stock, catalog, sourceId, targetId, item)
+            ?? throw new InvalidOperationException("The upstream boundary cannot supply this deterministic material.");
+
+    public static BeltTransportBoundary? TryFrom(SpatialSnapshot map, FactorySnapshot stock, ProductionCatalog catalog,
+        string sourceId, string targetId, string item)
     {
         if (map.Scope != stock.Scope || map.Scope != catalog.Scope) throw new InvalidDataException("Transport boundary scopes differ.");
         var buffers = new List<MaterialEndpoint>();
@@ -34,8 +39,12 @@ public sealed class BeltTransportBoundary
         MaterialEndpoint root;
         while (true)
         {
+            if (current == targetId) return null; // This candidate would feed the target from its own downstream output.
             if (!visited.Add(current) || visited.Count > 33) throw new InvalidDataException("A transport boundary contains a cycle or exceeds 32 endpoints.");
-            var endpoint = MaterialEndpoint.From(stock, catalog, current, item, true);
+            var endpoint = MaterialEndpoint.TryFrom(stock, catalog, current, item, true);
+            if (endpoint is null) return null;
+            if (stock.Records.Single(r => r.Id == endpoint.InventoryId).Data.GetProperty("items").EnumerateObject()
+                .Any(p => p.Name != item && p.Value.GetInt64() > 0)) return null;
             endpoint.Read(stock, item);
             var feeders = map.Entities.Where(e => e.DropTargetId == current).ToArray();
             if (endpoint.Recipe is not null || feeders.Length == 0) { root = endpoint; break; }

@@ -147,7 +147,7 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
         SpatialSnapshot map = await new SpatialClient(game).CaptureAsync(drillItems, radius: 48, cancellationToken: token);
         if (map.Scope != state.Scope) throw new InvalidDataException("Production observations span different actor scopes.");
         SmeltingPlan? plan = new SmeltingPlanner().Find(item, catalog, map, state.Inventory,
-            state.Entities.ToDictionary(e => e.Id, e => e.AsMachine(), StringComparer.Ordinal));
+            state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id)).ToDictionary(e => e.Id, e => e.AsMachine(), StringComparer.Ordinal));
         return (catalog, map, plan);
     }
 }

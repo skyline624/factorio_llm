@@ -6,10 +6,16 @@ namespace Factorio.Agent.Host;
 public sealed record BeltTransportResult(string SourceId, string TargetId, string Item, int Requested, long Delivered,
     long StartTick, long EndTick, BeltTransportInstallation Installation, int PoweredSamples);
 
+public sealed record PreparedBeltTransport(BeltTransportFlow Flow, ProductionCatalog Catalog, long ObservationBudget, IReadOnlySet<string> ReservedEntityIds);
+
 /// <summary>Installs or reuses an isolated native transport line and reconciles both endpoints with all transit.</summary>
 public sealed class BeltTransportController(IGameClient game, IControllerJournal journal)
 {
-    public async Task<BeltTransportResult> RunAsync(string sourceId, string targetId, string item, int quantity, CancellationToken token = default,
+    private readonly FactorySnapshotClient factory = new(game);
+    private readonly SpatialClient spatial = new(game);
+    private static readonly BeltTransportEquipment Equipment = new("transport-belt", "inserter", "small-electric-pole");
+
+    public async Task<PreparedBeltTransport> EnsureAsync(string sourceId, string targetId, string item, int quantity, CancellationToken token = default,
         IReadOnlySet<string>? reservedEntityIds = null)
     {
         if (sourceId == targetId || quantity is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(quantity));
@@ -19,17 +25,14 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         var production = new ProductionController(game, journal);
         var known = await production.ObserveAsync(token);
-        RequireScope(known.Scope);
+        RequireScope(known.Scope, catalog.Scope);
         var sourceEntity = known.Entities.Single(e => e.Id == sourceId);
         _ = known.Entities.Single(e => e.Id == targetId);
-        var equipment = new BeltTransportEquipment("transport-belt", "inserter", "small-electric-pole");
-        string[] items = [equipment.Belt, equipment.Inserter, equipment.Pole];
-        var factory = new FactorySnapshotClient(game);
-        var spatial = new SpatialClient(game);
+        var equipment = Equipment;
         await using var controller = new SpatialController(game, journal);
         await controller.ApproachEntityAsync(sourceId, sourceEntity.Position, catalog, token);
-        var map = await MapAsync();
-        var initial = await StockAsync();
+        var map = await MapAsync(catalog.Scope, sourceId, targetId, token);
+        var initial = await StockAsync(catalog.Scope, token);
         var boundary = BeltTransportBoundary.From(map, initial, catalog, sourceId, targetId, item);
         var reserved = boundary.ReservedEntityIds.Concat(reservedEntityIds ?? new HashSet<string>()).Append(targetId).ToHashSet(StringComparer.Ordinal);
         var target = MaterialEndpoint.From(initial, catalog, targetId, item, false);
@@ -68,7 +71,7 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
             }
             remaining.Remove(plan.TargetInserter.Position);
             string targetArm = await builder.BuildAtAsync(equipment.Inserter, plan.TargetInserter, catalog, controller, token, remaining);
-            var beforeActivation = await StockAsync();
+            var beforeActivation = await StockAsync(catalog.Scope, token);
             baseline = boundary.Read(beforeActivation, target, item, beltIds, [targetArm]);
             startTick = beforeActivation.CollectedTick;
             string sourceArm = await builder.BuildAtAsync(equipment.Inserter, plan.SourceInserter, catalog, controller, token);
@@ -88,6 +91,31 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
             installation.BeltIds.Count + boundary.Segments.Sum(s => s.Installation.BeltIds.Count), speed,
             BeltTransportTiming.SecondsPerItem(boundary.Root, map, catalog), BeltTransportTiming.SecondsPerItem(target, map, catalog));
         await journal.AppendAsync("belt-transport-window", new { startTick, observationBudget, quantity }, token);
+        map = await MapAsync(catalog.Scope, sourceId, targetId, token);
+        boundary.VerifyConnection(map, targetId, installation);
+        var flow = new BeltTransportFlow(catalog.Scope, target, item, boundary, installation, baseline, startTick);
+        await journal.AppendAsync("belt-transport-prepared", new { sourceId, targetId, item, installation, startTick }, token);
+        return new(flow, catalog, observationBudget, reserved);
+
+
+    }
+
+    public async Task<BeltTransportResult> RunAsync(string sourceId, string targetId, string item, int quantity, CancellationToken token = default,
+        IReadOnlySet<string>? reservedEntityIds = null)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromMinutes(45));
+        token = deadline.Token;
+        var prepared = await EnsureAsync(sourceId, targetId, item, quantity, token, reservedEntityIds);
+        var flow = prepared.Flow;
+        var catalog = prepared.Catalog;
+        var boundary = flow.Boundary;
+        var target = flow.Target;
+        var installation = flow.Installation;
+        long startTick = flow.StartTick, observationBudget = prepared.ObservationBudget;
+        var reserved = prepared.ReservedEntityIds;
+        await using var controller = new SpatialController(game, journal);
+        SpatialSnapshot map;
         int powered = 0;
         bool outputPrepared = false;
         long outputInstallationTicks = 0;
@@ -95,14 +123,12 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
         {
             var waited = await controller.WorkAsync("wait", new { ticks = 30 }, 600, token: token);
             if (waited.Status != "completed") throw new InvalidOperationException("Transport supervision did not complete its native wait.");
-            map = await MapAsync();
-            boundary.VerifyConnection(map, targetId, installation);
-            var current = await StockAsync();
-            var reading = boundary.Read(current, target, item, installation.BeltIds,
-                [installation.SourceInserterId, installation.TargetInserterId]);
-            long delivered = reading.DeliveredSince(baseline);
-            bool energized = map.Entities.Single(e => e.Id == installation.SourceInserterId).Power?.Energy > 0
-                && map.Entities.Single(e => e.Id == installation.TargetInserterId).Power?.Energy > 0;
+            map = await MapAsync(catalog.Scope, sourceId, targetId, token);
+            var current = await StockAsync(catalog.Scope, token);
+            var measurement = flow.Measure(map, current);
+            var reading = measurement.Reading;
+            long delivered = measurement.Delivered;
+            bool energized = measurement.Energized;
             if (energized) powered++;
             await journal.AppendAsync("belt-transport-measurement", new { current.SnapshotId, current.CollectedTick, reading, delivered, energized }, token);
             if (delivered >= quantity)
@@ -114,7 +140,7 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
             if (!outputPrepared && target.Recipe is not null && map.Entities.Single(e => e.Id == targetId).Status == "full_output")
             {
                 await new MachineOutputBufferController(game, journal).EnsureAsync(targetId, sourceId, catalog, controller, token, reserved);
-                outputInstallationTicks = checked(outputInstallationTicks + (await StockAsync()).CollectedTick - current.CollectedTick);
+                outputInstallationTicks = checked(outputInstallationTicks + (await StockAsync(catalog.Scope, token)).CollectedTick - current.CollectedTick);
                 outputPrepared = true;
                 // The next atomic snapshot includes all production and transfers while the output line was installed.
                 continue;
@@ -125,23 +151,26 @@ public sealed class BeltTransportController(IGameClient game, IControllerJournal
                 throw new TimeoutException($"The native transport window ended after {delivered} verified deliveries; preserve the installed line.");
         }
 
-        void RequireScope(ActorScope scope)
-        {
-            if (scope != catalog.Scope) throw new InvalidDataException("Actor scope changed during belt transport.");
-        }
-        async Task<SpatialSnapshot> MapAsync()
-        {
-            var observed = await spatial.CaptureAsync(items, 48, token);
-            RequireScope(observed.Scope);
-            if (!observed.Entities.Any(e => e.Id == sourceId) || !observed.Entities.Any(e => e.Id == targetId))
-                throw new InvalidOperationException("Both transport endpoints must remain in the observed construction area.");
-            return observed;
-        }
-        async Task<FactorySnapshot> StockAsync()
-        {
-            var observed = await factory.CaptureAsync(cancellationToken: token);
-            RequireScope(observed.Scope);
-            return observed;
-        }
+
+    }
+    private static void RequireScope(ActorScope actual, ActorScope expected)
+    {
+        if (actual != expected) throw new InvalidDataException("Actor scope changed during belt transport.");
+    }
+
+    private async Task<SpatialSnapshot> MapAsync(ActorScope scope, string sourceId, string targetId, CancellationToken token)
+    {
+        var observed = await spatial.CaptureAsync([Equipment.Belt, Equipment.Inserter, Equipment.Pole], 48, token);
+        RequireScope(observed.Scope, scope);
+        if (!observed.Entities.Any(e => e.Id == sourceId) || !observed.Entities.Any(e => e.Id == targetId))
+            throw new InvalidOperationException("Both transport endpoints must remain in the observed construction area.");
+        return observed;
+    }
+
+    private async Task<FactorySnapshot> StockAsync(ActorScope scope, CancellationToken token)
+    {
+        var observed = await factory.CaptureAsync(cancellationToken: token);
+        RequireScope(observed.Scope, scope);
+        return observed;
     }
 }

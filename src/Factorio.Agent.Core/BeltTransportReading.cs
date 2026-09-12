@@ -3,21 +3,28 @@ namespace Factorio.Agent.Core;
 public sealed record MaterialEndpoint(string EntityId, string InventoryId, string? Recipe, long UnitsPerCycle, bool Source)
 {
     public static MaterialEndpoint From(FactorySnapshot snapshot, ProductionCatalog catalog, string entityId, string item, bool source)
+        => TryFrom(snapshot, catalog, entityId, item, source)
+            ?? throw new InvalidOperationException("Transport requires a container or an enabled, configured deterministic crafting endpoint.");
+
+    public static MaterialEndpoint? TryFrom(FactorySnapshot snapshot, ProductionCatalog catalog, string entityId, string item, bool source)
     {
         snapshot.SummarizeStocks();
         var entity = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == entityId);
         if (entity.Data.GetProperty("type").GetString() == "container")
             return new(entityId, snapshot.Records.Single(r => r.Kind == "inventory" && r.EntityId == entityId).Id, null, 0, source);
         if (entity.Data.GetProperty("type").GetString() is not ("assembling-machine" or "furnace"))
-            throw new InvalidOperationException("Transport endpoints must be containers or deterministic crafting machines.");
-        var work = snapshot.Records.Single(r => r.Kind == "work" && r.EntityId == entityId);
-        string recipeName = work.Data.GetProperty("recipe").GetString() ?? throw new InvalidOperationException("A transport machine must have a configured recipe.");
+            return null;
+        var works = snapshot.Records.Where(r => r.Kind == "work" && r.EntityId == entityId).ToArray();
+        if (works.Length != 1) throw new InvalidDataException("Missing or ambiguous native endpoint work evidence.");
+        var work = works[0];
+        string? recipeName = work.Data.TryGetProperty("recipe", out var configured) ? configured.GetString() : null;
+        if (recipeName is null) return null;
         var recipe = catalog.Recipes.Single(r => r.Name == recipeName);
-        if (!recipe.Enabled) throw new InvalidOperationException("A configured transport endpoint recipe is still locked by research.");
+        if (!recipe.Enabled) return null;
         var materials = source ? recipe.Products : recipe.Ingredients;
         if ((source && materials.Count != 1) || !materials.Any(m => m.Name == item)
             || materials.Where(m => m.Name == item).Any(m => !m.DeterministicItem))
-            throw new InvalidOperationException("The transport item is not a deterministic material of the configured endpoint.");
+            return null;
         long units = checked((long)materials.Where(m => m.Name == item).Sum(m => m.Amount!.Value));
         return new(entityId, work.Data.GetProperty(source ? "outputInventoryId" : "inputInventoryId").GetString()!, recipeName, units, source);
     }

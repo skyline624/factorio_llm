@@ -12,6 +12,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(item);
         if (targetStock is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(targetStock));
+        using var reservations = ProductionReservations.Enter(reservedEntityIds);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromMinutes(15));
         await using var controller = new SpatialController(game, journal);
@@ -51,7 +52,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 }, 600);
                 continue;
             }
-            ProductionEntity? engaged = state.Entities.FirstOrDefault(e => e.InventoryTotal("input") > 0
+            ProductionEntity? engaged = state.Entities.FirstOrDefault(e => !ProductionReservations.Current.Contains(e.Id) && e.InventoryTotal("input") > 0
                 && catalog.Recipes.Any(r => r.Name == e.Recipe && r.Products.Count == 1 && r.Products[0].Name == item
                     && r.Products[0].DeterministicItem && r.Ingredients.Count == 1 && r.Ingredients[0].DeterministicItem)
                 && catalog.Machines.Values.Any(m => m.EntityName == e.Name));
@@ -63,7 +64,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 continue;
             }
             ProductionStep step = planner.Next(item, targetStock, state.Inventory, catalog, map,
-                state.Entities.Select(e => e.AsMachine()).ToArray());
+                state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id)).Select(e => e.AsMachine()).ToArray());
             await journal.AppendAsync("production-step", new { item, targetStock, stepNumber, state.Tick, step }, deadline.Token);
             switch (step.Kind)
             {
@@ -132,7 +133,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 throw new InvalidOperationException("Automatic furnace selection currently requires one solid ingredient and product.");
             var supported = catalog.Machines.Where(m => m.Value.Categories.ContainsKey(recipe.Category))
                 .OrderBy(m => m.Key, StringComparer.Ordinal).ToArray();
-            var owned = state.Entities.Where(e => supported.Any(m => m.Value.EntityName == e.Name))
+            var owned = state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id) && supported.Any(m => m.Value.EntityName == e.Name))
                 .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).FirstOrDefault(e => e.AsMachine().CanProcess(recipe));
             if (owned is null)
                 throw new InvalidOperationException("The planned compatible furnace is unavailable; reconcile before replanning.");
@@ -234,7 +235,7 @@ internal sealed record ProductionState(ActorScope Scope, long Tick, string Contr
     IReadOnlyList<ProductionEntity> Entities)
 {
     public ProductionEntity? AvailableOutput(string item, IReadOnlySet<string>? reservedEntityIds = null) =>
-        Entities.FirstOrDefault(e => reservedEntityIds?.Contains(e.Id) != true && e.Count("output", item) > 0);
+        Entities.FirstOrDefault(e => !ProductionReservations.Current.Contains(e.Id) && reservedEntityIds?.Contains(e.Id) != true && e.Count("output", item) > 0);
 }
 internal sealed record ProductionEntity(string Id, string Name, MapPosition Position, string? Recipe, JsonElement Inventories, string? PreviousRecipe = null)
 {

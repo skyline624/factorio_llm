@@ -76,4 +76,4 @@ Les positions d'approche pour construire ou interagir évitent les tapis : le pe
 
 La commande utilise des réseaux électriques existants ; elle n'assure pas leur ravitaillement. Un stockage de sortie finalement saturé peut à nouveau bloquer la production. L'observation de transport garde l'arbitrage de défense habituel, mais cet essai ne qualifie pas une attaque sur les deux lignes.
 
-La stratégie LLM et la production générale ne synthétisent pas encore automatiquement toutes les liaisons de l'usine. Ce composant et son stockage de sortie constituent une étape vers cette intégration. La fixture préparée ne compte parmi aucune des trois campagnes finales jusqu'à la fusée.
+La stratégie LLM et la production générale ne synthétisent pas encore automatiquement toutes les liaisons de l'usine. La commande générale d’assemblage utilise désormais les sources locales observées et leurs liaisons ; son [essai avec deux ingrédients](assembly-transport.md) documente cette intégration partielle. La fixture préparée ne compte parmi aucune des trois campagnes finales jusqu'à la fusée.

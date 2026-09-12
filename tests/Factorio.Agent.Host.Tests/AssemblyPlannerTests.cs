@@ -5,6 +5,15 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class AssemblyPlannerTests
 {
+    [Theory]
+    [InlineData(1, 1, 2)]
+    [InlineData(3, 1, 0)]
+    [InlineData(1, 2, 1)]
+    public void PartialOutputTransitReducesTheRemainingProductionBatches(long transit, double yield, int expected)
+    {
+        Assert.Equal(expected, AssemblyRequirements.BatchesAfterTransit(65, 62, transit, yield, 16));
+    }
+
     private static readonly NativeRecipe Circuit = new("electronic-circuit", true, "crafting", .5,
         [new("iron-plate", "item", 1), new("copper-cable", "item", 3)], [new("electronic-circuit", "item", 1)], false);
 
