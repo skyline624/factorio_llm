@@ -8,6 +8,9 @@ public sealed class ExplorationPlanner
     private readonly Dictionary<(int X, int Y), int> visits = [];
     private readonly Dictionary<(int X, int Y), int> frontierAttempts = [];
     private MapPosition? origin;
+    private MapPosition? frontierGoal;
+    private double frontierDistance;
+    private int stalledFrontierSteps;
 
     public MapPosition Choose(SpatialSnapshot map, string wanted, ProductionCatalog catalog, MapPosition? destination = null)
     {
@@ -20,6 +23,17 @@ public sealed class ExplorationPlanner
             for (int y = (int)Math.Ceiling(map.Bounds.Min.Y / 4); y < map.Bounds.Max.Y / 4; y++) observed.Add((x, y));
         MapPosition? known = destination ?? resources.Values.Where(e => catalog.Mining[e.Name].Any(p => p.Name == wanted && p.DeterministicItem))
             .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).Select(e => e.Position).FirstOrDefault();
+        var field = new SpatialCollisionField(map);
+        if (known is not null) frontierGoal = null;
+        else if (frontierGoal is not null)
+        {
+            double distance = frontierGoal.DistanceTo(map.Actor.Position);
+            stalledFrontierSteps = frontierDistance - distance < 1 ? stalledFrontierSteps + 1 : 0;
+            frontierDistance = distance;
+            if (distance > 8 && stalledFrontierSteps < 4
+                && (!map.Bounds.Contains(frontierGoal) || field.Walkable(frontierGoal))) known = frontierGoal;
+            else frontierGoal = null;
+        }
         if (known is null)
         {
             var frontier = new HashSet<(int X, int Y)>();
@@ -30,9 +44,11 @@ public sealed class ExplorationPlanner
                 .ThenBy(p => new MapPosition(p.X * 4, p.Y * 4).DistanceTo(map.Actor.Position)).ThenBy(p => p.Y).ThenBy(p => p.X).FirstOrDefault();
             if (frontier.Count == 0) throw new InvalidOperationException("Exploration exhausted its attempted frontiers.");
             known = new(selected.X * 4, selected.Y * 4);
+            frontierGoal = known;
+            frontierDistance = known.DistanceTo(map.Actor.Position);
+            stalledFrontierSteps = 0;
             frontierAttempts[selected] = frontierAttempts.GetValueOrDefault(selected) + 1;
         }
-        var field = new SpatialCollisionField(map);
         var candidates = new List<(MapPosition Point, double Score, (int, int) Cell)>();
         for (int x = (int)Math.Ceiling(map.Bounds.Min.X / 4) + 1; x < map.Bounds.Max.X / 4 - 1; x++)
             for (int y = (int)Math.Ceiling(map.Bounds.Min.Y / 4) + 1; y < map.Bounds.Max.Y / 4 - 1; y++)

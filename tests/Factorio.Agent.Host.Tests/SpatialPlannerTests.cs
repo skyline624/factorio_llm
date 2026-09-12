@@ -110,6 +110,28 @@ public sealed class SpatialPlannerTests
 
     private static SpatialEntity Wall(WorldBox box) => new("wall", "wall", new(2, 0), box, 0, "agent");
 
+    [Fact]
+    public void RequiredTileRuleRejectsDryGroundEvenWhenCollisionBoxIsClear()
+    {
+        SpatialSnapshot map = Map([]);
+        var geometry = map.Prototypes["chest"] with
+        {
+            TileBuildability = [new(new(new(-0.4, -1.4), new(0.4, -0.6)),
+            Ground, Solid)]
+        };
+        Assert.False(new SpatialCollisionField(map).PlacementClear(geometry, new(4, 4), 0));
+    }
+
+    [Fact]
+    public void ConstructionApproachLeavesTheFutureBuildingFootprint()
+    {
+        SpatialSnapshot map = Map([]);
+        MapPosition? approach = new PlacementPlanner().FindApproach(new(map), "furnace", new(new(0, 0), 0, 0));
+        Assert.NotNull(approach);
+        Assert.False(new WorldBox(new(-1, -1), new(1, 1)).Contains(approach));
+        Assert.InRange(approach.DistanceTo(new(0, 0)), 1, map.Actor.BuildDistance - 1);
+    }
+
     internal static SpatialSnapshot Map(IReadOnlyList<SpatialEntity> entities)
     {
         var prototypes = new Dictionary<string, EntityGeometry>
@@ -127,7 +149,9 @@ public sealed class SpatialPlannerTests
             Enumerable.Range(-12, 25).Select(y => new TileRun(-12, y, 25, "grass")).ToArray(),
             entities, new Dictionary<string, PlaceableItem>
             {
-                ["furnace"] = new("furnace", 50), ["chest"] = new("chest", 50), ["pump"] = new("pump", 50)
+                ["furnace"] = new("furnace", 50),
+                ["chest"] = new("chest", 50),
+                ["pump"] = new("pump", 50)
             }, new(true, true, "current-character-local-area", 12));
     }
 }

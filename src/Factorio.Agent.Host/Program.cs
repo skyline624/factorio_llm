@@ -21,6 +21,7 @@ try
           produce --session FILE --item NAME --quantity N
           automate-smelting --session FILE --item NAME --quantity N
           run-goal --session FILE
+          steam-power --session FILE [--plan FILE]
           rpc --session FILE --action ACTION [--json-file FILE]
           connect --session FILE
           submit --session FILE --kind KIND --json-file FILE [--ticks N]
@@ -98,6 +99,18 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new FactoryQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "steam-power":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            string journalPath = Path.Combine(session.Directory, $"steam-power-{Guid.NewGuid():N}.jsonl");
+            var controller = new SteamPowerController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            SteamPowerPlan? resume = Option("plan") is { } planPath
+                ? JsonSerializer.Deserialize<SteamPowerPlan>(await File.ReadAllTextAsync(planPath, shutdown.Token), Protocol.Json)
+                    ?? throw new InvalidDataException("Missing power recovery plan.") : null;
+            Print(new { result = await controller.RunAsync(shutdown.Token, resume), journalPath });
             break;
         }
         case "run-goal":

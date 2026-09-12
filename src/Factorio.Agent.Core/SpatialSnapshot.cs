@@ -51,18 +51,35 @@ public sealed record CollisionMask(
 
 public sealed record EntityGeometry(string Name, string Type, WorldBox CollisionBox, CollisionMask Mask, int TileWidth, int TileHeight,
     double? MiningRadius = null, MapPosition? MiningOutput = null, string? ResourceCategory = null,
-    IReadOnlyDictionary<string, bool>? ResourceCategories = null, IReadOnlyDictionary<string, bool>? FuelCategories = null);
+    IReadOnlyDictionary<string, bool>? ResourceCategories = null, IReadOnlyDictionary<string, bool>? FuelCategories = null,
+    [property: JsonConverter(typeof(NativeArrayConverter<FluidBoxGeometry>))] IReadOnlyList<FluidBoxGeometry>? FluidBoxes = null,
+    MapPosition? FluidSourceOffset = null,
+    [property: JsonConverter(typeof(NativeArrayConverter<TileBuildRule>))] IReadOnlyList<TileBuildRule>? TileBuildability = null,
+    double? SupplyArea = null);
+public sealed record FluidBoxGeometry(int Index, string ProductionType,
+    [property: JsonConverter(typeof(NativeArrayConverter<FluidPortGeometry>))] IReadOnlyList<FluidPortGeometry> Connections,
+    string? Filter = null, double? MinimumTemperature = null, double? MaximumTemperature = null);
+public sealed record FluidPortGeometry(int Index, string Type, int Direction, string FlowDirection,
+    [property: JsonConverter(typeof(NativeArrayConverter<MapPosition>))] IReadOnlyList<MapPosition> Positions,
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Categories);
+public sealed record TileBuildRule(WorldBox Area, CollisionMask CollidingTiles, CollisionMask RequiredTiles);
 public sealed record SpatialActor(string Id, string Name, MapPosition Position, double BuildDistance, double ReachDistance, string ControlMode);
 public sealed record TileRun(int X, int Y, int Length, string Name);
 public sealed record SpatialEntity(string Id, string Name, MapPosition Position, WorldBox Bounds, int Direction, string Force, double? Amount = null,
-    MapPosition? DropPosition = null, string? DropTargetId = null);
+    MapPosition? DropPosition = null, string? DropTargetId = null,
+    [property: JsonConverter(typeof(NativeArrayConverter<ObservedFluidConnection>))] IReadOnlyList<ObservedFluidConnection>? FluidConnections = null,
+    ObservedPower? Power = null);
+public sealed record ObservedFluidConnection(int BoxIndex, int PortIndex, MapPosition Position, MapPosition TargetPosition,
+    string? TargetEntityId = null, int? TargetBoxIndex = null);
+public sealed record ObservedPower(double Energy, long? NetworkId = null, double? GeneratedLastTick = null);
 public sealed record PlaceableItem(string EntityName, int StackSize);
 public sealed record SpatialCoverage(bool Atomic, bool Complete, string Visibility, int Radius);
 public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int SurfaceIndex, WorldBox Bounds, SpatialActor Actor,
     IReadOnlyDictionary<string, EntityGeometry> Prototypes, IReadOnlyDictionary<string, CollisionMask> TilePrototypes,
     [property: JsonConverter(typeof(NativeArrayConverter<TileRun>))] IReadOnlyList<TileRun> Rows,
     [property: JsonConverter(typeof(NativeArrayConverter<SpatialEntity>))] IReadOnlyList<SpatialEntity> Entities,
-    IReadOnlyDictionary<string, PlaceableItem> Items, SpatialCoverage Coverage)
+    IReadOnlyDictionary<string, PlaceableItem> Items, SpatialCoverage Coverage,
+    IReadOnlyDictionary<string, string>? TileFluids = null)
 {
     public static SpatialSnapshot Parse(GameResponse response)
     {

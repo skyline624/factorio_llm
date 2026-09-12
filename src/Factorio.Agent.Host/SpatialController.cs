@@ -132,7 +132,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         try { receipt = await operations.SubmitAsync(submission, token); }
         catch (OperationOutcomeUnknownException error)
         {
-            await journal.AppendAsync("outcome-unknown", new { error.OperationId, error.Message }, token);
+            await journal.AppendAsync("outcome-unknown", new { error.OperationId, error.Message,
+                cause = error.InnerException?.GetType().Name, detail = error.InnerException?.Message }, token);
             receipt = await QueryKnownAsync(submission.OperationId, token);
         }
         while (!receipt.IsTerminal)

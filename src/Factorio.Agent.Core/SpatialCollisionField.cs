@@ -5,6 +5,7 @@ public sealed class SpatialCollisionField
 {
     private sealed record Obstacle(string Id, WorldBox Bounds, CollisionMask Mask, bool Tile);
     private readonly Dictionary<(int X, int Y), List<Obstacle>> buckets = [];
+    private readonly Dictionary<(int X, int Y), string> tiles = [];
     public SpatialSnapshot Map { get; }
     public EntityGeometry Character => Map.Prototypes[Map.Actor.Name];
 
@@ -21,6 +22,7 @@ public sealed class SpatialCollisionField
                 var box = new WorldBox(new(x, row.Y), new(x + 1, row.Y + 1));
                 if (!map.Bounds.Contains(box) || !covered.Add((x, row.Y)))
                     throw new InvalidDataException("Repeated or out-of-bounds terrain tile.");
+                tiles[(x, row.Y)] = row.Name;
                 Add(new($"tile:{x}:{row.Y}", box, mask, true));
             }
         }
@@ -79,8 +81,23 @@ public sealed class SpatialCollisionField
     {
         WorldBox box = geometry.CollisionBox.Rotate(direction).Translate(position);
         if (!Map.Bounds.Contains(box)) return false;
+        foreach (TileBuildRule rule in geometry.TileBuildability ?? [])
+        {
+            WorldBox area = rule.Area.Rotate(direction).Translate(position);
+            if (!Map.Bounds.Contains(area)) return false;
+            for (int x = (int)Math.Floor(area.Min.X); x < Math.Ceiling(area.Max.X); x++)
+                for (int y = (int)Math.Floor(area.Min.Y); y < Math.Ceiling(area.Max.Y); y++)
+                {
+                    CollisionMask tile = Map.TilePrototypes[tiles[(x, y)]];
+                    if (rule.CollidingTiles.CollidesWith(tile, true)
+                        || (rule.RequiredTiles.Layers.Count > 0 && !rule.RequiredTiles.CollidesWith(tile, true))) return false;
+                }
+        }
         return !Query(box).Any(o => geometry.Mask.CollidesWith(o.Mask, o.Tile) && box.Overlaps(o.Bounds));
     }
+
+    public string? FluidAt(MapPosition position) => tiles.TryGetValue(((int)Math.Floor(position.X), (int)Math.Floor(position.Y)), out string? tile)
+        ? Map.TileFluids?.GetValueOrDefault(tile) : null;
 
     private static bool IntersectsSegment(WorldBox box, MapPosition from, MapPosition to)
     {

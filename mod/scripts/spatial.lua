@@ -26,6 +26,33 @@ local function prototype(value)
     result.resourceCategories = value.resource_categories
     result.fuelCategories = value.burner_prototype and value.burner_prototype.fuel_categories
   end
+  if #value.fluidbox_prototypes > 0 then
+    result.fluidBoxes = {}
+    for _, fluidbox in ipairs(value.fluidbox_prototypes) do
+      local connections = {}
+      for index, connection in ipairs(fluidbox.pipe_connections) do
+        connections[#connections + 1] = {index = index, type = connection.connection_type,
+          direction = connection.direction, flowDirection = connection.flow_direction,
+          positions = U.copy(connection.positions), categories = U.copy(connection.connection_category)}
+      end
+      result.fluidBoxes[#result.fluidBoxes + 1] = {index = fluidbox.index, productionType = fluidbox.production_type,
+        filter = fluidbox.filter and fluidbox.filter.name, minimumTemperature = fluidbox.minimum_temperature,
+        maximumTemperature = fluidbox.maximum_temperature, connections = connections}
+    end
+  end
+  if value.type == "offshore-pump" then
+    local offset = value.fluid_source_offset
+    result.fluidSourceOffset = {x = offset[1], y = offset[2]}
+  end
+  if value.type == "electric-pole" then result.supplyArea = value.get_supply_area_distance("normal") end
+  if value.burner_prototype then result.fuelCategories = value.burner_prototype.fuel_categories end
+  if #value.tile_buildability_rules > 0 then
+    result.tileBuildability = {}
+    for _, rule in ipairs(value.tile_buildability_rules) do
+      result.tileBuildability[#result.tileBuildability + 1] = {area = box(rule.area),
+        collidingTiles = mask(rule.colliding_tiles), requiredTiles = mask(rule.required_tiles)}
+    end
+  end
   return result
 end
 
@@ -40,7 +67,7 @@ function M.observe(args)
     bounds = {min = {x = x0, y = y0}, max = {x = x1, y = y1}},
     actor = {id = U.entity_id(c), name = c.name, position = U.copy(c.position),
       buildDistance = c.build_distance, reachDistance = c.reach_distance, controlMode = Actor.state().controlMode},
-    prototypes = {[c.name] = prototype(c.prototype)}, tilePrototypes = {}, rows = {}, entities = {}, items = {},
+    prototypes = {[c.name] = prototype(c.prototype)}, tilePrototypes = {}, tileFluids = {}, rows = {}, entities = {}, items = {},
     coverage = {atomic = true, complete = true, visibility = "current-character-local-area", radius = radius}}
   U.check(args.items == nil or type(args.items) == "table", "invalid_arguments", "items must be an array")
   for index, name in pairs(args.items or {}) do
@@ -59,7 +86,10 @@ function M.observe(args)
       if next_name ~= name then
         if name then result.rows[#result.rows + 1] = {x = start, y = y, length = x - start, name = name} end
         start, name = x, next_name
-        if tile and not result.tilePrototypes[name] then result.tilePrototypes[name] = mask(tile.prototype.collision_mask) end
+        if tile and not result.tilePrototypes[name] then
+          result.tilePrototypes[name] = mask(tile.prototype.collision_mask)
+          if tile.prototype.fluid then result.tileFluids[name] = tile.prototype.fluid.name end
+        end
       end
     end
   end
@@ -75,6 +105,23 @@ function M.observe(args)
         value.dropPosition = U.copy(entity.drop_position)
         local target = entity.drop_target
         if target and Visibility.is_visible(c, target) then value.dropTargetId = U.entity_id(target) end
+      end
+      if #entity.fluidbox > 0 then
+        value.fluidConnections = {}
+        for index = 1, #entity.fluidbox do
+          for port, connection in ipairs(entity.fluidbox.get_pipe_connections(index)) do
+            local target = connection.target and connection.target.owner
+            local visible = target and target.valid and Visibility.is_visible(c, target)
+            value.fluidConnections[#value.fluidConnections + 1] = {boxIndex = index, portIndex = port,
+              position = U.copy(connection.position), targetPosition = U.copy(connection.target_position),
+              targetEntityId = visible and U.entity_id(target) or nil,
+              targetBoxIndex = visible and connection.target_fluidbox_index or nil}
+          end
+        end
+      end
+      if entity.type == "electric-pole" or entity.prototype.electric_energy_source_prototype then
+        value.power = {energy = entity.energy, networkId = entity.electric_network_id,
+          generatedLastTick = entity.type == "generator" and entity.energy_generated_last_tick or nil}
       end
       result.entities[#result.entities + 1] = value
     end
