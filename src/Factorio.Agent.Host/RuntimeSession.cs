@@ -135,7 +135,7 @@ public static partial class FactorioRuntime
             "--mod-directory", Path.Combine(directory, "mods"), "--mp-connect", $"127.0.0.1:{session.GamePort}",
             "--window-size", "1280x720", "--force-graphics-preset", "low", "--disable-audio"]);
         start.UseShellExecute = true;
-        start.WindowStyle = ProcessWindowStyle.Normal;
+        start.WindowStyle = ProcessWindowStyle.Minimized;
         using Process process = Process.Start(start)
             ?? throw new IOException("Failed to start client.");
         await File.WriteAllTextAsync(Path.Combine(directory, "process-id.txt"), process.Id.ToString(CultureInfo.InvariantCulture), token);
