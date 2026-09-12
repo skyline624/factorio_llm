@@ -23,14 +23,14 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
             .Select(p => p.Key).FirstOrDefault() ?? throw new InvalidOperationException("No ordinary pipe item is available.");
         var spatial = new SpatialClient(game);
         SpatialSnapshot initial = await MapAsync();
-        var plan = new PipeRoutePlanner().Find(initial, pipeItem, sourceId, targetId, fluid);
+        var plan = new PipeRoutePlanner().Find(initial, pipeItem, sourceId, targetId, fluid, cancellationToken: token);
         await journal.AppendAsync("pipe-route-plan", new { initial.Scope, initial.CollectedTick, sourceId, targetId, fluid, pipeItem, plan }, token);
         if (plan.Status != PipeRouteStatus.Found || plan.Source is null || plan.Target is null)
             throw new InvalidOperationException($"Fluid routing ended with {plan.Status}; no route is executed.");
         if (plan.Pipes.Count > 200) throw new InvalidOperationException("The planned pipe route exceeds the current construction budget.");
         FactorySnapshot stock = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (stock.Scope != catalog.Scope) throw new InvalidDataException("Fluid inventory scope changed before construction.");
-        if (stock.FluidStockAt(sourceId, fluid, plan.Source.BoxIndex) <= 0)
+        if (stock.FluidStockAt(sourceId, fluid, plan.Source.BoxIndex) <= 0 && !OffshoreSupplyPlanner.CanExtract(initial, sourceId, fluid))
             throw new InvalidOperationException("The selected source has no observed stock of the requested fluid.");
         if (stock.FluidRecordsAt(targetId, plan.Target.BoxIndex).Any(r => r.Data.GetProperty("contents").EnumerateObject()
                 .Any(p => p.Name != fluid && p.Value.GetDouble() > 0)))

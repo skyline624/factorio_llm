@@ -6,6 +6,19 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class PipeRoutePlannerTests
 {
     [Fact]
+    public void FirstFluidRouteLeavesRoomForTheOtherMachineInput()
+    {
+        var map = Map();
+        var reserved = new MapPosition(2.5, 1.5);
+        map = map with { Entities = map.Entities.Select(e => e.Id == "target" ? e with
+            { FluidConnections = [.. e.FluidConnections!, new(2, 1, new(3.5, 1.5), reserved,
+                Type: "normal", FlowDirection: "input", Filter: "water")] } : e).ToArray() };
+        var route = new PipeRoutePlanner().Find(map, "pipe", "source", "target", "oil");
+        Assert.Equal(PipeRouteStatus.Found, route.Status);
+        Assert.All(route.Pipes, p => Assert.True(Math.Abs(p.X - reserved.X) + Math.Abs(p.Y - reserved.Y) > 1));
+    }
+
+    [Fact]
     public void ConnectsActivePortsUsingCardinalPipeTilesAroundObstacles()
     {
         var map = Map();

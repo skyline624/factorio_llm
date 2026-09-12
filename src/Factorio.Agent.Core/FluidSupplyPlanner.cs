@@ -4,16 +4,20 @@ public sealed record FluidSupplyRoute(string SourceId, PipeRoutePlan Route);
 
 public sealed class FluidSupplyPlanner
 {
-    public FluidSupplyRoute? Find(SpatialSnapshot map, FactorySnapshot stock, string pipeItem, string targetId, string fluid)
+    public FluidSupplyRoute? Find(SpatialSnapshot map, FactorySnapshot stock, string pipeItem, string targetId, string fluid,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (map.Scope != stock.Scope) throw new InvalidDataException("Fluid supply observations have different actor scopes.");
         var target = map.Entities.Single(e => e.Id == targetId);
         foreach (var source in map.Entities.Where(e => e.Id != targetId && e.Force == target.Force
-            && stock.FluidStockAt(e.Id, fluid) > 0).OrderBy(e => e.Position.DistanceTo(target.Position)).ThenBy(e => e.Id, StringComparer.Ordinal))
+            && (stock.FluidStockAt(e.Id, fluid) > 0 || OffshoreSupplyPlanner.CanExtract(map, e.Id, fluid)))
+            .OrderBy(e => e.Position.DistanceTo(target.Position)).ThenBy(e => e.Id, StringComparer.Ordinal))
         {
-            var route = new PipeRoutePlanner().Find(map, pipeItem, source.Id, targetId, fluid);
+            cancellationToken.ThrowIfCancellationRequested();
+            var route = new PipeRoutePlanner().Find(map, pipeItem, source.Id, targetId, fluid, cancellationToken: cancellationToken);
             if (route.Status == PipeRouteStatus.Found && route.Source is { } output
-                && stock.FluidStockAt(source.Id, fluid, output.BoxIndex) > 0)
+                && (stock.FluidStockAt(source.Id, fluid, output.BoxIndex) > 0 || OffshoreSupplyPlanner.CanExtract(map, source.Id, fluid)))
                 return new(source.Id, route);
         }
         return null;

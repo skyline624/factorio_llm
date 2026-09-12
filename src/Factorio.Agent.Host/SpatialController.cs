@@ -17,9 +17,14 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     public async Task ApproachEntityAsync(string entityId, MapPosition knownPosition, ProductionCatalog catalog,
         CancellationToken token = default)
     {
-        await TravelAsync(knownPosition, 8, catalog, token);
         SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while approaching an entity.");
+        if (!map.Entities.Any(e => e.Id == entityId))
+        {
+            await TravelAsync(knownPosition, 8, catalog, token);
+            map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
+            if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while approaching an entity.");
+        }
         var entity = map.Entities.Single(e => e.Id == entityId);
         MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map), entity)
             ?? throw new InvalidOperationException("No reachable interaction position for the observed entity.");

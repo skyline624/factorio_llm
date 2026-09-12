@@ -2,7 +2,7 @@
 
 `produce-fluid --session FILE --fluid petroleum-gas --quantity 100` vise un stock physique dans l'usine propre connue. Le nom doit être un identifiant natif. La stratégie peut proposer ce même objectif avec l'unité `FluidUnits` ; C# valide les arguments et relit les observations avant d'agir.
 
-Le contrôleur sélectionne une recette activée, déterministe, avec une entrée et une sortie fluides. Il réutilise une machine compatible déjà configurée, ou une machine sans recette dont le contenu est vérifié avant configuration. Il peut également construire une machine alimentée. Une recette différente n'est pas écrasée. Un point d'interaction accessible est calculé autour du bâtiment à partir de la portée et des collisions natives.
+Le contrôleur sélectionne une recette activée, déterministe, avec des ingrédients solides et/ou fluides et une seule sortie fluide. Il réutilise une machine compatible déjà configurée, ou une machine sans recette dont le contenu est vérifié avant configuration. Il peut également construire une machine alimentée. Une recette différente n'est pas écrasée. Un point d'interaction accessible est calculé autour du bâtiment à partir de la portée et des collisions natives.
 
 ## Routes et capacité
 
@@ -33,3 +33,5 @@ Les réservoirs, conduites souterraines, réseaux distants, recettes à sortie f
 Le contexte stratégique contient désormais les stocks physiques de l'usine connue : inventaires, transit et fluides séparés, avec date et couverture. Les inventaires incluent le personnage et les corps connus et ne doivent pas être additionnés une seconde fois. Le nouveau chemin d'objectif fluide est testé hors ligne et par commande C# réelle ; il n'a pas encore été qualifié par un choix spontané du modèle cloud.
 
 Les [recettes mixtes à produit solide](chemical-production.md) disposent maintenant d’un premier essai natif de plastique, avec limites et réparation de fixture documentées.
+
+La production d’acide sulfurique avec entrées solides et eau possède désormais un [essai natif de deux cycles](chemical-production.md), pour 100 unités stockées. Le producteur commun calcule séparément les objets à insérer et les fluides nécessaires, en tenant compte du cycle engagé.

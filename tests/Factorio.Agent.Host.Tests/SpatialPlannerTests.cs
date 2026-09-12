@@ -171,6 +171,17 @@ public sealed class SpatialPlannerTests
         Assert.True(approach.X > 3, "Move through the opening before the new building closes it.");
     }
 
+    [Fact]
+    public void RemainingConstructionUsesNativeBuildReachRatherThanAnEightTileTravelLimit()
+    {
+        var map = Map([new("barrier", "wall", new(0, 0), new(new(-.5, -12), new(.5, 13)), 0, "agent")]);
+        map = map with { Actor = map.Actor with { Position = new(2, .5) } };
+        var target = new MapPosition(-8, .5);
+        Assert.Equal(RouteStatus.NoRouteOnKnownGrid, new RoutePlanner().Find(new(map), target, 8).Status);
+        Assert.Equal(RouteStatus.Found, new RoutePlanner().Find(new(map), target, 9).Status);
+        Assert.NotNull(new PlacementPlanner().FindApproach(new(map), "chest", new(new(3.5, .5), 0, 0), [target]));
+    }
+
     internal static SpatialSnapshot Map(IReadOnlyList<SpatialEntity> entities)
     {
         var prototypes = new Dictionary<string, EntityGeometry>

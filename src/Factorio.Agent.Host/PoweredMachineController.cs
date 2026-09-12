@@ -19,13 +19,20 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
             factory = await production.ObserveAsync(token);
             RequireScope(factory.Scope, catalog);
         }
-        ProductionEntity source = factory.Entities.Where(e => poleNames.Contains(e.Name)).OrderBy(e => e.Id, StringComparer.Ordinal).First();
-        string poleItem = catalog.Items.First(p => p.Value.PlaceEntity == source.Name).Key;
         var spatial = new SpatialClient(game);
+        var local = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
+        RequireScope(local.Scope, catalog);
+        var planner = new PoweredMachinePlanner();
+        var sources = factory.Entities.Where(e => poleNames.Contains(e.Name)).ToArray();
+        var nearest = planner.NearestSupply(local, sources.Select(e => e.Id).ToHashSet(StringComparer.Ordinal));
+        ProductionEntity source = nearest is not null ? sources.Single(e => e.Id == nearest.Id)
+            : sources.OrderBy(e => e.Position.DistanceTo(local.Actor.Position)).ThenBy(e => e.Id, StringComparer.Ordinal).First();
+        string poleItem = catalog.Items.First(p => p.Value.PlaceEntity == source.Name).Key;
+        string[] geometryItems = [item, poleItem, .. catalog.Items.Where(p => p.Value.PlaceEntityType == "pipe")
+            .OrderBy(p => p.Key, StringComparer.Ordinal).Take(1).Select(p => p.Key)];
         await controller.TravelAsync(source.Position, 8, catalog, token);
         SpatialSnapshot map = await MapAsync();
         SpatialEntity pole = map.Entities.Single(e => e.Id == source.Id);
-        var planner = new PoweredMachinePlanner();
         PlacementCandidate? placement = planner.Place(map, item, pole);
         if (placement is null)
         {
@@ -51,7 +58,7 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
 
         async Task<SpatialSnapshot> MapAsync()
         {
-            var value = await spatial.CaptureAsync([item, poleItem], 48, token);
+            var value = await spatial.CaptureAsync(geometryItems, 48, token);
             RequireScope(value.Scope, catalog);
             return value;
         }
@@ -63,8 +70,14 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         SpatialController controller, CancellationToken token, IReadOnlyList<MapPosition>? remainingTargets = null)
     {
         var spatial = new SpatialClient(game);
-        await controller.TravelAsync(candidate.Position, 8, catalog, token);
         var current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
+        RequireScope(current.Scope, catalog);
+        if (current.Actor.Position.DistanceTo(candidate.Position) > 24)
+        {
+            await controller.TravelAsync(candidate.Position, 8, catalog, token);
+            current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
+            RequireScope(current.Scope, catalog);
+        }
         RequireScope(current.Scope, catalog);
         MapPosition approach = new PlacementPlanner().FindApproach(new(current), item, candidate, remainingTargets)
             ?? throw new InvalidOperationException("No reachable approach outside the planned footprint.");

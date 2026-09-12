@@ -138,3 +138,8 @@ La [boucle stratégique](strategic-campaign.md) a réussi un essai réel de deux
 ## Déblocage du raffinage par extraction native
 
 La [qualification d’extraction pétrolière](resource-research.md) a construit et alimenté un chevalet par le contrôleur C#, puis constaté le premier pétrole et le déblocage natif de `oil-processing` entre les ticks 231209 et 231557. La recherche cible n’a pas été accordée par script. Le gisement, les objets de construction et son prérequis ont été préparés explicitement dans la fixture ; cet essai ne démontre pas encore la progression pétrolière en économie normale.
+
+
+## Soufre, acide et déplacement d’une machine inutilisée
+
+Dans la fixture chimique, le contrôleur a déplacé une usine inutilisée après calcul commun de ses alimentations en eau et gaz. Il a récupéré puis reposé l’usine, journalisé les 60 unités d’eau perdues et construit sept tuyaux. La commande a livré 10 soufres au tick 652292. Une seconde commande a livré ces soufres dans l’usine d’acide déjà préparée, puis constaté deux cycles et 100 unités d’acide au tick 655527. Les [preuves et limites détaillées](chemical-production.md) distinguent les compteurs de commande des lectures indépendantes tardives, les préparations artificielles et les réparations antérieures. La fixture est sauvegardée et arrêtée au tick 657486. Ces lots ne constituent aucune des trois campagnes finales.

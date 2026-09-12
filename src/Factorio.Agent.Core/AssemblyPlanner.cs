@@ -49,15 +49,9 @@ public sealed record AssemblyRequirements(IReadOnlyDictionary<string, int> Input
             FactoryRecord inventory = snapshot.Records.Single(r => r.Id == inventoryId && r.EntityId == entityId && r.Kind == "inventory");
             return inventory.Data.GetProperty("items").TryGetProperty(item, out var count) ? count.GetInt64() : 0;
         }
-        bool inProcess = work.Data.GetProperty("inProcess").GetBoolean();
-        if (inProcess && (!work.Data.TryGetProperty("recipe", out var current) || current.GetString() != recipe.Name))
-            throw new InvalidDataException("The machine has an engaged cycle for another recipe.");
         long ready = Count("outputInventoryId", recipe.Products[0].Name);
-        double outstanding = Math.Max(0, batches - Math.Floor(ready / recipe.Products[0].Amount!.Value) - (inProcess ? 1 : 0));
-        var inputs = recipe.Ingredients.Where(i => i.DeterministicItem).GroupBy(i => i.Name).ToDictionary(g => g.Key,
-            g => checked((int)Math.Max(0, outstanding * g.Sum(i => i.Amount!.Value) - Count("inputInventoryId", g.Key))), StringComparer.Ordinal);
-        var fluids = recipe.Ingredients.Where(i => i.DeterministicFluid).GroupBy(i => i.Name).ToDictionary(g => g.Key,
-            g => Math.Max(0, outstanding * g.Sum(i => i.Amount!.Value) - snapshot.FluidStockAt(entityId, g.Key)), StringComparer.Ordinal);
-        return new(inputs, ready, inProcess, fluids);
+        int outstanding = checked((int)Math.Max(0, batches - Math.Floor(ready / recipe.Products[0].Amount!.Value)));
+        var required = MachineInputRequirements.From(snapshot, entityId, recipe, outstanding);
+        return new(required.Items, ready, required.InProcess, required.Fluids);
     }
 }

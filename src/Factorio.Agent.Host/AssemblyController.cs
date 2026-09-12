@@ -72,7 +72,12 @@ public sealed class AssemblyController(IGameClient game, IControllerJournal jour
             if (outstanding > 0)
             {
                 var requirements = AssemblyRequirements.From(await CaptureAsync(), machineId, recipe, outstanding);
-                await new FluidSupplyController(game, journal).EnsureAsync(machineId, recipe, requirements.FluidUnitsToSupply, catalog, controller, token);
+                string suppliedId = await new FluidSupplyController(game, journal).EnsureAsync(machineId, recipe, requirements.FluidUnitsToSupply, catalog, controller, token);
+                if (suppliedId != machineId)
+                {
+                    machineId = suppliedId;
+                    initialCrafts = Work(await CaptureAsync()).Data.GetProperty("productsFinished").GetInt64();
+                }
             }
         }
         int powered = 0;

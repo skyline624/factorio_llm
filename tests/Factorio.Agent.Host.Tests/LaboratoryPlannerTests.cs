@@ -5,6 +5,42 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class LaboratoryPlannerTests
 {
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void ChemicalPlacementLeavesItsExternalFluidConnectionClearOfExistingPipes(int clearance)
+    {
+        var map = SteamPowerPlannerTests.Map(true);
+        var pole = new SpatialEntity("p", "pole", new(5.5, 5.5), new(new(5.35, 5.35), new(5.65, 5.65)), 0, "own", Power: new(0, 1));
+        var chemical = new EntityGeometry("chemical", "assembling-machine", new(new(-1.4, -1.4), new(1.4, 1.4)),
+            map.Prototypes["boiler"].Mask, 3, 3, FluidBoxes: [new(1, "input", [new(1, "normal", 0, "input",
+                [new(0, -1), new(1, 0), new(0, 1), new(-1, 0)], ["default"])])]);
+        var pipe = PipeRoutePlannerTests.Map().Prototypes["pipe"];
+        map = map with { Entities = [pole], Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            { ["chemical"] = chemical, ["pipe"] = pipe }, Items = new Dictionary<string, PlaceableItem>(map.Items)
+            { ["chemical"] = new("chemical", 10), ["pipe"] = new("pipe", 100) } };
+        var planner = new PoweredMachinePlanner();
+        var first = planner.Place(map, "chemical", pole)!;
+        var offset = ExtractionPlanner.Rotate(new(0, -1 - clearance), first.Direction);
+        var portCell = new MapPosition(first.Position.X + offset.X, first.Position.Y + offset.Y);
+        map = map with { Entities = [pole, new("existing-pipe", "pipe", portCell, pipe.CollisionBox.Translate(portCell), 0, "own")] };
+        var replanned = planner.Place(map, "chemical", pole);
+        Assert.True(replanned is null || replanned.Position != first.Position || replanned.Direction != first.Direction);
+    }
+
+    [Fact]
+    public void InstallationUsesANearbyOwnedNetworkInsteadOfTheFirstHistoricalPole()
+    {
+        var map = SteamPowerPlannerTests.Map(true);
+        SpatialEntity Pole(string id, double distance, bool connected = true) =>
+            new(id, "pole", new(map.Actor.Position.X + distance, map.Actor.Position.Y),
+                new(new(0, 0), new(.3, .3)), 0, "own", Power: connected ? new(0, 1) : null);
+        map = map with { Entities = [Pole("01-old", 20), Pole("99-near", 4), Pole("unconnected", 1, false), Pole("foreign", .5)] };
+        Assert.Equal("99-near", new PoweredMachinePlanner().NearestSupply(map,
+            new HashSet<string> { "01-old", "99-near", "unconnected" })!.Id);
+    }
+
     [Fact]
     public void ExtensionRespectsBothWireRangesAndKeepsTheLabClearOfTheNewPole()
     {

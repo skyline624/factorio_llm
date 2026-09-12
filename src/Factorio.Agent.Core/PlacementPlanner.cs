@@ -56,7 +56,7 @@ public sealed class PlacementPlanner
                 Actor = field.Map.Actor with { Position = approach },
                 Entities = futureEntities
             });
-            double radius = Math.Max(.2, Math.Min(8, reach) - .2);
+            double radius = Math.Max(.2, reach);
             return remainingTargets.All(target => new RoutePlanner().Find(after, target, radius).Status == RouteStatus.Found);
         }
     }

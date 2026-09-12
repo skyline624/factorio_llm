@@ -9,8 +9,9 @@ public sealed record PipeRoutePlan(PipeRouteStatus Status, FluidEndpoint? Source
 public sealed class PipeRoutePlanner
 {
     public PipeRoutePlan Find(SpatialSnapshot map, string pipeItem, string sourceId, string targetId,
-        string fluid, int nodeBudget = 20000)
+        string fluid, int nodeBudget = 20000, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (nodeBudget < 1) throw new ArgumentOutOfRangeException(nameof(nodeBudget));
         EntityGeometry pipe = map.Prototypes[map.Items[pipeItem].EntityName];
         if (pipe.Type != "pipe" || pipe.TileWidth != 1 || pipe.TileHeight != 1 || pipe.FluidBoxes?.Count != 1)
@@ -26,6 +27,7 @@ public sealed class PipeRoutePlanner
         int expanded = 0;
         foreach (var pair in pairs)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (FluidNetwork.IsConnected(map, pair.Source, pair.Target, fluid))
                 return new(PipeRouteStatus.Found, pair.Source, pair.Target, [], expanded);
             if (pair.Source.TargetPosition == pair.Target.Position && pair.Target.TargetPosition == pair.Source.Position)
@@ -42,6 +44,7 @@ public sealed class PipeRoutePlanner
             frontier.Enqueue(start, (Manhattan(start, goal), sequence++));
             while (frontier.TryDequeue(out var current, out _))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!closed.Add(current)) continue;
                 if (++expanded > nodeBudget) return new(PipeRouteStatus.BudgetExceeded, pair.Source, pair.Target, [], expanded - 1);
                 if (current == goal)
@@ -74,7 +77,11 @@ public sealed class PipeRoutePlanner
     public static bool ConnectionsSafe(SpatialSnapshot map, MapPosition cell, FluidEndpoint source, FluidEndpoint target,
         IReadOnlySet<string> installedPipes) => !map.Entities.Any(e => !installedPipes.Contains(e.Id)
             && (e.FluidConnections ?? []).Any(p => p.TargetPosition.DistanceTo(cell) < .01
-                && !(Matches(e, p, source) || Matches(e, p, target))));
+                && !(Matches(e, p, source) || Matches(e, p, target))))
+        && !map.Entities.Where(e => e.Id == target.EntityId).SelectMany(e => e.FluidConnections ?? [])
+            .Any(p => p.BoxIndex != target.BoxIndex && p.TargetEntityId is null && p.Type == "normal"
+                && p.FlowDirection is "input" or "input-output"
+                && Math.Abs(p.TargetPosition.X - cell.X) + Math.Abs(p.TargetPosition.Y - cell.Y) <= 1.01);
 
     private static bool Matches(SpatialEntity entity, ObservedFluidConnection port, FluidEndpoint endpoint) =>
         entity.Id == endpoint.EntityId && port.BoxIndex == endpoint.BoxIndex && port.PortIndex == endpoint.PortIndex

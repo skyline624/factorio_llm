@@ -27,9 +27,32 @@ La lecture indépendante au tick **394190** constate :
 
 Le réseau avait cessé d'alimenter la machine lors de cette lecture tardive. Le test vérifie un lot fini avec ravitaillement, pas une alimentation industrielle soutenue. La sauvegarde finale, les reçus et la preuve indépendante restent privés. Le serveur a été arrêté après sauvegarde.
 
+## Soufre et acide sulfurique dans le moteur
+
+Le contrôleur prend désormais en charge plusieurs entrées fluides et une sortie déterministe, solide ou fluide. Le bilan commun distingue les ingrédients présents, la fabrication engagée et les quantités restant à livrer. Les entrées solides restent soumises aux capacités natives.
+
+Pour les machines à plusieurs fluides, C# simule les conduites ensemble et essaie les ordres de raccordement. Si une usine à produit solide inutilisée est mal placée, le calcul projette ses raccords configurés réellement observés sur des positions et orientations candidates sous couverture électrique, en conservant les indices natifs des boîtes fluides. Une première configuration peut donc servir à observer la géométrie, puis être déplacée avant le raccordement. La recherche est bornée à cinq minutes et laisse le contrôleur traiter les événements de défense entre ses attentes natives.
+
+Le déplacement automatique exige une machine sans cycle terminé, sans fabrication engagée et avec tous ses inventaires d'objets vides. Les volumes de ses seuls tampons d'entrée peuvent être perdus au démontage : ils sont mesurés, journalisés et ajoutés aux besoins de remplacement. Un stock de sortie, un volume partagé avec une autre entité ou un résultat inconnu interrompt cette procédure. Après reconstruction, les raccords et le réseau électrique sont comparés aux observations prévues.
+
+L'essai utilise la fixture de raffinage existante. La recherche du soufre, deux usines et 200 tuyaux avaient été fournis pour isoler les tests. Plusieurs premières implantations ont échoué et ont nécessité des démontages explicites de fixture. Ces préparations et réparations restent des interventions d'essai ; aucune campagne normale n'est revendiquée.
+
+La commande `assemble --item sulfur --quantity 10` a réussi entre les ticks **640041 et 652292** :
+
+- déplacement automatique de l'usine 183 vers l'usine 202, avec récupération puis consommation d'une usine ;
+- **60 unités d'eau** présentes dans l'ancien tampon, journalisées comme perdues au démontage ;
+- pose de six tuyaux d'eau et d'un tuyau de gaz, avec vérification des deux graphes natifs ;
+- **10 soufres portés**, sept cycles constatés par la commande et une observation alimentée.
+
+La lecture indépendante au tick **653903** constate 28 soufres produits et 14 cycles : l'usine a continué après la collecte du stock demandé. Ce compteur tardif ne doit pas être confondu avec celui du résultat de commande.
+
+La commande `produce-fluid --fluid sulfuric-acid --quantity 100` a ensuite réussi entre les ticks **655081 et 655527**, dans l'usine 150 déjà configurée et reliée à l'eau. Elle a livré les **10 soufres** produits ; deux plaques de fer provenaient d'un transfert natif confirmé lors de la préparation précédente. Le moteur a terminé **deux cycles**, avec un stock global d'acide passant de **0 à 100** et trois observations alimentées. La lecture indépendante aux ticks **657417–657418** confirme 100 unités d'acide produites, deux cycles, aucun fer ni soufre restant dans l'entrée et aucune fabrication engagée.
+
+Le personnage est resté à 250 points de vie, sans joueur connecté. L'énergie était nulle lors des lectures tardives : ces résultats qualifient des lots finis, pas une alimentation soutenue. La fixture a été sauvegardée au tick **657486**, puis arrêtée. Les preuves et reçus restent privés.
+
 ## Limites conservées
 
-Le plastique est le cas mixte qualifié dans le jeu. Le soufre à deux entrées fluides, les recettes donnant un fluide à partir d'ingrédients mixtes, les coproduits et les contraintes de température restent à qualifier ou à implémenter. La présence d'un stock global ne garantit pas que tous ses volumes seront accessibles par un même circuit ; une préparation sans source raccordable échoue explicitement.
+Le plastique, le soufre et l’acide sulfurique disposent de preuves natives dans des fixtures. Les coproduits et les contraintes de température restent à traiter. La recherche de conduites communes est limitée à trois fluides et 200 tuyaux par route ; elle explore des ordres de raccordement, sans garantir toutes les solutions possibles. La préparation automatique d’une nouvelle source d’eau pour une implantation complète à plusieurs entrées reste incomplète. La présence d'un stock global ne garantit pas que tous ses volumes seront accessibles par un même circuit ; une préparation sans source raccordable échoue explicitement.
 
 La vérification d'accès avant pose porte sur les constructions restantes et les extrémités demandées. Elle n'est pas une preuve d'accessibilité permanente de toute l'usine. La réparation de routes arbitrairement interrompues, les conduites souterraines et la coordination du placement avec les accès de maintenance restent incomplètes.
 

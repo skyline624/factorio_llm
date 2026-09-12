@@ -37,16 +37,32 @@ public sealed class FluidProductionPlannerTests
         Assert.Equal("refining", plan.Recipe.Name);
         Assert.Equal("refinery", plan.MachineItem);
     }
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void DoesNotSilentlyExecuteMixedOrUncertainMaterialRecipes(bool random)
+    [Fact]
+    public void DoesNotExecuteUncertainMaterialRecipes()
     {
         var catalog = Catalog();
         var recipe = catalog.Recipes[0];
-        recipe = random ? recipe with { Products = [new("gas", "fluid", 45, Probability: .5)] } :
-            recipe with { Ingredients = [new("oil", "fluid", 100), new("coal", "item", 1)] };
+        recipe = recipe with { Products = [new("gas", "fluid", 45, Probability: .5)] };
         Assert.Null(new FluidProductionPlanner().Choose("gas", catalog with { Recipes = [recipe] }, []));
+    }
+
+    [Fact]
+    public void SelectsDeterministicMixedInputsForAFluidProduct()
+    {
+        var catalog = Catalog();
+        var recipe = catalog.Recipes[0] with { Ingredients = [new("water", "fluid", 100), new("sulfur", "item", 5), new("iron-plate", "item", 1)] };
+        Assert.NotNull(new FluidProductionPlanner().Choose("gas", catalog with { Recipes = [recipe] }, []));
+    }
+
+    [Fact]
+    public void SelectsMultipleFluidInputsOnlyWithEnoughNativePorts()
+    {
+        var catalog = Catalog();
+        var recipe = catalog.Recipes[0] with { Ingredients = [new("oil", "fluid", 100), new("water", "fluid", 50)] };
+        Assert.NotNull(new FluidProductionPlanner().Choose("gas", catalog with { Recipes = [recipe] }, []));
+        var machine = catalog.Assemblers!["refinery"] with { FluidInputCount = 1 };
+        Assert.Null(new FluidProductionPlanner().Choose("gas", catalog with { Recipes = [recipe],
+            Assemblers = new Dictionary<string, NativeAssembler> { ["refinery"] = machine } }, []));
     }
     [Fact]
     public void ConnectedFluidSegmentIsCountedOnceAcrossItsSourceBoxes()
