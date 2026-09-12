@@ -1,9 +1,26 @@
 namespace Factorio.Agent.Core;
 
 public sealed record OffshoreSupplyPlan(PlacementCandidate Pump, PipeRoutePlan Route);
+public sealed record JointOffshoreSupplyPlan(PlacementCandidate Pump, IReadOnlyList<PlannedFluidSupply> Supplies);
 
 public sealed class OffshoreSupplyPlanner
 {
+    public JointOffshoreSupplyPlan? FindJoint(SpatialSnapshot map, FactorySnapshot stock, string pumpItem, string pipeItem,
+        string targetId, string terrainFluid, IReadOnlyList<string> fluids, CancellationToken cancellationToken = default)
+    {
+        if (map.Scope != stock.Scope) throw new InvalidDataException("Offshore planning requires one actor scope.");
+        if (!fluids.Contains(terrainFluid) || map.Prototypes[map.Items[pumpItem].EntityName].Type != "offshore-pump")
+            throw new InvalidDataException("Joint supply requires a native terrain pump for a requested fluid.");
+        foreach (var (candidate, proposed) in Proposals(map, pumpItem, targetId, terrainFluid, cancellationToken))
+        {
+            var withPump = map with { Entities = [.. map.Entities, proposed] };
+            var supplies = new MultiFluidSupplyPlanner().Find(withPump, stock, pipeItem, targetId, fluids, cancellationToken);
+            if (supplies?.Any(s => s.Fluid == terrainFluid && s.Supply.SourceId == proposed.Id) == true)
+                return new(candidate, supplies);
+        }
+        return null;
+    }
+
     public static bool CanExtract(SpatialSnapshot map, string sourceId, string fluid)
     {
         var source = map.Entities.Single(e => e.Id == sourceId);
@@ -15,14 +32,29 @@ public sealed class OffshoreSupplyPlanner
         return new SpatialCollisionField(map).FluidAt(new(source.Position.X + offset.X, source.Position.Y + offset.Y)) == fluid;
     }
 
-    public OffshoreSupplyPlan? Find(SpatialSnapshot map, string pumpItem, string pipeItem, string targetId, string fluid)
+    public OffshoreSupplyPlan? Find(SpatialSnapshot map, string pumpItem, string pipeItem, string targetId, string fluid,
+        CancellationToken cancellationToken = default)
     {
+        foreach (var (candidate, proposed) in Proposals(map, pumpItem, targetId, fluid, cancellationToken))
+        {
+            var withPump = map with { Entities = [.. map.Entities, proposed] };
+            var route = new PipeRoutePlanner().Find(withPump, pipeItem, proposed.Id, targetId, fluid, cancellationToken: cancellationToken);
+            if (route.Status == PipeRouteStatus.Found) return new(candidate, route);
+        }
+        return null;
+    }
+
+    private static IEnumerable<(PlacementCandidate Placement, SpatialEntity Pump)> Proposals(SpatialSnapshot map,
+        string pumpItem, string targetId, string fluid, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         var geometry = map.Prototypes[map.Items[pumpItem].EntityName];
         if (geometry.FluidSourceOffset is null) throw new InvalidDataException("Missing native offshore fluid-source offset.");
         var target = map.Entities.Single(e => e.Id == targetId);
         var field = new SpatialCollisionField(map);
         foreach (var candidate in new PlacementPlanner().FindCandidates(field, pumpItem, target.Position, requireBuildReach: false))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var offset = ExtractionPlanner.Rotate(geometry.FluidSourceOffset, candidate.Direction);
             if (field.FluidAt(new(candidate.Position.X + offset.X, candidate.Position.Y + offset.Y)) != fluid) continue;
             var ports = new List<ObservedFluidConnection>();
@@ -39,10 +71,7 @@ public sealed class OffshoreSupplyPlanner
             var proposed = new SpatialEntity("planned:offshore-supply", geometry.Name, candidate.Position,
                 geometry.CollisionBox.Rotate(candidate.Direction).Translate(candidate.Position), candidate.Direction, target.Force,
                 FluidConnections: ports);
-            var withPump = map with { Entities = [.. map.Entities, proposed] };
-            var route = new PipeRoutePlanner().Find(withPump, pipeItem, proposed.Id, targetId, fluid);
-            if (route.Status == PipeRouteStatus.Found) return new(candidate, route);
+            yield return (candidate, proposed);
         }
-        return null;
     }
 }

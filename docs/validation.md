@@ -143,3 +143,8 @@ La [qualification d’extraction pétrolière](resource-research.md) a construit
 ## Soufre, acide et déplacement d’une machine inutilisée
 
 Dans la fixture chimique, le contrôleur a déplacé une usine inutilisée après calcul commun de ses alimentations en eau et gaz. Il a récupéré puis reposé l’usine, journalisé les 60 unités d’eau perdues et construit sept tuyaux. La commande a livré 10 soufres au tick 652292. Une seconde commande a livré ces soufres dans l’usine d’acide déjà préparée, puis constaté deux cycles et 100 unités d’acide au tick 655527. Les [preuves et limites détaillées](chemical-production.md) distinguent les compteurs de commande des lectures indépendantes tardives, les préparations artificielles et les réparations antérieures. La fixture est sauvegardée et arrêtée au tick 657486. Ces lots ne constituent aucune des trois campagnes finales.
+
+
+## Nouvelle source d’eau sans pompe préexistante
+
+Une fixture distincte confirme le calcul commun des raccordements d’eau et de gaz avant construction d’une pompe. Le contrôleur fabrique une pompe, construit neuf tuyaux puis livre dix soufres. Une deuxième collecte porte le stock à vingt, sans seconde pompe ni tuyau supplémentaire. Les [coûts, compteurs et préparations artificielles](chemical-production.md) sont documentés ; l’eau est extraite nativement, le gaz et l’énergie étaient préparés. La fixture est sauvegardée au tick 14545 puis arrêtée.

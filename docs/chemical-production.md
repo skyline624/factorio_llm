@@ -50,9 +50,21 @@ La commande `produce-fluid --fluid sulfuric-acid --quantity 100` a ensuite réus
 
 Le personnage est resté à 250 points de vie, sans joueur connecté. L'énergie était nulle lors des lectures tardives : ces résultats qualifient des lots finis, pas une alimentation soutenue. La fixture a été sauvegardée au tick **657486**, puis arrêtée. Les preuves et reçus restent privés.
 
+## Nouvelle pompe planifiée avec toutes les arrivées
+
+Lorsqu'une usine demande plusieurs fluides et qu'aucune alimentation en eau n'est raccordable, le contrôleur cherche désormais une nouvelle pompe sur une rive observée. C# projette ses raccords natifs et exige un plan compatible pour toutes les arrivées avant de retenir son emplacement. La pompe est fabriquée puis construite ; ses possibilités d'extraction et les routes sont relues dans le moteur avant la pose des tuyaux. Cette étape réutilise la supervision de défense pendant les recherches bornées.
+
+Une fixture distincte sur la graine 424244 a isolé ce cas : rive, usine de soufre, réservoir de 1000 unités de gaz, source électrique artificielle et composants de fabrication préparés explicitement. Aucune pompe, eau stockée ni unité de soufre n'a été fournie. Le premier appel a refusé la fabrication de la pompe, car `steam-power` était verrouillée ; ce prérequis a ensuite été accordé dans la préparation de fixture. Cet essai ne démontre donc pas son déblocage autonome.
+
+La commande a ensuite fabriqué **une pompe**, installé **quatre tuyaux d'eau et cinq de gaz**, vérifié les deux graphes natifs et livré **10 soufres** entre les ticks **8533 et 9473**. La fabrication consomme deux engrenages et trois tuyaux ; avec les neuf tuyaux posés, le stock de tuyaux passe de 100 à 88. La lecture indépendante au tick **12520** constate une seule pompe construite et produite, aucun exemplaire porté, huit engrenages restants, dix soufres portés et trente cycles natifs. Les cycles continuent après la collecte.
+
+Une seconde commande a collecté un stock cible de **20 soufres** aux ticks **12584–12652**. La lecture indépendante au tick **14479** confirme la même pompe, aucun coût supplémentaire de construction, 20 soufres portés, 33 cycles et 66 soufres produits au total. Le personnage reste à 250 points de vie, sans joueur connecté. Le monde est sauvegardé et arrêté au tick **14545**.
+
+Ce résultat qualifie l'installation d'une source d'eau pour une machine déjà placée. La recherche simultanée d'un nouvel emplacement de machine, d'une nouvelle pompe et de toutes les sorties reste incomplète. Le gaz et l'électricité préparés interdisent toute conclusion de campagne autonome ou de production industrielle complète.
+
 ## Limites conservées
 
-Le plastique, le soufre et l’acide sulfurique disposent de preuves natives dans des fixtures. Les coproduits et les contraintes de température restent à traiter. La recherche de conduites communes est limitée à trois fluides et 200 tuyaux par route ; elle explore des ordres de raccordement, sans garantir toutes les solutions possibles. La préparation automatique d’une nouvelle source d’eau pour une implantation complète à plusieurs entrées reste incomplète. La présence d'un stock global ne garantit pas que tous ses volumes seront accessibles par un même circuit ; une préparation sans source raccordable échoue explicitement.
+Le plastique, le soufre et l’acide sulfurique disposent de preuves natives dans des fixtures. Les coproduits et les contraintes de température restent à traiter. La recherche de conduites communes est limitée à trois fluides et 200 tuyaux par route ; elle explore des ordres de raccordement, sans garantir toutes les solutions possibles. La création d’une source d’eau avec vérification de toutes les arrivées est qualifiée pour une machine déjà placée ; la synthèse simultanée de l’installation entière reste incomplète. La présence d'un stock global ne garantit pas que tous ses volumes seront accessibles par un même circuit ; une préparation sans source raccordable échoue explicitement.
 
 La vérification d'accès avant pose porte sur les constructions restantes et les extrémités demandées. Elle n'est pas une preuve d'accessibilité permanente de toute l'usine. La réparation de routes arbitrairement interrompues, les conduites souterraines et la coordination du placement avec les accès de maintenance restent incomplètes.
 

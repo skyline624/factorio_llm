@@ -25,25 +25,9 @@ public sealed class ChemicalPlacementController(IGameClient game, IControllerJou
             .OrderBy(p => p.Key, StringComparer.Ordinal).First().Key;
         map = await spatial.CaptureAsync([pipeItem, item], 48, token);
         RequireScope(map.Scope);
-        using var planningDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        planningDeadline.CancelAfter(TimeSpan.FromMinutes(5));
-        var planning = Task.Run(() => new ConfiguredMachinePlacementPlanner().Find(map, stock, machineId, item, pipeItem, fluids,
-            planningDeadline.Token), planningDeadline.Token);
-        ConfiguredMachinePlacement placement;
-        try
-        {
-            while (!planning.IsCompleted)
-            {
-                // Native waits retain the ordinary defense arbitration while the pure C# search runs.
-                Completed(await controller.WorkAsync("wait", new { ticks = 30 }, 600, token: token));
-            }
-            placement = await planning ?? throw new InvalidOperationException("No jointly routable powered placement found in the bounded observed search.");
-        }
-        finally
-        {
-            await planningDeadline.CancelAsync();
-            try { await planning; } catch (OperationCanceledException) { }
-        }
+        var placement = await ControllerPlanning.RunAsync(cancellation => new ConfiguredMachinePlacementPlanner()
+            .Find(map, stock, machineId, item, pipeItem, fluids, cancellation), controller, TimeSpan.FromMinutes(5), token)
+            ?? throw new InvalidOperationException("No jointly routable powered placement found in the bounded observed search.");
         await controller.ApproachEntityAsync(machineId, map.Entities.Single(e => e.Id == machineId).Position, catalog, token);
         stock = await factory.CaptureAsync(cancellationToken: token);
         RequireScope(stock.Scope);

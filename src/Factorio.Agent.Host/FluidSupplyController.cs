@@ -33,6 +33,14 @@ public sealed class FluidSupplyController(IGameClient game, IControllerJournal j
         var owned = await new ProductionController(game, journal).ObserveAsync(token);
         RequireScope(owned.Scope);
         await controller.ApproachEntityAsync(machineId, owned.Entities.Single(e => e.Id == machineId).Position, catalog, token);
+        if (fluids.Count > 1 && fluids.Contains("water"))
+        {
+            var beforePump = await spatial.CaptureAsync([pipeItem], 48, token);
+            var beforePumpStock = await factory.CaptureAsync(cancellationToken: token);
+            RequireScope(beforePump.Scope); RequireScope(beforePumpStock.Scope);
+            if (new FluidSupplyPlanner().Find(beforePump, beforePumpStock, pipeItem, machineId, "water", token) is null)
+                await new OffshoreSupplyController(game, journal).PrepareJointSourceAsync(machineId, "water", fluids, catalog, controller, token);
+        }
         var placement = await new ChemicalPlacementController(game, journal).EnsureAsync(machineId, recipe, catalog, controller, token);
         if (placement.MachineId != machineId)
         {
