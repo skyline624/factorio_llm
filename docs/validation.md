@@ -114,3 +114,9 @@ Un appel réel à `glm-5.3-flash:cloud` a ensuite proposé `logistic-science-pac
 Le texte libre du modèle avait confondu les 100 packs portés avec le stock du laboratoire. Cette phrase n’a pas servi de précondition : les transferts utilisent les stocks natifs relus par C#. Le prompt précise désormais cette distinction ; son efficacité supplémentaire n’est pas encore qualifiée par un nouvel appel. Les stocks injectés dans cet essai en font une fixture, sans valeur de campagne finale.
 
 Les huit tests ajoutés couvrent les preuves natives après chaque prérequis, l’arrêt sans répétition lorsque la preuve manque, les objectifs déjà terminés, les identifiants scientifiques exacts, la pagination du catalogue, ses doublons et changements d’acteur, ainsi que la traduction stratégique vers la recherche.
+
+## Retour vers les équipements après collecte
+
+Une recherche normale a révélé un défaut de retour au four après collecte de bois : la destination était à environ 35 tuiles du personnage, au-delà de la photographie de routage local. L’extraction automatisée emploie désormais le trajet segmenté commun pour rejoindre la foreuse, reprendre les sorties et revenir approvisionner les combustibles. L’erreur initiale a arrêté les actions avec le bois conservé ; aucune sauvegarde antérieure n’a été restaurée.
+
+La reprise dans le même monde a réutilisé la foreuse 613 et le four 222 pour porter le stock de plaques de fer de 7 à 20 entre les ticks 890815 et 896287. La fabrication des dix packs rouges a ensuite été constatée au tick 899685. Les reçus natifs distinguent les fabrications des engrenages et des packs et leurs coûts réels. Il s’agit d’une qualification de composant en économie normale, sans preuve de campagne complète.

@@ -38,7 +38,7 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
         {
             var chosen = (Item: plan.DrillItem, Plan: plan.Connection);
             await journal.AppendAsync("extraction-plan", new { map.Scope, map.CollectedTick, chosen.Item, chosen.Plan }, token);
-            await controller.NavigateAsync(chosen.Plan.Drill.Position, 3, token);
+            await controller.TravelAsync(chosen.Plan.Drill.Position, 3, catalog, token);
             map = await spatial.CaptureAsync([chosen.Item], radius: 48, cancellationToken: token);
             RequireScope(map.Scope);
             receiver = map.Entities.Single(e => e.Id == chosen.Plan.ReceiverId);
@@ -86,7 +86,7 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             ProductionEntity furnace = state.Entities.Single(e => e.Id == receiver.Id);
             if (furnace.Count("output", item) > 0)
             {
-                await controller.NavigateAsync(receiver.Position, 3, token);
+                await controller.TravelAsync(receiver.Position, 3, catalog, token);
                 await WorkAsync("take", new
                 {
                     entityId = receiver.Id,
@@ -127,7 +127,7 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
                     ?? throw new InvalidOperationException("No extractable compatible fuel.");
                 await production.ProduceAsync(fuel, 2, token);
             }
-            await controller.NavigateAsync(position, 3, token);
+            await controller.TravelAsync(position, 3, catalog, token);
             await WorkAsync("insert", new { entityId, inventory = "fuel", item = fuel, count = 1 });
         }
     }
