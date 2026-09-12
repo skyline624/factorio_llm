@@ -33,10 +33,10 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             availableSolidRecipes = catalog.Recipes.Where(r => r.Enabled && r.Products.All(p => p.DeterministicItem))
                 .Select(r => r.Name).ToArray(),
             executionCapabilities = "Current grounder supports production goals for a solid item stock carried by the actor, up to 1000 items per goal. " +
-                "It can explore, mine, hand-craft and feed a burner furnace. C# can also install or reuse a burner drill feeding an existing compatible furnace when native geometry and resources permit. " +
+                "It can explore, mine, hand-craft, produce and install missing burner furnaces, and feed them. C# can also install or reuse a burner drill feeding an existing compatible furnace when native geometry and resources permit, including for intermediate ingredients. " +
                 "C# selects the production method from fresh observations; propose a needed stock above the current inventory to make progress. " +
                 "Other meaningful goals may still be proposed and will return an explicit unsupported result. " +
-                "Research execution, automatic machine prerequisite construction and fluid networks are not implemented yet.",
+                "Research execution, automatic prerequisite construction for other machine types and fluid networks are not implemented yet.",
             scope = "Local observed resources; known own buildings; exact actor inventory at observedTick. Hidden areas and enemies are unknown."
         }, Protocol.Json);
         var context = new StrategicContext(observationId, facts,

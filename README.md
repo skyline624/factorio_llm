@@ -89,7 +89,7 @@ dotnet $hostDll build --session $sessionFile --item wooden-chest --x 23 --y 0
 
 Ces commandes calculent leurs routes et placements en C#, à partir de la zone actuellement observée. La construction consomme un objet possédé ; ses coordonnées sont une préférence, la position réelle figure dans le reçu. `verify-spatial --session $sessionFile` prépare une **fixture** qui vérifie contournement d'eau et de murs, blocage par un obstacle ajouté pendant la marche, recalcul, placement avec coût réel et arrêt après annulation du contrôleur. Elle a réussi sans client et avec le pilote connecté. Voir la [navigation et le placement](docs/spatial.md), notamment leurs limites ; une implantation complète d'usine n'est pas encore disponible.
 
-Une première boucle peut extraire des ingrédients, fabriquer à la main et alimenter un four dans une partie normale :
+La boucle peut extraire des ingrédients, fabriquer et poser un four manquant, puis produire des solides dans une partie normale. Les composants intermédiaires peuvent utiliser une connexion foreuse–four observée :
 
 ```powershell
 dotnet $hostDll produce --session $sessionFile --item iron-plate --quantity 20

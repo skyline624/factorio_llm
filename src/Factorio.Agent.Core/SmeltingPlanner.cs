@@ -6,7 +6,7 @@ public sealed record SmeltingPlan(NativeRecipe Recipe, string DrillItem, Extract
 public sealed class SmeltingPlanner
 {
     public SmeltingPlan? Find(string item, ProductionCatalog catalog, SpatialSnapshot map,
-        IReadOnlyDictionary<string, long> inventory, IReadOnlyDictionary<string, string?> knownEntityRecipes)
+        IReadOnlyDictionary<string, long> inventory, IReadOnlyDictionary<string, KnownProductionMachine> knownMachines)
     {
         if (catalog.Scope != map.Scope) throw new InvalidDataException("Smelting observations span different actor scopes.");
         string[] drills = map.Items.Where(p => map.Prototypes[p.Value.EntityName].Type == "mining-drill"
@@ -18,13 +18,13 @@ public sealed class SmeltingPlanner
         var opportunities = new List<SmeltingPlan>();
         foreach (NativeRecipe recipe in recipes)
         {
-            SpatialEntity[] receivers = map.Entities.Where(e => knownEntityRecipes.TryGetValue(e.Id, out string? currentRecipe)
-                && (currentRecipe is null || currentRecipe == recipe.Name)
+            SpatialEntity[] receivers = map.Entities.Where(e => knownMachines.TryGetValue(e.Id, out KnownProductionMachine? machine)
+                && machine.CanProcess(recipe)
                 && catalog.Machines.Values.Any(m => m.EntityName == e.Name && m.Categories.ContainsKey(recipe.Category))).ToArray();
             foreach (string drillItem in drills)
             {
                 string name = map.Items[drillItem].EntityName;
-                foreach (SpatialEntity installed in map.Entities.Where(e => e.Name == name && knownEntityRecipes.ContainsKey(e.Id)
+                foreach (SpatialEntity installed in map.Entities.Where(e => e.Name == name && knownMachines.ContainsKey(e.Id)
                     && e.DropPosition is not null))
                 {
                     SpatialEntity[] targets = receivers.Where(r => ExtractionPlanner.DropTile(installed.DropPosition!).Overlaps(r.Bounds)

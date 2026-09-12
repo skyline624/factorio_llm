@@ -48,7 +48,7 @@ public sealed class SmeltingPlannerTests
         var (map, catalog) = Setup(installed: true);
         map = map with { Entities = map.Entities.Select(e => e.Id == "deposit" ? e with { Amount = amount } : e).ToArray() };
         var owned = Owned();
-        owned["receiver"] = recipe;
+        owned["receiver"] = owned["receiver"] with { Recipe = recipe };
         Assert.Null(new SmeltingPlanner().Find("plate", catalog, map, new Dictionary<string, long>(), owned));
     }
 
@@ -57,7 +57,7 @@ public sealed class SmeltingPlannerTests
     {
         var (map, catalog) = Setup(installed: true);
         Assert.Null(new SmeltingPlanner().Find("plate", catalog, map, new Dictionary<string, long>(),
-            new Dictionary<string, string?> { ["installed"] = null }));
+            new Dictionary<string, KnownProductionMachine> { ["installed"] = new("installed", "drill", null) }));
     }
 
     [Fact]
@@ -69,6 +69,15 @@ public sealed class SmeltingPlannerTests
     }
 
     [Fact]
+    public void ReceiverWithNoRecipeButForeignOutputCannotAcceptAutomatedSmelting()
+    {
+        var (map, catalog) = Setup(installed: true);
+        var owned = Owned();
+        owned["receiver"] = owned["receiver"] with { Output = new Dictionary<string, long> { ["other-plate"] = 6 } };
+        Assert.Null(new SmeltingPlanner().Find("plate", catalog, map, new Dictionary<string, long>(), owned));
+    }
+
+    [Fact]
     public void ObservationsAcrossPilotTransitionCannotBeCombined()
     {
         var (map, catalog) = Setup(installed: true);
@@ -77,7 +86,8 @@ public sealed class SmeltingPlannerTests
             new Dictionary<string, long>(), Owned()));
     }
 
-    private static Dictionary<string, string?> Owned() => new() { ["receiver"] = null, ["installed"] = null };
+    private static Dictionary<string, KnownProductionMachine> Owned() => new()
+        { ["receiver"] = new("receiver", "furnace", null), ["installed"] = new("installed", "drill", null) };
 
     internal static (SpatialSnapshot Map, ProductionCatalog Catalog) Setup(bool installed = false)
     {

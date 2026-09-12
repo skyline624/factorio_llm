@@ -32,14 +32,22 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 return result;
             }
             ProductionCatalog catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), deadline.Token));
-            SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: deadline.Token);
+            string[] drillItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "mining-drill")
+                .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
+            if (drillItems.Length > 16) throw new InvalidOperationException("Mining drill geometry exceeds the snapshot budget.");
+            SpatialSnapshot map = await spatial.CaptureAsync(drillItems, radius: 48, cancellationToken: deadline.Token);
             if (catalog.Scope != state.Scope || map.Scope != state.Scope) throw new InvalidDataException("Production observations span different actor scopes.");
             ProductionEntity? ready = state.Entities.FirstOrDefault(e => e.Count("output", item) > 0);
             if (ready is not null)
             {
                 await TravelAsync(ready.Position, 3, catalog);
-                await ActAsync("take", new { entityId = ready.Id, inventory = "output", item,
-                    count = Math.Min(ready.Count("output", item), targetStock - state.Inventory.GetValueOrDefault(item)) }, 600);
+                await ActAsync("take", new
+                {
+                    entityId = ready.Id,
+                    inventory = "output",
+                    item,
+                    count = Math.Min(ready.Count("output", item), targetStock - state.Inventory.GetValueOrDefault(item))
+                }, 600);
                 continue;
             }
             ProductionEntity? engaged = state.Entities.FirstOrDefault(e => e.InventoryTotal("input") > 0
@@ -53,10 +61,20 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 await SmeltAsync(new("smelt", item, batches, recipe), state, catalog, map);
                 continue;
             }
-            ProductionStep step = planner.Next(item, targetStock, state.Inventory, catalog, map);
+            ProductionStep step = planner.Next(item, targetStock, state.Inventory, catalog, map,
+                state.Entities.Select(e => e.AsMachine()).ToArray());
             await journal.AppendAsync("production-step", new { item, targetStock, stepNumber, state.Tick, step }, deadline.Token);
             switch (step.Kind)
             {
+                case "automate":
+                    await new AutomatedSmeltingController(game, journal).RunAsync(step.Item, step.Quantity, deadline.Token);
+                    break;
+                case "build":
+                    OperationReceipt built = await controller.BuildAsync(step.Item, map.Actor.Position, deadline.Token);
+                    receipts.Add(built);
+                    if (built.Status != "completed")
+                        throw new InvalidOperationException($"Machine construction ended with {built.Status}: {built.Error?.Code}. Reconcile before replanning.");
+                    break;
                 case "mine":
                     await TravelAsync(step.Source!.Position, MiningDistance(step.Source, map), catalog);
                     await ActAsync("mine", new { name = step.Source.Name, position = step.Source.Position, count = step.Quantity }, 36000);
@@ -111,26 +129,12 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             var supported = catalog.Machines.Where(m => m.Value.Categories.ContainsKey(recipe.Category))
                 .OrderBy(m => m.Key, StringComparer.Ordinal).ToArray();
             var owned = state.Entities.Where(e => supported.Any(m => m.Value.EntityName == e.Name))
-                .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).FirstOrDefault(e => e.Recipe is null || e.Recipe == recipe.Name);
-            KeyValuePair<string, NativeFurnace> machine;
-            string entityId;
-            MapPosition position;
+                .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).FirstOrDefault(e => e.AsMachine().CanProcess(recipe));
             if (owned is null)
-            {
-                machine = supported.FirstOrDefault(m => state.Inventory.GetValueOrDefault(m.Key) > 0);
-                if (machine.Key is null) throw new InvalidOperationException("A compatible furnace must first be produced; machine prerequisite grounding is pending.");
-                OperationReceipt built = await controller.BuildAsync(machine.Key, map.Actor.Position, deadline.Token);
-                receipts.Add(built);
-                if (built.Status != "completed") throw new InvalidOperationException($"Furnace construction failed: {built.Error?.Code}.");
-                entityId = built.Effects.GetProperty("entityId").GetString()!;
-                position = built.Effects.GetProperty("entityPosition").Deserialize<MapPosition>(Protocol.Json)!;
-            }
-            else
-            {
-                machine = supported.First(m => m.Value.EntityName == owned.Name);
-                entityId = owned.Id;
-                position = owned.Position;
-            }
+                throw new InvalidOperationException("The planned compatible furnace is unavailable; reconcile before replanning.");
+            var machine = supported.First(m => m.Value.EntityName == owned.Name);
+            string entityId = owned.Id;
+            MapPosition position = owned.Position;
             await TravelAsync(position, 3, catalog);
             // Feed a bounded batch. Read actual output/fuel every iteration; never infer output from a timer.
             string input = recipe.Ingredients[0].Name;
@@ -166,7 +170,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     if (carried.Key is null)
                     {
                         map = await spatial.CaptureAsync(radius: 48, cancellationToken: deadline.Token);
-                        ProductionStep? fuelStep = fuels.Select(p => planner.Next(p.Key, 1, current.Inventory, catalog, map))
+                        ProductionStep? fuelStep = fuels.Select(p => planner.Next(p.Key, 1, current.Inventory, catalog, map,
+                            current.Entities.Select(e => e.AsMachine()).ToArray()))
                             .FirstOrDefault(p => p.Kind == "mine");
                         if (fuelStep is null)
                         {
@@ -224,6 +229,10 @@ internal sealed record ProductionState(ActorScope Scope, long Tick, string Contr
     IReadOnlyList<ProductionEntity> Entities);
 internal sealed record ProductionEntity(string Id, string Name, MapPosition Position, string? Recipe, JsonElement Inventories)
 {
+    public KnownProductionMachine AsMachine() => new(Id, Name, Recipe, Items("input"), Items("output"));
+    private IReadOnlyDictionary<string, long> Items(string slot) => Inventories.TryGetProperty(slot, out var inventory)
+        ? inventory.GetProperty("items").Deserialize<Dictionary<string, long>>(Protocol.Json)!
+        : new Dictionary<string, long>();
     public long Count(string slot, string item) => Inventories.TryGetProperty(slot, out var inventory)
         && inventory.GetProperty("items").TryGetProperty(item, out var amount) ? amount.GetInt64() : 0;
     public long InventoryTotal(string slot) => Inventories.TryGetProperty(slot, out var inventory)
