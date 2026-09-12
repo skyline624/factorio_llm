@@ -82,3 +82,10 @@ Dans le monde normal de développement, `prepare-research automation` a ensuite 
 ## Recherche en laboratoire : fixture
 
 La commande `research automation` a terminé dans la fixture à vapeur après ajout calculé d’un poteau relié au réseau et pose d’un laboratoire. Elle a pris en compte la durabilité d’un pack entamé, fabriqué le complément, chargé les packs et transféré quatre unités de bois à la chaudière. Entre les ticks 38 968 et 45 554, le moteur a consommé dix packs et terminé la technologie. Le demi-pack restant a été mesuré séparément. Aucun compteur de progression ni apport d’énergie artificiel n’a servi à terminer la recherche ; les objets et prérequis fournis à la fixture la disqualifient comme campagne. Voir [laboratory-research.md](laboratory-research.md).
+
+
+## Recherche en laboratoire : monde normal
+
+`research automation` a réussi entre les ticks 709 078 et 732 720 dans la partie normale de développement. Le contrôleur a extrait et fondu le cuivre, fabriqué dix packs à partir de dix plaques et dix engrenages, construit le laboratoire 647 sur le réseau existant et transféré quatre unités de bois à la chaudière. La sélection au tick 726 704 était distincte de l’achèvement ; 77 observations du laboratoire alimenté ont précédé la confirmation finale.
+
+La lecture native indépendante au tick 735 335 confirme la technologie acquise, la recette de machine d’assemblage disponible, dix packs consommés et zéro pack restant dans le laboratoire. Une mesure pendant l’activité donne environ 60,4 kW produits par le réseau. Aucun joueur connecté ni apport artificiel n’a été nécessaire dans cette partie ; les corrections antérieures de développement empêchent toutefois de la compter comme campagne finale. Le serveur a été arrêté après le checkpoint du tick 735 383.

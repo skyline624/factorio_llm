@@ -20,4 +20,14 @@ Le relevé natif distingue dix objets et 9,5 unités scientifiques. C# a fait fa
 
 L'exécution a réussi entre les ticks 38 968 et 45 554, avec 78 observations du laboratoire alimenté sur le réseau 1. Le moteur a confirmé `automation.researched=true` et dix packs consommés. Une relecture indépendante au tick 47 547 retrouve un pack contenant environ 0,5 unité scientifique : ce reste est cohérent avec les 10,5 unités disponibles et les dix unités de recherche réalisées.
 
+## Recherche vérifiée dans le monde normal
+
+Dans la partie normale de développement, graine 424242, la commande a réussi entre les ticks 709 078 et 732 720. Les dix minerais de cuivre nécessaires ont été extraits puis fondus ; la fabrication de dix packs a consommé dix plaques de cuivre et dix engrenages en 3 010 ticks. Un laboratoire a été construit en (-36,5 ; -20,5), sur le réseau 1 du poteau existant, sans extension nécessaire. Le reçu et le stock confirment la consommation de l'objet de laboratoire.
+
+Quatre unités de bois ont été transférées à la chaudière. La recherche a été sélectionnée au tick 726 704 ; elle n'était pas encore terminée à cette sélection. Le contrôleur a ensuite enregistré 77 observations du laboratoire alimenté, dix packs consommés et le drapeau natif `automation.researched=true` au tick 732 720.
+
+Une mesure indépendante au tick 732 394, pendant la recherche, constate environ 1 006,667 J produits par tick, soit 60,4 kW, avec le moteur, le poteau et le laboratoire sur le même réseau. Au tick 735 335, une autre lecture confirme la technologie acquise, la recette `assembling-machine-1` disponible, le laboratoire vide de packs et aucun joueur connecté.
+
+Aucun objet, énergie ou progrès scientifique artificiel n'a été ajouté à cette partie. Elle conserve néanmoins son statut de monde de développement ayant reçu plusieurs corrections et ne compte pas parmi les trois campagnes finales. Le checkpoint final a été préparé au tick 735 383, puis le serveur arrêté proprement.
+
 La progression scientifique générale, la coordination de plusieurs laboratoires, la maintenance électrique de grande capacité et l'intégration de cette commande aux objectifs libres du LLM restent à compléter. Les essais réels sont consignés dans [validation.md](validation.md), avec distinction entre fixture et monde normal.
