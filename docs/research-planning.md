@@ -1,6 +1,6 @@
 # Prérequis scientifiques natifs
 
-`research-plan --session FILE --technology NAME` lit la technologie demandée et ses prérequis, puis décrit la prochaine étape. Cette commande ne fabrique rien et ne lance aucune recherche. Elle prépare l'intégration des sciences dans l'exécuteur autonome.
+`research-plan --session FILE --technology NAME` lit la technologie demandée et ses prérequis, puis décrit la prochaine étape. Cette commande ne fabrique rien et ne lance aucune recherche. `research --session FILE --technology NAME` exécute désormais la succession de prérequis jusqu'à l'achèvement natif de la technologie cible.
 
 La collecte vérifie les identifiants exacts et la complétude de chaque réponse. Elle conserve un intervalle de ticks et vérifie l'identité de l'acteur avant et après les lectures ; elle ne présente pas plusieurs réponses comme une photographie atomique.
 
@@ -30,4 +30,9 @@ Après correction, `prepare-research automation` a réussi entre les ticks 648 3
 
 La relecture entre les ticks 667 940 et 667 944 confirme `automation-science-pack.researched=true`. La commande a terminé avec `ready-for-lab` pour `automation`. Une lecture indépendante au tick 689 873 confirme encore deux laboratoires portés, une production comptée et la recette de science rouge disponible. Aucun apport artificiel, sélection forcée de recherche ou joueur connecté n'a été nécessaire dans ce monde. Il s'agit d'une partie de développement ayant reçu plusieurs corrections ; elle ne compte pas comme campagne finale sans assistance.
 
-La commande séparée `research` prend désormais en charge le laboratoire, son alimentation, les packs et la vérification de l'achèvement d'une technologie disponible. La recherche `automation` a réussi en fixture puis dans le monde normal ; voir [laboratory-research.md](laboratory-research.md). L'enchaînement général de ces capacités depuis les objectifs libres du LLM reste à compléter.
+La commande `research` enchaîne les prérequis et les recherches en laboratoire. Elle relit la technologie terminée après chaque étape avant de recalculer la suite ; un retour de méthode sans drapeau natif d'achèvement arrête l'exécution. Le budget global est de deux heures et 256 étapes, en plus des limites propres aux composants. Les objectifs libres `research` du LLM utilisent le même exécuteur, avec unité `completion`, quantité 1 et identifiant technologique natif exact. Voir [laboratory-research.md](laboratory-research.md).
+
+
+## Cascade native en fixture
+
+La fixture a reçu explicitement les ingrédients d’un laboratoire et dix packs rouges ; sa technologie de science rouge a été réinitialisée pour cet essai. Une seule commande ciblant `gun-turret` a fabriqué le laboratoire, vérifié le déblocage de `automation-science-pack`, puis alimenté le laboratoire et achevé la recherche des tourelles. Les deux technologies figurent dans le résultat vérifié, entre les ticks 82 852 et 90 171. La lecture indépendante confirme la recette de tourelle disponible et une unité de laboratoire dans le compteur natif de production. Les apports et le prérequis réinitialisé excluent cette fixture des campagnes finales.

@@ -32,6 +32,17 @@ public sealed class StrategicGroundingTests
             Goal() with { ObservationId = observation, Target = item, Quantity = quantity }, "observation", Catalog()));
     }
 
+    [Fact]
+    public void ResearchRequiresAnExactKnownTechnologyAndCompletionUnit()
+    {
+        var technology = new NativeTechnology("automation", true, false, true, [], [new("red", 1)], 10, 600);
+        var technologies = new Dictionary<string, NativeTechnology> { [technology.Name] = technology };
+        var goal = Goal() with { Category = GoalCategory.Research, Unit = GoalUnit.Completion, Target = technology.Name, Quantity = 1 };
+        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", Catalog(), technologies));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "invented research" }, "observation", Catalog(), technologies));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Unit = GoalUnit.Items }, "observation", Catalog(), technologies));
+    }
+
     private static GoalProposal Goal() => new("observation", "Accumulate iron plates", GoalCategory.Production,
         "iron-plate", 20, GoalUnit.Items, GoalPriority.Normal, new(TimeSpan.Zero, 1, null, null, null));
     private static ProductionCatalog Catalog() => new(new("world", "session", "actor", 1, 2), 100, [],

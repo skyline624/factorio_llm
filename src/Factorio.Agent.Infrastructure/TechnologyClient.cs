@@ -14,6 +14,38 @@ public sealed class TechnologyClient(IGameClient game)
         [property: JsonConverter(typeof(NativeArrayConverter<NativeTechnology>))] IReadOnlyList<NativeTechnology> Items,
         int Total, int Offset, int Limit, long CollectedTick, bool Complete);
 
+    public async Task<TechnologyObservation> ReadAllAsync(CancellationToken token = default)
+    {
+        GameResponse before = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 1, limit = 1 }), token);
+        if (!before.Ok) throw new GameRpcException(before.Error!);
+        ActorScope scope = before.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
+        long lastTick = before.Tick;
+        int offset = 0, total = -1;
+        var values = new Dictionary<string, NativeTechnology>(StringComparer.Ordinal);
+        while (true)
+        {
+            GameResponse response = await game.ExecuteAsync(GameRequest.Create("technologies", new { availableOnly = false, offset, limit = 100 }), token);
+            if (!response.Ok) throw new GameRpcException(response.Error!);
+            Page page = response.Data.Deserialize<Page>(Protocol.Json) ?? throw new InvalidDataException("Missing native technology catalog page.");
+            if (page.CollectedTick != response.Tick || response.Tick < lastTick || page.Offset != offset || page.Limit != 100
+                || page.Total is < 0 or > 5000 || (total >= 0 && total != page.Total) || page.Items.Count > 100
+                || offset + page.Items.Count > page.Total || page.Complete != (offset + page.Items.Count == page.Total)
+                || (!page.Complete && page.Items.Count == 0))
+                throw new InvalidDataException("Incomplete or inconsistent native technology catalog.");
+            total = page.Total;
+            lastTick = response.Tick;
+            foreach (var technology in page.Items)
+                if (!values.TryAdd(technology.Name, technology)) throw new InvalidDataException("Duplicate native technology in catalog pages.");
+            offset += page.Items.Count;
+            if (page.Complete) break;
+        }
+        GameResponse after = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 1, limit = 1 }), token);
+        if (!after.Ok) throw new GameRpcException(after.Error!);
+        if (after.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json) != scope || after.Tick < lastTick)
+            throw new InvalidDataException("Actor identity or time changed during technology catalog collection.");
+        return new(scope, before.Tick, after.Tick, values);
+    }
+
     public async Task<TechnologyObservation> ReadDependenciesAsync(string target, CancellationToken token = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(target);

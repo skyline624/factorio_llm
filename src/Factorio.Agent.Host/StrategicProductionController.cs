@@ -1,17 +1,23 @@
 using System.Text.Json;
 using Factorio.Agent.Core;
 using Factorio.Agent.Ollama;
+using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
-/// <summary>One real strategic proposal grounded into the currently supported production capability.</summary>
+public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null);
+
+/// <summary>Grounds semantic production or research goals into verified native execution.</summary>
 public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal)
 {
-    public async Task<StockGoalResult> RunOnceAsync(CancellationToken token = default)
+    public async Task<StrategicGoalResult> RunOnceAsync(CancellationToken token = default)
     {
         GameResponse observation = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 64, limit = 200 }), token);
         if (!observation.Ok) throw new GameRpcException(observation.Error!);
         ProductionCatalog catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+        TechnologyObservation science = await new TechnologyClient(game).ReadAllAsync(token);
+        ActorScope scope = observation.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
+        if (catalog.Scope != scope || science.Scope != scope) throw new InvalidDataException("Strategic observations span different actor scopes.");
         JsonElement agent = observation.Data.GetProperty("agent");
         string observationId = $"{observation.Data.GetProperty("snapshotId").GetInt64()}:{observation.Tick}";
         // Whitelist factual fields: no session credentials, player names or coordinates leave the machine.
@@ -30,13 +36,18 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 ? observation.Data.GetProperty("enemies").GetArrayLength() : 0,
             knownResources = Names(observation.Data.GetProperty("resources")),
             knownBuildings = Names(observation.Data.GetProperty("entities")),
-            availableSolidRecipes = catalog.Recipes.Where(r => r.Enabled && r.Products.All(p => p.DeterministicItem))
+            availableSolidRecipes = catalog.Recipes.Where(r => r.Enabled && r.Products.All(p => p.DeterministicItem) && r.Ingredients.All(p => p.DeterministicItem))
                 .Select(r => r.Name).ToArray(),
-            executionCapabilities = "Current grounder supports production goals for a solid item stock carried by the actor, up to 1000 items per goal. " +
-                "It can explore, mine, hand-craft, produce and install missing burner furnaces, and feed them. C# can also install or reuse a burner drill feeding an existing compatible furnace when native geometry and resources permit, including for intermediate ingredients. " +
-                "C# selects the production method from fresh observations; propose a needed stock above the current inventory to make progress. " +
-                "Other meaningful goals may still be proposed and will return an explicit unsupported result. " +
-                "Research execution, automatic prerequisite construction for other machine types and fluid networks are not implemented yet.",
+            technologyCollection = new { science.StartTick, science.EndTick },
+            nativeTechnologyIdentifiers = science.Technologies.Keys.Order(StringComparer.Ordinal).ToArray(),
+            researchedTechnologies = science.Technologies.Values.Where(t => t.Researched).Select(t => t.Name).Order(StringComparer.Ordinal).ToArray(),
+            availableResearch = science.Technologies.Values.Where(t => t.Enabled && t.Available && !t.Researched)
+                .Select(t => new { t.Name, t.Count, t.Ingredients, t.Trigger }).ToArray(),
+            executionCapabilities = "Production goals use category production, unit items and an exact native item identifier, up to 1000 carried items. " +
+                "C# explores, mines, hand-crafts, installs or reuses burner production, powered assemblers and local steam supply. " +
+                "Research goals use category research, unit completion, quantity 1 and an exact native technology identifier. C# resolves native prerequisites, supported craft-item triggers and laboratory research, including science production and power maintenance. " +
+                "Only deterministic solid production and bounded science batches are executable so far; fluid networks and industrial transport remain unsupported. " +
+                "Choose an unmet useful goal toward the rocket. Other meaningful goals remain permissible proposals with explicit unsupported results.",
             scope = "Local observed resources; known own buildings; exact actor inventory at observedTick. Hidden areas and enemies are unknown."
         }, Protocol.Json);
         var context = new StrategicContext(observationId, facts,
@@ -64,19 +75,28 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             await defense.StopOwnedActionAsync(stop.Token);
         }
         await journal.AppendAsync("strategic-goal", goal, token);
-        string? reason = GroundingFailure(goal, observationId, catalog);
+        string? reason = GroundingFailure(goal, observationId, catalog, science.Technologies);
         if (reason is not null)
         {
             await journal.AppendAsync("grounding-unsupported", new { goal, reason }, token);
             throw new InvalidOperationException(reason);
         }
         // Production recollects inventory, recipes and geometry before acting; the LLM context is never a precondition.
-        return await new ProductionGoalExecutor(game, journal).RunAsync(goal.Target, (int)goal.Quantity, token);
+        if (goal.Category == GoalCategory.Research)
+            return new(goal, Research: await new ResearchGoalExecutor(game, journal).RunAsync(goal.Target, token));
+        return new(goal, Production: await new ProductionGoalExecutor(game, journal).RunAsync(goal.Target, (int)goal.Quantity, token));
     }
 
-    public static string? GroundingFailure(GoalProposal goal, string observationId, ProductionCatalog catalog)
+    public static string? GroundingFailure(GoalProposal goal, string observationId, ProductionCatalog catalog,
+        IReadOnlyDictionary<string, NativeTechnology>? technologies = null)
     {
         if (goal.ObservationId != observationId) return "The proposal references a different observation.";
+        if (goal.Category == GoalCategory.Research)
+        {
+            if (goal.Unit != GoalUnit.Completion || goal.Quantity != 1) return "Research requires a completion goal with quantity 1.";
+            if (technologies is null || !technologies.ContainsKey(goal.Target)) return "The target is not an exact observed native technology identifier.";
+            return null;
+        }
         if (goal.Category != GoalCategory.Production || goal.Unit != GoalUnit.Items)
             return "This goal is not yet supported by the solid-stock production grounder.";
         if (goal.Quantity is < 1 or > 1000 || decimal.Truncate(goal.Quantity) != goal.Quantity)

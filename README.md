@@ -37,7 +37,7 @@ Le [profil exemple](config/appsettings.example.json) décrit les paramètres de 
 Copy-Item config/appsettings.example.json config/appsettings.local.json
 ```
 
-L'adaptateur a réussi un appel réel avec l'effort `low` sur un contexte synthétique, puis a été relié à une première boucle de production dans le jeu. La présence de JSON ou d'arguments d'outils ne garantit jamais leur validité : syntaxe, schéma et corrélation sont contrôlés. La traduction actuelle accepte des objectifs de stock d'objets solides ; les autres objectifs restent des propositions non exécutables. Le profil ne contient aucun secret et son chargement par une commande de campagne complète reste à développer.
+L'adaptateur a réussi un appel réel avec l'effort `low` sur un contexte synthétique, puis a été relié à une première boucle de production dans le jeu. La présence de JSON ou d'arguments d'outils ne garantit jamais leur validité : syntaxe, schéma et corrélation sont contrôlés. La traduction actuelle accepte des objectifs de stock d'objets solides et de recherche identifiée dans le catalogue natif. C# résout les prérequis scientifiques, fabrique les packs solides pris en charge et vérifie chaque déblocage dans le moteur. Les autres objectifs restent des propositions non exécutables. Le profil ne contient aucun secret et son chargement par une commande de campagne complète reste à développer.
 
 ## Essais avec Factorio
 

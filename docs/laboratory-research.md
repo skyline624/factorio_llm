@@ -1,6 +1,6 @@
 # Exécution des recherches en laboratoire
 
-`research --session FILE --technology NAME` exécute une technologie dont les prérequis sont déjà acquis. `prepare-research` prépare séparément les déclencheurs de fabrication. La commande refuse de remplacer une autre recherche sélectionnée et ne modifie jamais directement les drapeaux ou la progression de recherche.
+`research --session FILE --technology NAME` résout les prérequis natifs, puis exécute chaque étape de fabrication ou de laboratoire nécessaire à la technologie cible. `prepare-research` reste disponible pour traiter séparément les déclencheurs de fabrication. La commande refuse de remplacer une autre recherche sélectionnée et ne modifie jamais directement les drapeaux ou la progression de recherche.
 
 Le contrôleur choisit un laboratoire acceptant tous les packs exigés par la technologie native. Il réutilise un laboratoire propre connu relié à un réseau, ou fabrique un objet de laboratoire. Les packs à produire tiennent compte de la progression enregistrée et des unités restantes dans les piles entamées, portées ou déjà chargées. Un pack à moitié consommé ne vaut pas un pack entier ; les transferts natifs conservent sa durabilité.
 
@@ -30,4 +30,4 @@ Une mesure indépendante au tick 732 394, pendant la recherche, constate environ
 
 Aucun objet, énergie ou progrès scientifique artificiel n'a été ajouté à cette partie. Elle conserve néanmoins son statut de monde de développement ayant reçu plusieurs corrections et ne compte pas parmi les trois campagnes finales. Le checkpoint final a été préparé au tick 735 383, puis le serveur arrêté proprement.
 
-La progression scientifique générale, la coordination de plusieurs laboratoires, la maintenance électrique de grande capacité et l'intégration de cette commande aux objectifs libres du LLM restent à compléter. Les essais réels sont consignés dans [validation.md](validation.md), avec distinction entre fixture et monde normal.
+Les objectifs scientifiques du LLM peuvent désormais déclencher cette cascade, après validation d'un identifiant technologique natif exact. La coordination de plusieurs laboratoires, la maintenance électrique de grande capacité et les chaînes de production nécessitant des fluides restent à compléter. Les essais réels sont consignés dans [validation.md](validation.md), avec distinction entre fixture et monde normal.

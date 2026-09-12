@@ -74,7 +74,7 @@ try
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
             string journalPath = Path.Combine(session.Directory, $"laboratory-{Guid.NewGuid():N}.jsonl");
-            var controller = new LaboratoryController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var controller = new ResearchGoalExecutor(session.CreateClient(lease), new ControllerJournal(journalPath));
             Print(new { result = await controller.RunAsync(Required("technology"), shutdown.Token), journalPath });
             break;
         }
@@ -188,8 +188,8 @@ try
             using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
             var planner = new OllamaStrategicPlanner(http, new OllamaOptions { MaxAttempts = 1 });
             var controller = new StrategicProductionController(session.CreateClient(lease), planner, new ControllerJournal(journalPath));
-            StockGoalResult result = await controller.RunOnceAsync(shutdown.Token);
-            Print(new { result.Method, result.Item, result.TargetStock, result.InitialStock, result.FinalStock, result.StartTick, result.EndTick, journalPath });
+            StrategicGoalResult result = await controller.RunOnceAsync(shutdown.Token);
+            Print(new { result, journalPath });
             break;
         }
         case "automate-smelting":
