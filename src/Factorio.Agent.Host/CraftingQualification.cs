@@ -11,7 +11,7 @@ public sealed class CraftingQualification(RuntimeSession session)
     {
         if (!session.IsFixture) throw new InvalidOperationException("Crafting qualification requires --fixture.");
         using var lease = ActorControlLease.Acquire(session.Directory);
-        var game = session.CreateClient(lease);
+        await using var game = session.CreateClient(lease);
         var operations = new OperationClient(game);
         var evidence = new List<object>();
         string path = Path.Combine(session.Directory, $"crafting-qualification-{Guid.NewGuid():N}.json");

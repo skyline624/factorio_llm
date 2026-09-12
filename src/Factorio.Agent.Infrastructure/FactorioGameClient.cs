@@ -3,8 +3,10 @@ using Factorio.Agent.Core;
 
 namespace Factorio.Agent.Infrastructure;
 
-public sealed class FactorioGameClient(RconClient rcon) : IGameClient
+public sealed class FactorioGameClient(RconClient rcon) : IGameClient, IAsyncDisposable
 {
+    public ValueTask DisposeAsync() => rcon.DisposeAsync();
+
     public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
     {
         string command = BuildCommand(request);

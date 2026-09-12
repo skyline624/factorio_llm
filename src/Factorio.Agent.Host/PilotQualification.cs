@@ -12,7 +12,7 @@ public sealed class PilotQualification(RuntimeSession session)
         if (!session.IsFixture) throw new InvalidOperationException("Pilot qualification requires --fixture.");
         if (phase is not ("manual" or "ai" or "standalone"))
             throw new ArgumentException("Pilot phase must be manual, ai or standalone.", nameof(phase));
-        var game = session.CreateClient();
+        await using var game = session.CreateClient();
         GameResponse observation = await game.ExecuteAsync(GameRequest.Create("observe"), token);
         Require(observation.Ok && observation.Data.GetProperty("goal").GetProperty("fixture").GetBoolean(),
             "The world must already be marked as a fixture.");

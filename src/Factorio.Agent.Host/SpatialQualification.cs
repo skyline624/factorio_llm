@@ -13,7 +13,7 @@ public sealed class SpatialQualification(RuntimeSession session)
         string reportPath = Path.Combine(session.Directory, $"spatial-qualification-{id}.json");
         List<object> evidence = [];
         using var lease = ActorControlLease.Acquire(session.Directory);
-        IGameClient game = session.CreateClient(lease);
+        await using var game = session.CreateClient(lease);
         var changingWorld = new ObstacleInjectionClient(game, session);
         await using var controller = new SpatialController(changingWorld, new ControllerJournal(Path.Combine(session.Directory, $"spatial-qualification-{id}.jsonl")));
         try

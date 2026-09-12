@@ -13,7 +13,7 @@ public sealed class DefenseQualification(RuntimeSession session)
         string reportPath = Path.Combine(session.Directory, $"defense-qualification-{id}.json");
         var evidence = new List<object>();
         using var lease = ActorControlLease.Acquire(session.Directory);
-        IGameClient game = session.CreateClient(lease);
+        await using var game = session.CreateClient(lease);
         var journal = new ControllerJournal(Path.Combine(session.Directory, $"defense-qualification-{id}.jsonl"));
         var controller = new DefenseController(game, journal);
         try

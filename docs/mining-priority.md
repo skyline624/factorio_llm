@@ -26,6 +26,12 @@ Cette tentative a été interrompue par une erreur de socket. Le dernier déplac
 
 La reprise avec le correctif récupère les cinq plaques prêtes, puis subit la même erreur de socket pendant un déplacement vers le combustible. Ce déplacement est confirmé terminé. Au tick 1195486, la lecture native constate 109 plaques portées, aucune en sortie, 28 minerais en entrée, 34 produits terminés et 250 points de vie. Le monde est sauvegardé au tick 1197080 puis le serveur arrêté. L'objectif de 125 n'est pas atteint ; la correction du ravitaillement est validée hors ligne, mais sa nouvelle exécution complète reste à démontrer après résolution du problème réseau.
 
+## Reprise après correction du transport et des stocks
+
+Le [transport RCON et la reprise des fours](rcon-lifetime.md) ont été corrigés après les interruptions précédentes. Le stock a atteint 140 plaques par réemploi des produits et minerais du four 683 ; un arbre a encore été miné pour le combustible dans ce chemin de reprise. Un essai suivant a atteint 155 plaques avec le contrôleur d'extraction automatique, sans minage manuel, construction ni ravitaillement de la foreuse. Un bois déjà stocké a complété les deux bois portés pour alimenter uniquement le four.
+
+La décision tient désormais compte des ingrédients chargés, de la cuisson engagée et des produits prêts avant de ravitailler la foreuse. Si ces stocks suffisent au lot, sa réserve est exclue de l'approvisionnement. La sauvegarde est conservée au tick 1273330. Les 405 tests hors ligne passent ; ces essais restent des validations de développement avec les interventions documentées.
+
 ## Limites
 
 - L'extraction générale de charbon ou de pierre vers un coffre reste à intégrer. Leur demande peut encore conduire au minage manuel ; la politique ne garantit pas encore zéro minage manuel après le démarrage.

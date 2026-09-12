@@ -7,6 +7,7 @@ public sealed record RconOptions
     public required string Password { get; init; }
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(15);
     public int MaximumResponseBytes { get; init; } = 2 * 1024 * 1024;
+    public bool KeepConnectionOpen { get; init; }
 
     internal void Validate()
     {

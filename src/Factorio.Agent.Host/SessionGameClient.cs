@@ -5,11 +5,12 @@ using Factorio.Agent.Core;
 namespace Factorio.Agent.Host;
 
 /// <summary>Serializes calls across CLI processes and detects observed world-history regressions.</summary>
-public sealed class SessionGameClient(RuntimeSession session, IGameClient inner, ActorControlLease? controllerLease = null) : IGameClient, IResourceMemoryReader
+public sealed class SessionGameClient(RuntimeSession session, IGameClient inner, ActorControlLease? controllerLease = null) : IGameClient, IResourceMemoryReader, IAsyncDisposable
 {
     private static readonly HashSet<string> Mutations = ["hello", "submit", "cancel", "mark_fixture", "prepare_checkpoint"];
     private readonly SemaphoreSlim callGate = new(1, 1);
     private int controlWaiters;
+    private bool disposed;
     private string WatermarkPath => Path.Combine(session.Directory, "observation-watermark.json");
 
     public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
@@ -71,6 +72,7 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
             while (true)
             {
                 await callGate.WaitAsync(token);
+                if (disposed) { callGate.Release(); throw new ObjectDisposedException(nameof(SessionGameClient)); }
                 if (control || Volatile.Read(ref controlWaiters) == 0) return new CallLease(callGate);
                 callGate.Release();
                 await Task.Delay(1, token);
@@ -91,6 +93,18 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
             disposed = true;
             gate.Release();
         }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await callGate.WaitAsync();
+        try
+        {
+            if (disposed) return;
+            disposed = true;
+            if (inner is IAsyncDisposable owned) await owned.DisposeAsync();
+        }
+        finally { callGate.Release(); }
     }
 
     private Watermark Verify(GameResponse response, Watermark? previous)

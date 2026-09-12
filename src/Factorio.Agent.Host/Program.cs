@@ -48,8 +48,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"belt-transport-{Guid.NewGuid():N}.jsonl");
-            var controller = new BeltTransportController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var controller = new BeltTransportController(game, new ControllerJournal(journalPath));
             Print(new { result = await controller.RunAsync(Required("source"), Required("target"), Required("item"),
                 int.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token), journalPath });
             break;
@@ -58,8 +59,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"fuel-feeder-{Guid.NewGuid():N}.jsonl");
-            var controller = new FuelFeederController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var controller = new FuelFeederController(game, new ControllerJournal(journalPath));
             Print(new { result = await controller.RunAsync(Required("boiler"), int.Parse(Option("reserve") ?? "50", CultureInfo.InvariantCulture),
                 int.Parse(Option("ticks") ?? "3600", CultureInfo.InvariantCulture), shutdown.Token), journalPath });
             break;
@@ -88,8 +90,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"assembly-{Guid.NewGuid():N}.jsonl");
-            var controller = new AssemblyController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var controller = new AssemblyController(game, new ControllerJournal(journalPath));
             Print(new { result = await controller.RunAsync(Required("item"), int.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token), journalPath });
             break;
         }
@@ -97,8 +100,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"laboratory-{Guid.NewGuid():N}.jsonl");
-            var controller = new ResearchGoalExecutor(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var controller = new ResearchGoalExecutor(game, new ControllerJournal(journalPath));
             Print(new { result = await controller.RunAsync(Required("technology"), shutdown.Token), journalPath });
             break;
         }
@@ -111,7 +115,8 @@ try
         case "verify-native":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
-            Print(new { report = await new NativeQualification(session).RunAsync(shutdown.Token) });
+            await using var qualification = new NativeQualification(session);
+            Print(new { report = await qualification.RunAsync(shutdown.Token) });
             break;
         }
         case "verify-pilot":
@@ -124,8 +129,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"defense-{Guid.NewGuid():N}.jsonl");
-            var controller = new DefenseController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var controller = new DefenseController(game, new ControllerJournal(journalPath));
             await controller.RunAsync(TimeSpan.FromSeconds(int.Parse(Option("seconds") ?? "60", CultureInfo.InvariantCulture)), shutdown.Token);
             Print(new { journal = journalPath });
             break;
@@ -134,7 +140,7 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
-            var game = (SessionGameClient)session.CreateClient(lease);
+            await using var game = session.CreateClient(lease);
             var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), shutdown.Token));
             var map = await new SpatialClient(game).CaptureAsync(cancellationToken: shutdown.Token);
             if (catalog.Scope != map.Scope) throw new InvalidDataException("Actor changed before history import.");
@@ -148,8 +154,9 @@ try
         case "factory":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            await using var game = session.CreateClient();
             string[]? capacityItems = Option("capacity-items")?.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-            FactorySnapshot snapshot = await new FactorySnapshotClient(session.CreateClient()).CaptureAsync(capacityItems,
+            FactorySnapshot snapshot = await new FactorySnapshotClient(game).CaptureAsync(capacityItems,
                 cancellationToken: shutdown.Token);
             string output = Path.Combine(session.Directory, $"factory-{Guid.NewGuid():N}.json");
             await File.WriteAllTextAsync(output, JsonSerializer.Serialize(snapshot, Protocol.Json), shutdown.Token);
@@ -174,7 +181,7 @@ try
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
             string journalPath = Path.Combine(session.Directory, $"research-preparation-{Guid.NewGuid():N}.jsonl");
-            var game = session.CreateClient(lease);
+            await using var game = session.CreateClient(lease);
             var journal = new ControllerJournal(journalPath);
             var controller = new ResearchPrerequisiteController(game, new ProductionGoalExecutor(game, journal), journal);
             Print(new { result = await controller.RunAsync(Required("technology"), shutdown.Token), journalPath });
@@ -183,8 +190,9 @@ try
         case "research-plan":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            await using var game = session.CreateClient();
             string technology = Required("technology");
-            TechnologyObservation observation = await new TechnologyClient(session.CreateClient())
+            TechnologyObservation observation = await new TechnologyClient(game)
                 .ReadDependenciesAsync(technology, shutdown.Token);
             TechnologyStep next = new TechnologyPlanner().Next(technology, observation.Technologies);
             string reportPath = Path.Combine(session.Directory, $"research-plan-{Guid.NewGuid():N}.json");
@@ -196,8 +204,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"steam-power-{Guid.NewGuid():N}.jsonl");
-            var controller = new SteamPowerController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var controller = new SteamPowerController(game, new ControllerJournal(journalPath));
             SteamPowerPlan? resume = Option("plan") is { } planPath
                 ? JsonSerializer.Deserialize<SteamPowerPlan>(await File.ReadAllTextAsync(planPath, shutdown.Token), Protocol.Json)
                     ?? throw new InvalidDataException("Missing power recovery plan.") : null;
@@ -208,8 +217,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"fluid-production-{Guid.NewGuid():N}.jsonl");
-            var result = await new FluidProductionController(session.CreateClient(lease), new ControllerJournal(journalPath))
+            var result = await new FluidProductionController(game, new ControllerJournal(journalPath))
                 .RunAsync(Required("fluid"), double.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token);
             Print(new { result, journalPath });
             break;
@@ -218,8 +228,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"pipe-connection-{Guid.NewGuid():N}.jsonl");
-            var result = await new PipeConnectionController(session.CreateClient(lease), new ControllerJournal(journalPath))
+            var result = await new PipeConnectionController(game, new ControllerJournal(journalPath))
                 .RunAsync(Required("source"), Required("target"), Required("fluid"), shutdown.Token);
             Print(new { result, journalPath });
             break;
@@ -229,15 +240,16 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"strategic-production-{Guid.NewGuid():N}.jsonl");
             using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
             var planner = new OllamaStrategicPlanner(http, new OllamaOptions { MaxAttempts = 1 });
-            var controller = new StrategicProductionController(session.CreateClient(lease), planner, new ControllerJournal(journalPath));
+            var controller = new StrategicProductionController(game, planner, new ControllerJournal(journalPath));
             if (args[0] == "run-campaign")
             {
                 string memoryPath = Path.Combine(session.Directory, "strategic-memory.json");
                 int maxGoals = int.Parse(Option("max-goals") ?? "10", CultureInfo.InvariantCulture);
-                var result = await new StrategicCampaignController(session.CreateClient(lease), controller, memoryPath)
+                var result = await new StrategicCampaignController(game, controller, memoryPath)
                     .RunAsync(maxGoals, shutdown.Token);
                 Print(new { result, journalPath, memoryPath });
             }
@@ -248,8 +260,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"automated-smelting-{Guid.NewGuid():N}.jsonl");
-            var controller = new AutomatedSmeltingController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var controller = new AutomatedSmeltingController(game, new ControllerJournal(journalPath));
             var result = await controller.RunAsync(Required("item"), int.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token);
             Print(new { result, journalPath });
             break;
@@ -258,8 +271,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"production-{Guid.NewGuid():N}.jsonl");
-            var controller = new ProductionGoalExecutor(session.CreateClient(lease), new ControllerJournal(journalPath));
+            var controller = new ProductionGoalExecutor(game, new ControllerJournal(journalPath));
             StockGoalResult result = await controller.RunAsync(Required("item"),
                 int.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token);
             Print(new { result.Method, result.Item, result.TargetStock, result.InitialStock, result.FinalStock,
@@ -269,8 +283,9 @@ try
         case "spatial":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            await using var game = session.CreateClient();
             string[]? items = Option("items")?.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-            SpatialSnapshot map = await new SpatialClient(session.CreateClient()).CaptureAsync(items, cancellationToken: shutdown.Token);
+            SpatialSnapshot map = await new SpatialClient(game).CaptureAsync(items, cancellationToken: shutdown.Token);
             string output = Path.Combine(session.Directory, $"spatial-{Guid.NewGuid():N}.json");
             await File.WriteAllTextAsync(output, JsonSerializer.Serialize(map, Protocol.Json), shutdown.Token);
             Print(new { map.CollectedTick, map.Bounds, map.Actor, entityCount = map.Entities.Count, output });
@@ -281,8 +296,9 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"spatial-operations-{Guid.NewGuid():N}.jsonl");
-            await using var controller = new SpatialController(session.CreateClient(lease), new ControllerJournal(journalPath));
+            await using var controller = new SpatialController(game, new ControllerJournal(journalPath));
             var target = new MapPosition(double.Parse(Required("x"), CultureInfo.InvariantCulture),
                 double.Parse(Required("y"), CultureInfo.InvariantCulture));
             if (args[0] == "navigate")
@@ -310,15 +326,16 @@ try
         case "rpc":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            await using var game = session.CreateClient();
             string action = args[0] == "observe" ? "observe" : Required("action");
             using JsonDocument json = JsonDocument.Parse(await JsonInput(options, shutdown.Token));
-            Print(await session.CreateClient().ExecuteAsync(GameRequest.Create(action, json.RootElement), shutdown.Token));
+            Print(await game.ExecuteAsync(GameRequest.Create(action, json.RootElement), shutdown.Token));
             break;
         }
         case "submit":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
-            var game = session.CreateClient();
+            await using var game = session.CreateClient();
             GameResponse hello = await session.HelloAsync(shutdown.Token);
             var scope = JsonSerializer.Deserialize<ActorScope>(hello.Data.GetProperty("scope"), Protocol.Json)!;
             using JsonDocument json = JsonDocument.Parse(await JsonInput(options, shutdown.Token));

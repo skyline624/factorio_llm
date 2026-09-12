@@ -5,10 +5,11 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 /// <summary>Explicit synthetic fixture. Its material injections disqualify it as an autonomous campaign.</summary>
-public sealed class NativeQualification(RuntimeSession session)
+public sealed class NativeQualification(RuntimeSession session) : IAsyncDisposable
 {
     private readonly List<object> evidence = [];
-    private readonly IGameClient game = session.CreateClient();
+    private readonly SessionGameClient game = session.CreateClient();
+    public ValueTask DisposeAsync() => game.DisposeAsync();
 
     public async Task<string> RunAsync(CancellationToken token)
     {

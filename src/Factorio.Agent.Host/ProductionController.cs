@@ -64,7 +64,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     state.Inventory.GetValueOrDefault(recipe.Ingredients[0].Name));
                 int batches = FurnaceBatchSizing.Limit(recipe, catalog.Items, Math.Min(supplied,
                     checked((int)Math.Ceiling((targetStock - state.Inventory.GetValueOrDefault(item)) / recipe.Products[0].Amount!.Value))));
-                await SmeltAsync(new("smelt", item, batches, recipe), state, catalog, map);
+                await SmeltAsync(new("smelt", item, batches, recipe), state, catalog, map, engaged.Id);
                 continue;
             }
             ProductionStep step = planner.Next(item, targetStock, state.Inventory, catalog, map,
@@ -135,15 +135,14 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             throw new InvalidOperationException("Travel to a known entity exhausted its local segment budget.");
         }
 
-        async Task SmeltAsync(ProductionStep step, ProductionState state, ProductionCatalog catalog, SpatialSnapshot map)
+        async Task SmeltAsync(ProductionStep step, ProductionState state, ProductionCatalog catalog, SpatialSnapshot map, string? requiredId = null)
         {
             NativeRecipe recipe = step.Recipe!;
             if (recipe.Ingredients.Count != 1 || recipe.Products.Count != 1)
                 throw new InvalidOperationException("Automatic furnace selection currently requires one solid ingredient and product.");
             var supported = catalog.Machines.Where(m => m.Value.Categories.ContainsKey(recipe.Category))
                 .OrderBy(m => m.Key, StringComparer.Ordinal).ToArray();
-            var owned = state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id) && supported.Any(m => m.Value.EntityName == e.Name))
-                .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).FirstOrDefault(e => e.AsMachine().CanProcess(recipe));
+            var owned = SelectFurnace(recipe, catalog, state, map.Actor.Position, requiredId);
             if (owned is null)
                 throw new InvalidOperationException("The planned compatible furnace is unavailable; reconcile before replanning.");
             var machine = supported.First(m => m.Value.EntityName == owned.Name);
@@ -165,6 +164,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 var inputInventory = factory.Records.Single(r => r.Kind == "inventory" && r.Id == inputId && r.EntityId == entityId);
                 long insertable = inputInventory.Data.GetProperty("capacityHints").GetProperty(input).GetProperty("insertable").GetInt64();
                 if (insertable < missingInput) throw new InvalidOperationException("Native furnace input capacity changed; reconcile the prepared batch before insertion.");
+                ProductionState carried = await ObserveAsync(deadline.Token);
+                if (carried.Scope != state.Scope || carried.ControlMode != "ai" || carried.Inventory.GetValueOrDefault(input) < missingInput)
+                    throw new InvalidOperationException("The actor cannot supply the selected furnace batch; reconcile before insertion.");
                 OperationReceipt inserted = await ActAsync("insert", new { entityId, inventory = "input", item = input, count = missingInput }, 600);
                 if (inserted.Status != "completed") throw new InvalidOperationException("Furnace input was only partially transferred; re-observation is required.");
             }
@@ -216,6 +218,13 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             throw new InvalidOperationException("Furnace output was not established within its observation budget.");
         }
     }
+
+    internal static ProductionEntity? SelectFurnace(NativeRecipe recipe, ProductionCatalog catalog, ProductionState state,
+        MapPosition actorPosition, string? requiredId) =>
+        state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id)
+            && (requiredId is null || e.Id == requiredId)
+            && catalog.Machines.Values.Any(m => m.EntityName == e.Name && m.Categories.ContainsKey(recipe.Category)))
+            .OrderBy(e => e.Position.DistanceTo(actorPosition)).FirstOrDefault(e => e.AsMachine().CanProcess(recipe));
 
     private static double MiningDistance(SpatialEntity source, SpatialSnapshot map) =>
         map.Prototypes[source.Name].Type == "resource" ? 1 : 3;

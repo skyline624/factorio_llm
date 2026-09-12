@@ -122,7 +122,7 @@ dotnet $hostDll resume --session $sessionFile
 
 `stop` annule le travail en cours, détache le pilote et prépare une sauvegarde à tick fixe avec empreinte SHA-256. `resume` vérifie cette sauvegarde et l'historique observé avant une nouvelle session de contrôle ; le monde et ses stocks sont conservés. La reconnexion graphique se fait ensuite avec `connect`. Voir le [contrat de reprise et ses limites](docs/checkpoints.md).
 
-Le manifeste contient un secret RCON local et reste ignoré par Git. Le serveur écoute sur la boucle locale. Un résultat de mutation inconnu exige consultation de son reçu ; aucune répétition automatique n'est effectuée. La reprise d'un objectif stratégique complet et la récupération après crash restent à développer. Voir les [résultats vérifiés et limites](docs/validation.md).
+Le manifeste contient un secret RCON local et reste ignoré par Git. Le serveur écoute sur la boucle locale. Les commandes conservent une [connexion RCON sérialisée et explicitement fermée](docs/rcon-lifetime.md), pour éviter les ouvertures répétées pendant les observations. Un résultat de mutation inconnu exige consultation de son reçu ; aucune répétition automatique n'est effectuée. La reprise d'un objectif stratégique complet et la récupération après crash restent à développer. Voir les [résultats vérifiés et limites](docs/validation.md).
 
 ## Documents
 

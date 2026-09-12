@@ -15,9 +15,10 @@ public sealed record RuntimeSession(string Directory, string Executable, string 
     string RconPassword, string SessionId, string ProposedWorldId, uint Seed, bool IsFixture, DateTime? ServerStartTimeUtc = null)
 {
     public string ManifestPath => Path.Combine(Directory, "session.json");
-    public RconClient CreateRcon() => new(new RconOptions { Port = RconPort, Password = RconPassword, MaximumResponseBytes = 8 * 1024 * 1024 });
-    public IGameClient CreateClient(ActorControlLease? controllerLease = null) =>
-        new SessionGameClient(this, new FactorioGameClient(CreateRcon()), controllerLease);
+    public RconClient CreateRcon(bool keepConnectionOpen = false) => new(new RconOptions { Port = RconPort, Password = RconPassword,
+        MaximumResponseBytes = 8 * 1024 * 1024, KeepConnectionOpen = keepConnectionOpen });
+    public SessionGameClient CreateClient(ActorControlLease? controllerLease = null) =>
+        new(this, new FactorioGameClient(CreateRcon(keepConnectionOpen: true)), controllerLease);
     public static async Task<RuntimeSession> ReadAsync(string file, CancellationToken token = default) =>
         JsonSerializer.Deserialize<RuntimeSession>(await File.ReadAllTextAsync(file, token), new JsonSerializerOptions(JsonSerializerDefaults.Web))
         ?? throw new InvalidDataException("Session file is empty.");
@@ -26,7 +27,8 @@ public sealed record RuntimeSession(string Directory, string Executable, string 
 
     public async Task<GameResponse> HelloAsync(CancellationToken token = default)
     {
-        GameResponse response = await CreateClient().ExecuteAsync(GameRequest.Create("hello", new { sessionId = SessionId, worldId = ProposedWorldId }), token);
+        await using var client = CreateClient();
+        GameResponse response = await client.ExecuteAsync(GameRequest.Create("hello", new { sessionId = SessionId, worldId = ProposedWorldId }), token);
         if (!response.Ok) throw new GameRpcException(response.Error!);
         return response;
     }
@@ -114,7 +116,8 @@ public static partial class FactorioRuntime
     {
         using var lease = ActorControlLease.Acquire(session.Directory);
         await RequireCurrentManifestAsync(session, token);
-        GameResponse observed = await session.CreateClient(lease).ExecuteAsync(GameRequest.Create("observe"), token);
+        await using var client = session.CreateClient(lease);
+        GameResponse observed = await client.ExecuteAsync(GameRequest.Create("observe"), token);
         if (!observed.Ok) throw new GameRpcException(observed.Error!);
         JsonElement players = observed.Data.GetProperty("players");
         if (players.ValueKind == JsonValueKind.Array && players.EnumerateArray().Any(player => player.GetProperty("connected").GetBoolean()))
@@ -150,7 +153,7 @@ public static partial class FactorioRuntime
         if (process.HasExited || !string.Equals(process.MainModule?.FileName, session.Executable, StringComparison.OrdinalIgnoreCase)
             || (session.ServerStartTimeUtc is { } expected && process.StartTime.ToUniversalTime() != expected))
             throw new InvalidOperationException("The saved process identity does not match the running Factorio server.");
-        IGameClient client = session.CreateClient(lease);
+        await using var client = session.CreateClient(lease);
         GameResponse prepared = await client.ExecuteAsync(GameRequest.Create("prepare_checkpoint", new { checkpointId = Guid.NewGuid().ToString("N") }), token);
         if (!prepared.Ok) throw new GameRpcException(prepared.Error!);
         string checkpointId = prepared.Data.GetProperty("checkpointId").GetString()!;

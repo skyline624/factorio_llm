@@ -164,3 +164,8 @@ La commande générale d’assemblage a porté le stock de 65 à 70 packs rouges
 ## Priorité à l’extraction mécanique
 
 Un objectif de cuivre a porté le stock de 75 à 100 avec une foreuse et un four construits par le C#, sans minage manuel de minerai de cuivre ou de fer pendant le lot. Dix pierres et un arbre ont été récoltés pour l’amorçage. Les [preuves et limites du ravitaillement](mining-priority.md) distinguent ce lot réussi, le défaut de petits approvisionnements, la tentative suivante interrompue et la correction testée. Les 397 tests hors ligne passent ; l’extraction générale du charbon et de la pierre reste incomplète. Aucune campagne finale n’est qualifiée.
+
+
+## Transport persistant et reprise des fours
+
+Les erreurs de ports TCP ont conduit à conserver une connexion RCON sérialisée par client, fermée explicitement en fin de commande. Les réponses perdues ne déclenchent aucun rejeu. Les essais ont aussi corrigé la substitution d’un four plus proche à celui dont les stocks étaient comptés, puis le ravitaillement inutile d’une foreuse malgré les minerais déjà chargés. Les [preuves détaillées](rcon-lifetime.md) distinguent les interruptions, les corrections et deux lots terminés : 110 à 140 plaques, puis 140 à 155. Le dernier lot ne contient aucun minage manuel ni ravitaillement de foreuse. Le checkpoint 1273330 est vérifié et le serveur arrêté. Les 405 tests hors ligne passent, avec un test cloud optionnel ignoré ; zéro campagne finale qualifiée.

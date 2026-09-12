@@ -4,13 +4,17 @@ using System.Text;
 
 namespace Factorio.Agent.Infrastructure;
 
-/// <summary>One authenticated connection per exchange; ambiguous mutations are never retried.</summary>
-public sealed class RconClient
+/// <summary>Serialized authenticated exchanges; a failed exchange closes the connection and is never replayed.</summary>
+public sealed class RconClient : IAsyncDisposable
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private const string BarrierCommand = "/silent-command rcon.print('factorio_agent_rcon_barrier')";
     private static readonly byte[] BarrierResponse = Utf8.GetBytes("factorio_agent_rcon_barrier\n");
     private readonly RconOptions options;
+    private readonly SemaphoreSlim gate = new(1, 1);
+    private TcpClient? connection;
+    private int nextRequestId = 2;
+    private bool disposed;
 
     public RconClient(RconOptions options)
     {
@@ -29,43 +33,80 @@ public sealed class RconClient
         deadline.CancelAfter(options.Timeout);
         try
         {
-            using var client = new TcpClient { NoDelay = true };
-            await client.ConnectAsync(options.Host, options.Port, deadline.Token);
-            await using NetworkStream stream = client.GetStream();
-            await WritePacketAsync(stream, 1, 3, options.Password, deadline.Token);
-            await AuthenticateAsync(stream, deadline.Token);
-            await WritePacketAsync(stream, 2, 2, command, deadline.Token);
-            using var response = new MemoryStream();
-            bool barrierSent = false;
-            while (true)
+            await gate.WaitAsync(deadline.Token);
+            try { return await ExchangeAsync(command, deadline.Token); }
+            catch
             {
-                Packet packet = await ReadPacketAsync(stream, deadline.Token);
-                if (packet.Type != 0) throw new InvalidDataException("Unexpected RCON response type.");
-                if (packet.Id == 3)
-                {
-                    if (!barrierSent) throw new InvalidDataException("RCON barrier arrived before the command response.");
-                    if (!packet.Body.AsSpan().SequenceEqual(BarrierResponse))
-                        throw new InvalidDataException("Unexpected RCON barrier response.");
-                    break;
-                }
-                if (packet.Id != 2) throw new InvalidDataException("RCON response correlation mismatch.");
-                if (response.Length + packet.Body.Length > options.MaximumResponseBytes)
-                    throw new InvalidDataException("RCON response exceeds configured size limit.");
-                response.Write(packet.Body);
-                if (!barrierSent)
-                {
-                    // Factorio can drop a reply when commands are pipelined before its first response.
-                    // Its nonempty read-only barrier then terminates any remaining response chunks.
-                    await WritePacketAsync(stream, 3, 2, BarrierCommand, deadline.Token);
-                    barrierSent = true;
-                }
+                CloseConnection();
+                throw;
             }
-            return Utf8.GetString(response.GetBuffer(), 0, checked((int)response.Length));
+            finally
+            {
+                if (!options.KeepConnectionOpen) CloseConnection();
+                gate.Release();
+            }
         }
         catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
         {
             throw new TimeoutException("RCON exchange timed out. The action outcome may be unknown; observe before retrying.", error);
         }
+    }
+
+    private async Task<string> ExchangeAsync(string command, CancellationToken token)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (nextRequestId > int.MaxValue - 2) CloseConnection();
+        if (connection is null)
+        {
+            connection = new TcpClient { NoDelay = true };
+            await connection.ConnectAsync(options.Host, options.Port, token);
+            await WritePacketAsync(connection.GetStream(), 1, 3, options.Password, token);
+            await AuthenticateAsync(connection.GetStream(), token);
+        }
+        NetworkStream stream = connection.GetStream();
+        int commandId = nextRequestId++;
+        int barrierId = nextRequestId++;
+        await WritePacketAsync(stream, commandId, 2, command, token);
+        using var response = new MemoryStream();
+        bool barrierSent = false;
+        while (true)
+        {
+            Packet packet = await ReadPacketAsync(stream, token);
+            if (packet.Type != 0) throw new InvalidDataException("Unexpected RCON response type.");
+            if (packet.Id == barrierId)
+            {
+                if (!barrierSent) throw new InvalidDataException("RCON barrier arrived before the command response.");
+                if (!packet.Body.AsSpan().SequenceEqual(BarrierResponse))
+                    throw new InvalidDataException("Unexpected RCON barrier response.");
+                break;
+            }
+            if (packet.Id != commandId) throw new InvalidDataException("RCON response correlation mismatch.");
+            if (response.Length + packet.Body.Length > options.MaximumResponseBytes)
+                throw new InvalidDataException("RCON response exceeds configured size limit.");
+            response.Write(packet.Body);
+            if (!barrierSent)
+            {
+                // Factorio can drop a reply when commands are pipelined before its first response.
+                // Its nonempty read-only barrier then terminates any remaining response chunks.
+                await WritePacketAsync(stream, barrierId, 2, BarrierCommand, token);
+                barrierSent = true;
+            }
+        }
+        return Utf8.GetString(response.GetBuffer(), 0, checked((int)response.Length));
+    }
+
+    private void CloseConnection()
+    {
+        connection?.Dispose();
+        connection = null;
+        nextRequestId = 2;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await gate.WaitAsync();
+        try { disposed = true; CloseConnection(); }
+        finally { gate.Release(); }
     }
 
     private async Task AuthenticateAsync(NetworkStream stream, CancellationToken cancellationToken)

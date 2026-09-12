@@ -5,6 +5,14 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class SmeltingFuelPlannerTests
 {
+    [Fact]
+    public void SufficientLoadedOreExcludesTheDrillFromFuelProcurement()
+    {
+        var plan = new SmeltingFuelPlan("wood", 10, 5, 15000000, 7200000, 1.25);
+        Assert.Equal(5, plan.ProcurementTarget(false, 1, 0, 0, includeDrillReserve: false));
+        Assert.Equal(15, plan.ProcurementTarget(false, 1, 0, 0));
+    }
+
     [Theory]
     [InlineData(true, 1, 0, 0, 15)]
     [InlineData(true, 15, 0, 0, 0)]

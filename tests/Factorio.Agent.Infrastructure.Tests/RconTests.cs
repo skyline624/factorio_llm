@@ -13,6 +13,116 @@ public sealed class RconTests
     private const string BarrierCommand = "/silent-command rcon.print('factorio_agent_rcon_barrier')";
     private const string BarrierResponse = "factorio_agent_rcon_barrier\n";
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReusesOneAuthenticatedConnectionAndSerializesExchanges(bool concurrent)
+    {
+        await WithServer(async stream =>
+        {
+            Assert.Equal(3, (await ReadAsync(stream)).Type);
+            await WriteAsync(stream, 1, 2, []);
+            var commandIds = new HashSet<int>();
+            for (int i = 0; i < 3; i++)
+            {
+                var command = await ReadAsync(stream);
+                Assert.Equal(2, command.Type);
+                Assert.True(commandIds.Add(command.Id));
+                string value = Encoding.UTF8.GetString(command.Body);
+                await Task.Delay(10);
+                Assert.False(stream.DataAvailable, "Only one exchange may use the connection at a time.");
+                await WriteAsync(stream, command.Id, 0, Encoding.UTF8.GetBytes(value));
+                var barrier = await ReadAsync(stream);
+                Assert.Equal(BarrierCommand, Encoding.UTF8.GetString(barrier.Body));
+                await WriteAsync(stream, barrier.Id, 0, Encoding.UTF8.GetBytes(BarrierResponse));
+            }
+        }, async client =>
+        {
+            if (concurrent)
+                Assert.Equal(new[] { "one", "two", "three" }, await Task.WhenAll(new[] { "one", "two", "three" }.Select(v => client.ExecuteAsync(v))));
+            else
+                foreach (string value in new[] { "one", "two", "three" }) Assert.Equal(value, await client.ExecuteAsync(value));
+        }, keepConnectionOpen: true);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedExchangeIsNotReplayedAndNextExplicitCallReconnects(bool timeout)
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        int mutations = 0;
+        var failedConnectionClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task server = Task.Run(async () =>
+        {
+            using (var socket = await listener.AcceptTcpClientAsync())
+            {
+                var stream = socket.GetStream();
+                await ReadAsync(stream);
+                await WriteAsync(stream, 1, 2, []);
+                Assert.Equal("mutate-once", Encoding.UTF8.GetString((await ReadAsync(stream)).Body));
+                mutations++;
+                if (timeout) await Task.Delay(300);
+            }
+            failedConnectionClosed.SetResult();
+            using var nextSocket = await listener.AcceptTcpClientAsync();
+            var nextStream = nextSocket.GetStream();
+            await ReadAsync(nextStream);
+            await WriteAsync(nextStream, 1, 2, []);
+            var request = await ReadAsync(nextStream);
+            Assert.Equal("observe", Encoding.UTF8.GetString(request.Body));
+            await WriteAsync(nextStream, request.Id, 0, Encoding.UTF8.GetBytes("state"));
+            var barrier = await ReadAsync(nextStream);
+            await WriteAsync(nextStream, barrier.Id, 0, Encoding.UTF8.GetBytes(BarrierResponse));
+        });
+        await using var client = new RconClient(new() { Port = port, Password = "test", KeepConnectionOpen = true,
+            Timeout = TimeSpan.FromMilliseconds(150) });
+        if (timeout) await Assert.ThrowsAsync<TimeoutException>(() => client.ExecuteAsync("mutate-once"));
+        else await Assert.ThrowsAnyAsync<IOException>(() => client.ExecuteAsync("mutate-once"));
+        await failedConnectionClosed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, mutations);
+        Assert.Equal("state", await client.ExecuteAsync("observe"));
+        await server.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task CancellingQueuedCallPreservesTheActiveConnectionAndDisposalClosesIt()
+    {
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await WithServer(async stream =>
+        {
+            await ReadAsync(stream);
+            await WriteAsync(stream, 1, 2, []);
+            for (int i = 0; i < 2; i++)
+            {
+                var request = await ReadAsync(stream);
+                if (i == 0) { received.SetResult(); await release.Task; }
+                Assert.Equal(i == 0 ? "active" : "next", Encoding.UTF8.GetString(request.Body));
+                await WriteAsync(stream, request.Id, 0, Encoding.UTF8.GetBytes("ok"));
+                var barrier = await ReadAsync(stream);
+                await WriteAsync(stream, barrier.Id, 0, Encoding.UTF8.GetBytes(BarrierResponse));
+            }
+            Assert.Equal(0, await stream.ReadAsync(new byte[1]));
+        }, async client =>
+        {
+            Task<string> active = client.ExecuteAsync("active");
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            using var cancel = new CancellationTokenSource();
+            Task<string> queued = client.ExecuteAsync("cancelled", cancel.Token);
+            cancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+            release.SetResult();
+            Assert.Equal("ok", await active);
+            Assert.Equal("ok", await client.ExecuteAsync("next"));
+            await client.DisposeAsync();
+            await client.DisposeAsync();
+            await Assert.ThrowsAsync<ObjectDisposedException>(() => client.ExecuteAsync("after-dispose"));
+        }, keepConnectionOpen: true);
+    }
+
     [Fact]
     public async Task SendsBarrierOnlyAfterTheFirstCommandResponse()
     {
@@ -150,7 +260,7 @@ public sealed class RconTests
         Assert.Throws<ArgumentException>(() => FactorioGameClient.BuildCommand(GameRequest.Create(action)));
 
     private static async Task WithServer(Func<NetworkStream, Task> server, Func<RconClient, Task> action,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null, bool keepConnectionOpen = false)
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -163,10 +273,11 @@ public sealed class RconTests
         });
         try
         {
-            await action(new RconClient(new RconOptions
+            await using var client = new RconClient(new RconOptions
             {
-                Port = port, Password = "test-only", Timeout = timeout ?? TimeSpan.FromSeconds(5)
-            }));
+                Port = port, Password = "test-only", Timeout = timeout ?? TimeSpan.FromSeconds(5), KeepConnectionOpen = keepConnectionOpen
+            });
+            await action(client);
         }
         finally
         {

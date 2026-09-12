@@ -3,9 +3,9 @@ namespace Factorio.Agent.Core;
 public sealed record SmeltingFuelPlan(string Fuel, int DrillReserve, int FurnaceReserve,
     double DrillWorkJoules, double FurnaceWorkJoules, double ReserveMargin)
 {
-    public int ProcurementTarget(bool refuellingDrill, long carried, long drillStock, long furnaceStock)
+    public int ProcurementTarget(bool refuellingDrill, long carried, long drillStock, long furnaceStock, bool includeDrillReserve = true)
     {
-        long missingDrill = Math.Max(0, DrillReserve - drillStock);
+        long missingDrill = includeDrillReserve ? Math.Max(0, DrillReserve - drillStock) : 0;
         long missingFurnace = Math.Max(0, FurnaceReserve - furnaceStock);
         long neededNow = refuellingDrill ? missingDrill : missingFurnace;
         return carried < neededNow ? checked((int)(missingDrill + missingFurnace)) : 0;

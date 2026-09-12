@@ -12,7 +12,7 @@ public sealed class FactoryQualification(RuntimeSession session)
         string reportPath = Path.Combine(session.Directory, $"factory-qualification-{Guid.NewGuid():N}.json");
         List<object> evidence = [];
         using var lease = ActorControlLease.Acquire(session.Directory);
-        IGameClient game = session.CreateClient(lease);
+        await using var game = session.CreateClient(lease);
         try
         {
             GameResponse marked = await game.ExecuteAsync(GameRequest.Create("mark_fixture", new { reason = "Synthetic immutable factory stock qualification." }), token);

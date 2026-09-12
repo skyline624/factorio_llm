@@ -50,7 +50,7 @@ public static partial class FactorioRuntime
         await session.WriteAsync(CancellationToken.None);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(90));
-        IGameClient raw = new FactorioGameClient(session.CreateRcon());
+        await using var raw = new FactorioGameClient(session.CreateRcon(keepConnectionOpen: true));
         GameResponse before = await ObserveLoadedAsync(session, process, raw, deadline.Token);
         CheckpointStore.VerifyLoaded(before, prior, seal, watermark);
         await LocalJson.WriteAsync(Path.Combine(run, "loaded-observation.json"), before, deadline.Token);
@@ -61,7 +61,8 @@ public static partial class FactorioRuntime
             sessionId = session.SessionId, worldId = session.ProposedWorldId, checkpointId = seal?.CheckpointId
         }), deadline.Token);
         if (!hello.Ok) throw new GameRpcException(hello.Error!);
-        GameResponse after = await session.CreateClient(lease).ExecuteAsync(GameRequest.Create("observe"), deadline.Token);
+        await using var client = session.CreateClient(lease);
+        GameResponse after = await client.ExecuteAsync(GameRequest.Create("observe"), deadline.Token);
         if (!after.Ok) throw new GameRpcException(after.Error!);
         ActorScope beforeScope = before.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
         ActorScope afterScope = after.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
