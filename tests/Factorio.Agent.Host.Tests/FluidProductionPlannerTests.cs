@@ -61,5 +61,6 @@ public sealed class FluidProductionPlannerTests
         [new("refining", true, "oil", 5, [new("oil", "fluid", 100)], [new("gas", "fluid", 45)], true)],
         new Dictionary<string, NativeItem> { { "refinery", new(0, 10, PlaceEntity: "refinery", PlaceEntityType: "assembling-machine") } },
         new Dictionary<string, NativeMaterial[]>(), new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>(),
-        new Dictionary<string, NativeAssembler> { { "refinery", new("refinery", new Dictionary<string, bool> { { "oil", true } }, 1, 7000, 255) } });
+        new Dictionary<string, NativeAssembler> { { "refinery", new("refinery", new Dictionary<string, bool> { { "oil", true } }, 1, 7000, 255,
+            FluidInputCount: 2, FluidOutputCount: 3) } });
 }

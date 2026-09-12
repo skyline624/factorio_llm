@@ -39,12 +39,14 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
         if (plan.Pipes.Count > 0) await new ProductionGoalExecutor(game, journal).RunAsync(pipeItem, plan.Pipes.Count, token);
         await using var controller = new SpatialController(game, journal);
         var construction = new PoweredMachineController(game, journal);
-        foreach (var position in plan.Pipes)
+        for (int index = 0; index < plan.Pipes.Count; index++)
         {
+            var position = plan.Pipes[index];
             var current = await MapAsync();
             if (!PipeRoutePlanner.ConnectionsSafe(current, position, plan.Source, plan.Target, built))
                 throw new InvalidDataException("The next pipe would join an unplanned fluid port. Reconcile the partial route.");
-            string id = await construction.BuildAtAsync(pipeItem, new(position, 0, 0), catalog, controller, token);
+            var remaining = plan.Pipes.Skip(index + 1).Append(plan.Source.Position).Append(plan.Target.Position).ToArray();
+            string id = await construction.BuildAtAsync(pipeItem, new(position, 0, 0), catalog, controller, token, remaining);
             built.Add(id);
             await journal.AppendAsync("pipe-built", new { id, position, sourceId, targetId, fluid }, token);
         }

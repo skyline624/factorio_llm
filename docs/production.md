@@ -4,7 +4,7 @@ La boucle C# traduit un stock cible d'objets solides en extraction, fabrication 
 
 ## Données et décisions
 
-`production_catalog` expose à un tick unique les recettes non cachées avec leur disponibilité, ingrédients et produits, les catégories de fabrication du personnage, les produits d'extraction des ressources et arbres, les combustibles et les fours compatibles. C# accepte actuellement les transformations solides déterministes. Un cycle, une recette verrouillée, un fluide ou un résultat probabiliste ne devient pas une production promise.
+`production_catalog` expose à un tick unique les recettes non cachées avec leur disponibilité, ingrédients et produits, les catégories de fabrication du personnage, les produits d'extraction des ressources et arbres, les combustibles et les fours compatibles. C# accepte les produits solides déterministes, y compris les [ingrédients mixtes en usine chimique](chemical-production.md). Les besoins fluides passent par des circuits natifs distincts des livraisons d’objets. Un cycle de dépendances, une recette verrouillée ou un résultat probabiliste ne devient pas une production promise.
 
 Le planificateur choisit une prochaine action et relit l'inventaire après son exécution. Les objectifs portent actuellement sur un seuil dans **l'inventaire principal du personnage**, entre 1 et 1 000 objets. La cuisson est découpée en lots de 16 fabrications au plus. Les stocks des autres inventaires ne sont pas présentés comme des objets déjà transportés par le personnage ; les sorties de four disponibles sont récupérées avant d'engager une nouvelle extraction.
 

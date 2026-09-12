@@ -14,6 +14,18 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     private readonly DefenseController defense = new(game, journal);
     private string? ownedOperation;
 
+    public async Task ApproachEntityAsync(string entityId, MapPosition knownPosition, ProductionCatalog catalog,
+        CancellationToken token = default)
+    {
+        await TravelAsync(knownPosition, 8, catalog, token);
+        SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
+        if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while approaching an entity.");
+        var entity = map.Entities.Single(e => e.Id == entityId);
+        MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map), entity)
+            ?? throw new InvalidOperationException("No reachable interaction position for the observed entity.");
+        await NavigateAsync(approach, .2, token);
+    }
+
     public async Task TravelAsync(MapPosition destination, double arrivalDistance, ProductionCatalog catalog,
         CancellationToken token = default)
     {
@@ -129,12 +141,26 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 if (known.Scope != map.Scope) throw new InvalidDataException("Actor changed while reading resource search landmarks.");
                 hint = memory.ProcessingAreaHint(wanted, catalog, known.Entities.Select(e => (e.Id, e.Recipe ?? e.PreviousRecipe, e.Position)), map);
                 if (hint is not null)
-                    await journal.AppendAsync("factory-resource-search-hint", new { map.Scope, map.SurfaceIndex, known.Tick, wanted, hint,
-                        interpretation = "processing-area-hypothesis-not-an-observed-deposit" }, token);
+                    await journal.AppendAsync("factory-resource-search-hint", new
+                    {
+                        map.Scope,
+                        map.SurfaceIndex,
+                        known.Tick,
+                        wanted,
+                        hint,
+                        interpretation = "processing-area-hypothesis-not-an-observed-deposit"
+                    }, token);
             }
             if (remembered is not null)
-                await journal.AppendAsync("resource-memory-target", new { map.Scope, map.SurfaceIndex, map.CollectedTick, wanted,
-                    remembered, interpretation = "historical-destination-requires-local-reobservation" }, token);
+                await journal.AppendAsync("resource-memory-target", new
+                {
+                    map.Scope,
+                    map.SurfaceIndex,
+                    map.CollectedTick,
+                    wanted,
+                    remembered,
+                    interpretation = "historical-destination-requires-local-reobservation"
+                }, token);
             try { return new(planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position, memory?.SurveyedCells), map.CollectedTick); }
             catch (ExplorationBlockedException) when (cleared < 16)
             {
@@ -197,8 +223,12 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (selected is null) throw new InvalidOperationException($"No native-valid placement among the {candidates.Count} candidates tested.");
             await journal.AppendAsync("placement-plan", new { map.Scope, map.CollectedTick, item, preferredPosition, selected }, deadline.Token);
             var submission = OperationSubmission.Create(map.Scope, "build", new { item, position = selected.Position, direction = selected.Direction },
-                validation.CollectedTick + 600, new { inventory = new Dictionary<string, int> { [item] = 1 },
-                    position = map.Actor.Position, positionTolerance = 0.5 });
+                validation.CollectedTick + 600, new
+                {
+                    inventory = new Dictionary<string, int> { [item] = 1 },
+                    position = map.Actor.Position,
+                    positionTolerance = 0.5
+                });
             return await ExecuteAsync(submission, deadline.Token);
         }
     }
@@ -211,8 +241,13 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         try { receipt = await operations.SubmitAsync(submission, token); }
         catch (OperationOutcomeUnknownException error)
         {
-            await journal.AppendAsync("outcome-unknown", new { error.OperationId, error.Message,
-                cause = error.InnerException?.GetType().Name, detail = error.InnerException?.Message }, token);
+            await journal.AppendAsync("outcome-unknown", new
+            {
+                error.OperationId,
+                error.Message,
+                cause = error.InnerException?.GetType().Name,
+                detail = error.InnerException?.Message
+            }, token);
             receipt = await QueryKnownAsync(submission.OperationId, token);
         }
         while (!receipt.IsTerminal)
@@ -255,8 +290,11 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 OperationReceipt receipt = await QueryKnownAsync(ownedOperation, stopDeadline.Token);
                 if (!receipt.IsTerminal)
                 {
-                    await journal.AppendAsync("cancel-intent", new { operationId = ownedOperation,
-                        reason = "Spatial controller stopping." }, stopDeadline.Token);
+                    await journal.AppendAsync("cancel-intent", new
+                    {
+                        operationId = ownedOperation,
+                        reason = "Spatial controller stopping."
+                    }, stopDeadline.Token);
                     try { receipt = await operations.CancelAsync(ownedOperation, stopDeadline.Token); }
                     catch (OperationOutcomeUnknownException)
                     {

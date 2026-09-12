@@ -37,7 +37,7 @@ Le [profil exemple](config/appsettings.example.json) décrit les paramètres de 
 Copy-Item config/appsettings.example.json config/appsettings.local.json
 ```
 
-L'adaptateur a réussi un appel réel avec l'effort `low` sur un contexte synthétique, puis a été relié à une première boucle de production dans le jeu. La présence de JSON ou d'arguments d'outils ne garantit jamais leur validité : syntaxe, schéma et corrélation sont contrôlés. La traduction actuelle accepte des objectifs de stock d'objets solides et de recherche identifiée dans le catalogue natif. C# résout les prérequis scientifiques, fabrique les packs solides pris en charge et vérifie chaque déblocage dans le moteur. Les autres objectifs restent des propositions non exécutables. Le profil ne contient aucun secret et son chargement par une commande de campagne complète reste à développer.
+L'adaptateur a réussi un appel réel avec l'effort `low` sur un contexte synthétique, puis a été relié à une première boucle de production dans le jeu. La présence de JSON ou d'arguments d'outils ne garantit jamais leur validité : syntaxe, schéma et corrélation sont contrôlés. La traduction actuelle accepte des objectifs de stock d’objets solides, de fluides et de recherche identifiée dans le catalogue natif, sous les limites documentées des exécuteurs. C# résout les prérequis scientifiques, fabrique les packs solides pris en charge et vérifie chaque déblocage dans le moteur. Les autres objectifs restent des propositions non exécutables. Le profil ne contient aucun secret et son chargement par une commande de campagne complète reste à développer.
 
 ## Essais avec Factorio
 
@@ -141,4 +141,4 @@ La commande `run-campaign --session FILE --max-goals 10` ajoute une [continuité
 
 La recherche prend également en charge le [déblocage du raffinage par extraction électrique native](docs/resource-research.md), qualifié dans une fixture avec un chevalet placé et alimenté par C#. Les réseaux distants, le raffinage et la chimie restent à développer.
 
-Le [raffinage et le routage des tuyaux](docs/fluid-production.md) sont accessibles par `produce-fluid` et `connect-fluid`. Une fixture a vérifié la production native de gaz, la réutilisation de la raffinerie et le dimensionnement du stockage de sortie. Les recettes mixtes et la production industrielle continue restent incomplètes.
+Le [raffinage et le routage des tuyaux](docs/fluid-production.md) sont accessibles par `produce-fluid` et `connect-fluid`. Une fixture a vérifié la production native de gaz, la réutilisation de la raffinerie et le dimensionnement du stockage de sortie. Les recettes mixtes à produit solide disposent d’un [essai natif de plastique](docs/chemical-production.md). La production industrielle continue reste incomplète.

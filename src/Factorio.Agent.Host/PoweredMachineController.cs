@@ -60,13 +60,13 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
     }
 
     public async Task<string> BuildAtAsync(string item, PlacementCandidate candidate, ProductionCatalog catalog,
-        SpatialController controller, CancellationToken token)
+        SpatialController controller, CancellationToken token, IReadOnlyList<MapPosition>? remainingTargets = null)
     {
         var spatial = new SpatialClient(game);
         await controller.TravelAsync(candidate.Position, 8, catalog, token);
         var current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
         RequireScope(current.Scope, catalog);
-        MapPosition approach = new PlacementPlanner().FindApproach(new(current), item, candidate)
+        MapPosition approach = new PlacementPlanner().FindApproach(new(current), item, candidate, remainingTargets)
             ?? throw new InvalidOperationException("No reachable approach outside the planned footprint.");
         await controller.NavigateAsync(approach, .2, token);
         var validation = await spatial.ValidateAsync(catalog.Scope, item, [candidate], token);
@@ -85,7 +85,7 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         ProductionState owned = await production.ObserveAsync(token);
         RequireScope(owned.Scope, catalog);
         ProductionEntity machine = owned.Entities.Single(e => e.Id == machineId);
-        await controller.TravelAsync(machine.Position, 4, catalog, token);
+        await controller.ApproachEntityAsync(machineId, machine.Position, catalog, token);
         SpatialSnapshot map = await new SpatialClient(game).CaptureAsync(radius: 48, cancellationToken: token);
         RequireScope(map.Scope, catalog);
         owned = await production.ObserveAsync(token);
@@ -110,7 +110,7 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         int missing = (int)Math.Max(0, target - owned.Entities.Single(e => e.Id == boiler.Id).Count("fuel", fuel));
         if (missing == 0) return;
         await new ProductionGoalExecutor(game, journal).RunAsync(fuel, missing, token);
-        await controller.TravelAsync(boiler.Position, 3, catalog, token);
+        await controller.ApproachEntityAsync(boiler.Id, boiler.Position, catalog, token);
         var inserted = await controller.WorkAsync("insert", new { entityId = boiler.Id, inventory = "fuel", item = fuel, count = missing }, 600, token: token);
         Completed(inserted);
         await journal.AppendAsync("powered-machine-fuel", new { machineId, boilerId = boiler.Id, fuel, count = missing, expectedEnergy }, token);

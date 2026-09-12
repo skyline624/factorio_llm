@@ -86,9 +86,15 @@ function M.production()
         fuelCategories = entity.burner_prototype.fuel_categories, craftingSpeed = entity.get_crafting_speed("normal")}
     end
     if entity and entity.type == "assembling-machine" and entity.electric_energy_source_prototype then
+      local fluid_inputs, fluid_outputs = 0, 0
+      for _, box in ipairs(entity.fluidbox_prototypes) do
+        if box.production_type == "input" or box.production_type == "input-output" then fluid_inputs = fluid_inputs + 1 end
+        if box.production_type == "output" or box.production_type == "input-output" then fluid_outputs = fluid_outputs + 1 end
+      end
       result.assemblers[name] = {entityName = entity.name, categories = entity.crafting_categories,
         craftingSpeed = entity.get_crafting_speed("normal"), energyPerTick = entity.get_max_energy_usage("normal"),
-        ingredientCount = entity.ingredient_count, fixedRecipe = entity.fixed_recipe}
+        ingredientCount = entity.ingredient_count, fixedRecipe = entity.fixed_recipe,
+        fluidInputCount = fluid_inputs, fluidOutputCount = fluid_outputs}
     end
   end
   for name, entity in pairs(prototypes.entity) do

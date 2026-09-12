@@ -1,6 +1,6 @@
 # Production par machines d'assemblage
 
-`assemble --session FILE --item electronic-circuit --quantity 5` vise un stock final transporté. Le C# choisit une recette solide déterministe disponible, prépare une machine compatible si nécessaire, calcule son placement alimenté, règle la recette et approvisionne ses ingrédients. Les coûts de fabrication, de construction et de transfert restent ceux du moteur.
+`assemble --session FILE --item electronic-circuit --quantity 5` vise un stock final transporté. Le C# choisit une recette déterministe disponible à produit solide, prépare une machine compatible si nécessaire, calcule son placement alimenté, règle la recette et approvisionne ses ingrédients. Les coûts de fabrication, de construction et de transfert restent ceux du moteur.
 
 Le catalogue exporte les catégories acceptées, la limite d'ingrédients, la recette fixe éventuelle, la vitesse et la consommation électrique natives. Le placement et les extensions de poteaux utilisent le même composant que les laboratoires. La maintenance recherche une chaudière reliée au générateur du réseau observé et limite son combustible à la pile native.
 
@@ -20,7 +20,7 @@ La régression du laboratoire avec le composant électrique partagé a égalemen
 
 ## Limites actuelles
 
-Cette capacité traite un produit solide déterministe et jusqu'à huit ingrédients solides distincts. Les fluides, coproduits, transports continus par tapis/bras, dimensionnement industriel du réseau et coordination de machines restent à implémenter. Le compteur de cycles est une mesure native, distincte du stock final : une reprise peut récupérer des produits déjà terminés sans nouveau cycle. Une erreur ou un transfert partiel impose une réconciliation ; aucune répétition aveugle ne démarre une autre méthode.
+Cette capacité traite un produit solide déterministe et jusqu’à huit ingrédients solides distincts, avec des entrées fluides compatibles. Le [plastique est qualifié en fixture](chemical-production.md). Les coproduits, transports continus par tapis/bras, dimensionnement industriel du réseau et coordination de machines restent à implémenter. Le compteur de cycles est une mesure native, distincte du stock final : une reprise peut récupérer des produits déjà terminés sans nouveau cycle. Une erreur ou un transfert partiel impose une réconciliation ; aucune répétition aveugle ne démarre une autre méthode.
 
 ## Essai en économie normale
 

@@ -35,9 +35,7 @@ public sealed class FluidProductionController(IGameClient game, IControllerJourn
         var spatial = new SpatialClient(game);
         SpatialSnapshot map = await MapAsync();
         var machine = map.Entities.Single(e => e.Id == machineId);
-        MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map), machine)
-            ?? throw new InvalidOperationException("No reachable interaction position for the fluid-processing machine.");
-        await controller.NavigateAsync(approach, .2, token);
+        await controller.ApproachEntityAsync(machineId, machine.Position, catalog, token);
         if (plan.ExistingId is null || own.Entities.Single(e => e.Id == machineId).Recipe is null)
         {
             if (plan.ExistingId is not null && initial.FluidRecordsAt(machineId).Any(r =>

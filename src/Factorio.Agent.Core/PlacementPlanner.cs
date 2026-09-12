@@ -22,11 +22,19 @@ public sealed class PlacementPlanner
             .FirstOrDefault(p => new RoutePlanner().Find(field, p).Status == RouteStatus.Found);
     }
 
-    public MapPosition? FindApproach(SpatialCollisionField field, string item, PlacementCandidate placement)
+    public MapPosition? FindApproach(SpatialCollisionField field, string item, PlacementCandidate placement,
+        IReadOnlyList<MapPosition>? remainingTargets = null)
     {
         EntityGeometry building = field.Map.Prototypes[field.Map.Items[item].EntityName];
         WorldBox footprint = building.CollisionBox.Rotate(placement.Direction).Translate(placement.Position);
         var exclusion = new WorldBox(new(footprint.Min.X - 0.4, footprint.Min.Y - 0.4), new(footprint.Max.X + 0.4, footprint.Max.Y + 0.4));
+        // Pipe collision boxes change when their neighbours connect. Reserve the whole occupied tile
+        // when checking future access, rather than assuming the initial isolated-pipe shape remains.
+        WorldBox futureBounds = building.Type == "pipe"
+            ? new(new(placement.Position.X - .5, placement.Position.Y - .5), new(placement.Position.X + .5, placement.Position.Y + .5))
+            : footprint;
+        var futureEntities = field.Map.Entities.Append(new SpatialEntity("planned-construction", building.Name,
+            placement.Position, futureBounds, placement.Direction, "planned")).ToArray();
         var candidates = new List<MapPosition>();
         double reach = field.Map.Actor.BuildDistance - 1;
         for (double x = Math.Ceiling((placement.Position.X - reach) * 2) / 2; x <= placement.Position.X + reach; x += 0.5)
@@ -38,7 +46,19 @@ public sealed class PlacementPlanner
                 candidates.Add(point);
             }
         return candidates.OrderBy(p => p.DistanceTo(field.Map.Actor.Position)).ThenBy(p => p.DistanceTo(placement.Position))
-            .FirstOrDefault(p => new RoutePlanner().Find(field, p).Status == RouteStatus.Found);
+            .FirstOrDefault(p => new RoutePlanner().Find(field, p).Status == RouteStatus.Found && PreservesAccess(p));
+
+        bool PreservesAccess(MapPosition approach)
+        {
+            if (remainingTargets is null || remainingTargets.Count == 0) return true;
+            var after = new SpatialCollisionField(field.Map with
+            {
+                Actor = field.Map.Actor with { Position = approach },
+                Entities = futureEntities
+            });
+            double radius = Math.Max(.2, Math.Min(8, reach) - .2);
+            return remainingTargets.All(target => new RoutePlanner().Find(after, target, radius).Status == RouteStatus.Found);
+        }
     }
 
     public IReadOnlyList<PlacementCandidate> FindCandidates(SpatialCollisionField field, string item,

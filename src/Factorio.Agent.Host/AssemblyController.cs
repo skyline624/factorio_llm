@@ -39,19 +39,19 @@ public sealed class AssemblyController(IGameClient game, IControllerJournal jour
             || catalog.Recipes.Any(r => r.Enabled && catalog.CanHandCraft(r) && r.Products.Any(m => m.Name == p.Key && m.DeterministicItem)))
             .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
         var plan = new AssemblyPlanner().Choose(item, catalog.Recipes, available, initial.Entities.Select(e => e.AsMachine()).ToArray())
-            ?? throw new InvalidOperationException("No available assembler for an enabled deterministic solid recipe.");
+            ?? throw new InvalidOperationException("No available assembler for an enabled deterministic recipe with one solid product.");
         NativeRecipe recipe = plan.Recipe;
-        string[] inputs = recipe.Ingredients.Select(i => i.Name).Distinct(StringComparer.Ordinal).ToArray();
+        string[] inputs = recipe.Ingredients.Where(i => i.DeterministicItem).Select(i => i.Name).Distinct(StringComparer.Ordinal).ToArray();
         if (inputs.Length > 8) throw new InvalidOperationException("Assembly recipe exceeds the native capacity probe budget.");
         // Bound each delivery by one native stack per ingredient, then verify exact insertable counts.
-        int batchLimit = Math.Min(16, recipe.Ingredients.GroupBy(i => i.Name)
-            .Select(g => checked((int)Math.Floor(catalog.Items[g.Key].StackSize / g.Sum(i => i.Amount!.Value)))).Min());
+        int batchLimit = Math.Min(16, recipe.Ingredients.Where(i => i.DeterministicItem).GroupBy(i => i.Name)
+            .Select(g => checked((int)Math.Floor(catalog.Items[g.Key].StackSize / g.Sum(i => i.Amount!.Value)))).DefaultIfEmpty(16).Min());
         if (batchLimit < 1) throw new InvalidOperationException("An ingredient batch exceeds the supported inventory delivery size.");
         await using var controller = new SpatialController(game, journal);
         var power = new PoweredMachineController(game, journal);
         string machineId = plan.ExistingId ?? await power.InstallAsync(plan.MachineItem, catalog, controller, token);
         ProductionEntity installed = (await ObserveAsync()).Entities.Single(e => e.Id == machineId);
-        await controller.TravelAsync(installed.Position, 3, catalog, token);
+        await ApproachAsync();
         FactorySnapshot before = await CaptureAsync();
         FactoryRecord beforeWork = Work(before);
         if (!installed.AsMachine().CanProcess(recipe) || (beforeWork.Data.GetProperty("inProcess").GetBoolean()
@@ -59,8 +59,22 @@ public sealed class AssemblyController(IGameClient game, IControllerJournal jour
             throw new InvalidOperationException("Assembler contents or engaged recipe changed; refuse to replace them.");
         long initialCrafts = beforeWork.Data.GetProperty("productsFinished").GetInt64();
         if (installed.Recipe != recipe.Name)
+        {
+            if (before.FluidRecordsAt(machineId).Any(r => r.Data.GetProperty("contents").EnumerateObject().Any(p => p.Value.GetDouble() > 0)))
+                throw new InvalidOperationException("Unconfigured assembler contains fluid; refuse to discard it by selecting a recipe.");
             await ActAsync("set_recipe", new { entityId = machineId, recipe = recipe.Name });
+        }
         await journal.AppendAsync("assembly-start", new { initial.Scope, initial.Tick, item, targetStock, machineId, recipe, initialCrafts }, token);
+        if (recipe.Ingredients.Any(i => i.DeterministicFluid))
+        {
+            var prepared = await ObserveAsync();
+            int outstanding = checked((int)Math.Ceiling(Math.Max(0, targetStock - prepared.Inventory.GetValueOrDefault(item)) / recipe.Products[0].Amount!.Value));
+            if (outstanding > 0)
+            {
+                var requirements = AssemblyRequirements.From(await CaptureAsync(), machineId, recipe, outstanding);
+                await new FluidSupplyController(game, journal).EnsureAsync(machineId, recipe, requirements.FluidUnitsToSupply, catalog, controller, token);
+            }
+        }
         int powered = 0;
         for (int attempt = 0; attempt < 1800; attempt++)
         {
@@ -83,7 +97,7 @@ public sealed class AssemblyController(IGameClient game, IControllerJournal jour
             await journal.AppendAsync("assembly-measurement", new { snapshot.SnapshotId, snapshot.CollectedTick, machineId, carried, completed, requirements }, token);
             if (requirements.ReadyOutput > 0)
             {
-                await controller.TravelAsync(installed.Position, 3, catalog, token);
+                await ApproachAsync();
                 await ActAsync("take", new { entityId = machineId, inventory = "output", item, count = Math.Min(requirements.ReadyOutput, targetStock - carried) });
                 continue;
             }
@@ -91,7 +105,7 @@ public sealed class AssemblyController(IGameClient game, IControllerJournal jour
             {
                 double energy = batches * recipe.EnergySeconds * 60 * available[plan.MachineItem].EnergyPerTick / available[plan.MachineItem].CraftingSpeed;
                 await power.MaintainFuelAsync(machineId, energy, catalog, controller, attempt == 0, token);
-                await controller.TravelAsync(installed.Position, 3, catalog, token);
+                await ApproachAsync();
                 var map = await new SpatialClient(game).CaptureAsync(cancellationToken: token);
                 RequireScope(map.Scope);
                 if (map.Entities.Single(e => e.Id == machineId).Power is { NetworkId: not null, Energy: > 0 }) powered++;
@@ -103,7 +117,7 @@ public sealed class AssemblyController(IGameClient game, IControllerJournal jour
                 int needed = requirements.InputsToInsert[input];
                 if (needed <= 0) continue;
                 await executor.RunAsync(input, needed, token);
-                await controller.TravelAsync(installed.Position, 3, catalog, token);
+                await ApproachAsync();
                 state = await ObserveAsync();
                 snapshot = await CaptureAsync();
                 requirements = AssemblyRequirements.From(snapshot, machineId, recipe, batches);
@@ -119,6 +133,10 @@ public sealed class AssemblyController(IGameClient game, IControllerJournal jour
         throw new TimeoutException("Assembly exhausted its native observation budget.");
 
         FactoryRecord Work(FactorySnapshot snapshot) => snapshot.Records.Single(r => r.EntityId == machineId && r.Kind == "work");
+        async Task ApproachAsync()
+        {
+            await controller.ApproachEntityAsync(machineId, installed.Position, catalog, token);
+        }
         async Task<FactorySnapshot> CaptureAsync()
         {
             var value = await new FactorySnapshotClient(game).CaptureAsync(inputs, cancellationToken: token);

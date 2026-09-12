@@ -9,6 +9,44 @@ public sealed class AssemblyPlannerTests
         [new("iron-plate", "item", 1), new("copper-cable", "item", 3)], [new("electronic-circuit", "item", 1)], false);
 
     [Fact]
+    public void ChemicalRecipeRequiresObservedFluidCapability()
+    {
+        var recipe = new NativeRecipe("plastic", true, "chemistry", 1,
+            [new("coal", "item", 1), new("gas", "fluid", 20)], [new("plastic", "item", 2)], true);
+        var machines = new Dictionary<string, NativeAssembler>
+        {
+            ["dry"] = new("dry", new Dictionary<string, bool> { ["chemistry"] = true }, 1, 1000, 255),
+            ["chemical-plant"] = new("chemical-plant", new Dictionary<string, bool> { ["chemistry"] = true }, 1, 1000, 255,
+                FluidInputCount: 2, FluidOutputCount: 2)
+        };
+        var plan = new AssemblyPlanner().Choose("plastic", [recipe], machines, []);
+        Assert.NotNull(plan);
+        Assert.Equal("chemical-plant", plan.MachineItem);
+    }
+
+    [Theory]
+    [InlineData(0, 60)]
+    [InlineData(10, 50)]
+    [InlineData(100, 0)]
+    public void ChemicalAccountingKeepsFluidsOutOfInventoryDeliveries(double stockedFluid, double expectedSupply)
+    {
+        var recipe = new NativeRecipe("plastic", true, "chemistry", 1,
+            [new("coal", "item", 1), new("gas", "fluid", 20)], [new("plastic", "item", 2)], true);
+        var snapshot = new FactorySnapshot("s", new("w", "s", "a", 1, 1), 10, 100, Protocol.ToElement(new { }),
+        [new("input", "inventory", "machine", "input", Protocol.ToElement(new { items = new Dictionary<string, int> { ["coal"] = 1 } })),
+         new("output", "inventory", "machine", "output", Protocol.ToElement(new { items = new Dictionary<string, int> { ["plastic"] = 2 } })),
+         new("gas-buffer", "fluid", "machine", "buffer", Protocol.ToElement(new { aggregateSafe = true,
+             contents = new Dictionary<string, double> { ["gas"] = stockedFluid }, sourceBoxes = new[] { new { entityId = "machine", index = 1 } } })),
+         new("work", "work", "machine", "machine-craft", Protocol.ToElement(new { recipe = "plastic", inProcess = true,
+             inputInventoryId = "input", outputInventoryId = "output" }))]);
+        var needed = AssemblyRequirements.From(snapshot, "machine", recipe, 5);
+        Assert.Single(needed.InputsToInsert);
+        Assert.Equal(2, needed.InputsToInsert["coal"]);
+        Assert.DoesNotContain("gas", needed.InputsToInsert.Keys);
+        Assert.Equal(expectedSupply, needed.FluidUnitsToSupply["gas"]);
+    }
+
+    [Fact]
     public void EngagedCraftAndReadyOutputAreSubtractedFromEveryIngredient()
     {
         var snapshot = new FactorySnapshot("s", new("w", "s", "a", 1, 1), 10, 100, Protocol.ToElement(new { }),

@@ -28,6 +28,8 @@ Les journaux, la preuve indépendante et la sauvegarde restent dans le répertoi
 
 Les deux extrémités doivent être dans la zone locale observée. La route d'entrée est limitée à 200 tuyaux ; le stockage autorise au plus 200 ajouts par exécution. La reprise d'un raccordement entièrement confirmé est possible, mais une route partiellement construite n'est pas encore réparée automatiquement. Une erreur conserve les effets réels pour réconciliation.
 
-Les réservoirs, conduites souterraines, réseaux distants, recettes combinant objets et fluides, raffinage avancé à plusieurs sorties et contraintes thermiques particulières restent à traiter. La borne syntaxique de 100000 unités n'est pas une garantie de capacité réalisable dans ces budgets. La production continue, les tapis et les laboratoires parallèles restent nécessaires pour la chaîne de la fusée.
+Les réservoirs, conduites souterraines, réseaux distants, recettes à sortie fluide combinant objets et fluides, raffinage avancé à plusieurs sorties et contraintes thermiques particulières restent à traiter. La borne syntaxique de 100000 unités n'est pas une garantie de capacité réalisable dans ces budgets. La production continue, les tapis et les laboratoires parallèles restent nécessaires pour la chaîne de la fusée.
 
 Le contexte stratégique contient désormais les stocks physiques de l'usine connue : inventaires, transit et fluides séparés, avec date et couverture. Les inventaires incluent le personnage et les corps connus et ne doivent pas être additionnés une seconde fois. Le nouveau chemin d'objectif fluide est testé hors ligne et par commande C# réelle ; il n'a pas encore été qualifié par un choix spontané du modèle cloud.
+
+Les [recettes mixtes à produit solide](chemical-production.md) disposent maintenant d’un premier essai natif de plastique, avec limites et réparation de fixture documentées.
