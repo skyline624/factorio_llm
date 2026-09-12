@@ -5,6 +5,20 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class SpatialPlannerTests
 {
+    [Fact]
+    public void RotatedObstacleBlocksItsRealShapeButLeavesItsEmptyBoundingCornersWalkable()
+    {
+        var map = Map([]);
+        var obstacle = new EntityGeometry("slanted", "cliff", new(new(-.5, -2), new(.5, 2)),
+            map.Prototypes[map.Actor.Name].Mask, 1, 4);
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { ["slanted"] = obstacle },
+            Entities = [new("cliff", "slanted", new(0, 0), obstacle.CollisionBox, 0, "neutral", BoundsOrientation: .125)] };
+        var field = new SpatialCollisionField(map);
+        Assert.False(field.Walkable(new(-1.1, 1.1)));
+        Assert.True(field.Walkable(new(1.5, 1.5)));
+        Assert.False(field.SegmentClear(new(-3, 1.1), new(0, 1.1)));
+    }
+
     private static readonly CollisionMask Solid = new(["player"], false, false, false);
     private static readonly CollisionMask Ground = new([], false, false, false);
 

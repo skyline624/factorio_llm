@@ -22,6 +22,7 @@ try
           automate-smelting --session FILE --item NAME --quantity N
           run-goal --session FILE
           steam-power --session FILE [--plan FILE]
+          research-plan --session FILE --technology NAME
           rpc --session FILE --action ACTION [--json-file FILE]
           connect --session FILE
           submit --session FILE --kind KIND --json-file FILE [--ticks N]
@@ -99,6 +100,18 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new FactoryQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "research-plan":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            string technology = Required("technology");
+            TechnologyObservation observation = await new TechnologyClient(session.CreateClient())
+                .ReadDependenciesAsync(technology, shutdown.Token);
+            TechnologyStep next = new TechnologyPlanner().Next(technology, observation.Technologies);
+            string reportPath = Path.Combine(session.Directory, $"research-plan-{Guid.NewGuid():N}.json");
+            await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(new { observation, next }, Protocol.Json), shutdown.Token);
+            Print(new { next, observation.StartTick, observation.EndTick, reportPath });
             break;
         }
         case "steam-power":

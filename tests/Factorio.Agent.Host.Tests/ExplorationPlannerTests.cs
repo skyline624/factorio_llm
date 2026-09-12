@@ -31,10 +31,31 @@ public sealed class ExplorationPlannerTests
         Assert.True(third.Y <= -48, $"After approaching the northern frontier at {second}, {third} returns across already observed terrain.");
     }
 
+    [Fact]
+    public void FractionalArrivalDoesNotMakeExplorationDriftIntoOnlyPositiveCoordinates()
+    {
+        var planner = new ExplorationPlanner();
+        SpatialSnapshot start = Map(new(0, 0));
+        var catalog = new ProductionCatalog(start.Scope, 1, [], new Dictionary<string, NativeItem>(),
+            new Dictionary<string, NativeMaterial[]>(), new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>());
+        MapPosition position = start.Actor.Position;
+        var visited = new List<MapPosition>();
+        for (int step = 0; step < 32; step++)
+        {
+            MapPosition next = planner.Choose(Map(position), "", catalog);
+            visited.Add(next);
+            position = new(next.X - 0.05, next.Y - 0.05);
+        }
+        Assert.Contains(visited, p => p.X < -48);
+        Assert.Contains(visited, p => p.Y < -48);
+        Assert.Contains(visited, p => p.X > 48);
+        Assert.Contains(visited, p => p.Y > 48);
+    }
+
     private static SpatialSnapshot Map(MapPosition actor)
     {
         SpatialSnapshot map = SpatialPlannerTests.Map([]);
-        int x = (int)actor.X - 48, y = (int)actor.Y - 48;
+        int x = (int)Math.Floor(actor.X) - 48, y = (int)Math.Floor(actor.Y) - 48;
         return map with { Actor = map.Actor with { Position = actor }, Bounds = new(new(x, y), new(x + 97, y + 97)),
             Rows = Enumerable.Range(y, 97).Select(row => new TileRun(x, row, 97, "grass")).ToArray(),
             Coverage = map.Coverage with { Radius = 48 } };

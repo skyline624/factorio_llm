@@ -10,7 +10,7 @@ La pompe doit avoir de l'eau à son point de prélèvement. Le calcul applique l
 
 La recherche reste bornée aux observations locales et aux candidats examinés. Une absence de solution n'est pas une preuve d'impossibilité globale. Cette version cherche des raccordements directs ; le routage par tuyaux, les obstacles à enlever et les installations comportant plusieurs générateurs restent à intégrer.
 
-L'exploration conserve une frontière tant que le personnage s'en approche et qu'elle reste accessible, avec abandon après stagnation bornée. La frontière suivante est choisie d'abord selon sa distance au personnage. Les essais dans le monde normal ont montré qu'une priorité donnée à la distance au point de départ provoquait des traversées répétées du terrain connu ; deux tests de régression couvrent désormais la poursuite d'une frontière et le choix local de la suivante. Cette mémoire d'exploration reste limitée à la commande en cours.
+L'exploration conserve une frontière tant que le personnage s'en approche et qu'elle reste accessible, avec abandon après stagnation bornée. Le coût de la frontière suivante combine la distance au personnage et un quart de la distance au point de départ de l'exploration. La seule distance au départ provoquait des traversées répétées du terrain connu ; la seule proximité du personnage pouvait dériver dans une direction à cause des arrondis des cases. Trois tests couvrent la poursuite d'une frontière, le choix local de la suivante et la couverture de plusieurs directions avec des arrivées fractionnaires. Cette mémoire reste limitée à la commande en cours.
 
 ## Construction et preuve
 

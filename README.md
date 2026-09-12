@@ -107,6 +107,8 @@ dotnet $hostDll steam-power --session $sessionFile
 
 Cette commande C# calcule les raccordements directs depuis les ports fluides natifs et cherche une rive observée. Elle vérifie les connexions réellement établies, la génération électrique et l'alimentation d'un bras servant de faible charge. Elle ne fait pas encore partie de la traduction des objectifs libres du modèle. Voir les [preuves et limites de l'électricité](docs/steam-power.md), dont la reprise explicite d'une construction partielle.
 
+Pour lire la prochaine étape scientifique sans modifier le jeu, utiliser `research-plan --session $sessionFile --technology automation`. Voir le [contrat des prérequis scientifiques](docs/research-planning.md) et ses limites d'exécution.
+
 Pour sauvegarder puis arrêter le serveur :
 
 ```powershell

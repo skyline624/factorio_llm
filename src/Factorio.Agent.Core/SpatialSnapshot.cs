@@ -68,7 +68,7 @@ public sealed record TileRun(int X, int Y, int Length, string Name);
 public sealed record SpatialEntity(string Id, string Name, MapPosition Position, WorldBox Bounds, int Direction, string Force, double? Amount = null,
     MapPosition? DropPosition = null, string? DropTargetId = null,
     [property: JsonConverter(typeof(NativeArrayConverter<ObservedFluidConnection>))] IReadOnlyList<ObservedFluidConnection>? FluidConnections = null,
-    ObservedPower? Power = null);
+    ObservedPower? Power = null, double BoundsOrientation = 0);
 public sealed record ObservedFluidConnection(int BoxIndex, int PortIndex, MapPosition Position, MapPosition TargetPosition,
     string? TargetEntityId = null, int? TargetBoxIndex = null);
 public sealed record ObservedPower(double Energy, long? NetworkId = null, double? GeneratedLastTick = null);

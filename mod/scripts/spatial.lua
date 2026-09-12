@@ -99,7 +99,8 @@ function M.observe(args)
     if Visibility.is_visible(c, entity) then
       result.prototypes[entity.name] = result.prototypes[entity.name] or prototype(entity.prototype)
       local value = {id = U.entity_id(entity), name = entity.name, position = U.copy(entity.position),
-        bounds = box(entity.bounding_box), direction = entity.direction, force = entity.force.name}
+        bounds = box(entity.bounding_box), boundsOrientation = entity.bounding_box.orientation or 0,
+        direction = entity.direction, force = entity.force.name}
       if entity.type == "resource" then value.amount = entity.amount end
       if entity.type == "mining-drill" then
         value.dropPosition = U.copy(entity.drop_position)

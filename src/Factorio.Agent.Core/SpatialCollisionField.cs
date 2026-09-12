@@ -3,7 +3,10 @@ namespace Factorio.Agent.Core;
 /// <summary>Native masks and boxes indexed by tile. Unknown space is never assumed clear.</summary>
 public sealed class SpatialCollisionField
 {
-    private sealed record Obstacle(string Id, WorldBox Bounds, CollisionMask Mask, bool Tile);
+    private sealed record Obstacle(string Id, OrientedCollisionBox Shape, CollisionMask Mask, bool Tile)
+    {
+        public WorldBox Bounds => Shape.EnclosingBox;
+    }
     private readonly Dictionary<(int X, int Y), List<Obstacle>> buckets = [];
     private readonly Dictionary<(int X, int Y), string> tiles = [];
     public SpatialSnapshot Map { get; }
@@ -23,13 +26,13 @@ public sealed class SpatialCollisionField
                 if (!map.Bounds.Contains(box) || !covered.Add((x, row.Y)))
                     throw new InvalidDataException("Repeated or out-of-bounds terrain tile.");
                 tiles[(x, row.Y)] = row.Name;
-                Add(new($"tile:{x}:{row.Y}", box, mask, true));
+                Add(new($"tile:{x}:{row.Y}", new(box), mask, true));
             }
         }
         if (covered.Count != map.Bounds.Width * map.Bounds.Height)
             throw new InvalidDataException("Terrain coverage has holes.");
         foreach (SpatialEntity entity in map.Entities)
-            Add(new(entity.Id, entity.Bounds, map.Prototypes[entity.Name].Mask, false));
+            Add(new(entity.Id, new(entity.Bounds, entity.BoundsOrientation), map.Prototypes[entity.Name].Mask, false));
     }
 
     private void Add(Obstacle obstacle)
@@ -66,13 +69,7 @@ public sealed class SpatialCollisionField
         {
             if (obstacle.Id == Map.Actor.Id || !Character.Mask.CollidesWith(obstacle.Mask, obstacle.Tile)) continue;
             WorldBox footprint = obstacle.Tile && Character.Mask.TileTransitions ? new(new(0, 0), new(0, 0)) : body;
-            var expanded = new WorldBox(new(obstacle.Bounds.Min.X - footprint.Max.X - clearance, obstacle.Bounds.Min.Y - footprint.Max.Y - clearance),
-                new(obstacle.Bounds.Max.X - footprint.Min.X + clearance, obstacle.Bounds.Max.Y - footprint.Min.Y + clearance));
-            // Contact without penetration is legal. This also permits moving away after a native collision stop.
-            const double contactEpsilon = 1e-7;
-            expanded = new(new(expanded.Min.X + contactEpsilon, expanded.Min.Y + contactEpsilon),
-                new(expanded.Max.X - contactEpsilon, expanded.Max.Y - contactEpsilon));
-            if (IntersectsSegment(expanded, from, to)) return false;
+            if (obstacle.Shape.IntersectsSweep(from, to, footprint, clearance)) return false;
         }
         return true;
     }
@@ -93,25 +90,10 @@ public sealed class SpatialCollisionField
                         || (rule.RequiredTiles.Layers.Count > 0 && !rule.RequiredTiles.CollidesWith(tile, true))) return false;
                 }
         }
-        return !Query(box).Any(o => geometry.Mask.CollidesWith(o.Mask, o.Tile) && box.Overlaps(o.Bounds));
+        return !Query(box).Any(o => geometry.Mask.CollidesWith(o.Mask, o.Tile) && o.Shape.Overlaps(box));
     }
 
     public string? FluidAt(MapPosition position) => tiles.TryGetValue(((int)Math.Floor(position.X), (int)Math.Floor(position.Y)), out string? tile)
         ? Map.TileFluids?.GetValueOrDefault(tile) : null;
 
-    private static bool IntersectsSegment(WorldBox box, MapPosition from, MapPosition to)
-    {
-        double low = 0, high = 1;
-        return Slab(from.X, to.X - from.X, box.Min.X, box.Max.X, ref low, ref high)
-            && Slab(from.Y, to.Y - from.Y, box.Min.Y, box.Max.Y, ref low, ref high);
-    }
-
-    private static bool Slab(double origin, double delta, double minimum, double maximum, ref double low, ref double high)
-    {
-        if (Math.Abs(delta) < 1e-12) return origin >= minimum && origin <= maximum;
-        double a = (minimum - origin) / delta, b = (maximum - origin) / delta;
-        low = Math.Max(low, Math.Min(a, b));
-        high = Math.Min(high, Math.Max(a, b));
-        return low <= high;
-    }
 }

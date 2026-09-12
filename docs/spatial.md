@@ -8,6 +8,8 @@ Le mod fournit la géométrie native ; C# choisit les trajets, les positions et 
 
 Les masques distinguent collisions entre entités, collisions avec les tuiles, exclusion entre masques identiques et transitions de tuiles du personnage. L'eau n'utilise ainsi pas exactement le même test pour une marche et pour la construction d'un bâtiment. L'espace extérieur à la photographie n'est jamais supposé libre.
 
+Les boîtes d'entités conservent également leur orientation native, exprimée en tours. Certaines falaises utilisent notamment 0,125 tour. Leur rectangle englobant sert uniquement à trouver les obstacles proches ; le test de collision utilise la forme orientée et le volume balayé du personnage. Les coins vides de l'enveloppe restent donc praticables lorsque le corps du personnage y tient.
+
 ## Calcul et exécution
 
 Le chercheur de chemin utilise A* sur une grille d'une demi-case. Chaque segment est testé avec le volume balayé du personnage, puis le chemin est simplifié sans traverser d'obstacle. La marge de guidage ordinaire est de 0,18 case. Quand un arrêt natif laisse le personnage au contact d'un mur, une courte sortie locale peut utiliser sa boîte physique sans cette marge ; les segments suivants rétablissent la marge. Le journal signale ce cas avec `usesTightStartConnector`.
@@ -37,5 +39,7 @@ dotnet $hostDll build --session $sessionFile --item wooden-chest --x 23 --y 0
 `verify-spatial --session FILE` exige une **fixture** : préparation artificielle d'eau, de murs et d'objets, puis marche, ajout de cinq murs après acceptation d'un segment, constat de `path_blocked`, recalcul, construction d'un four et d'un coffre, retour et interruption d'une nouvelle marche. Positions, coûts, obstacles, temps écoulé et identité du pilote sont relus directement dans le moteur. Le scénario a réussi en headless et avec le client graphique connecté ; ses rapports restent locaux.
 
 ## Limites
+
+Dans le monde normal de développement, une orientation de falaise omise avait provoqué des mouvements `path_blocked` répétés jusqu'au délai de deux minutes. Après sauvegarde et reprise avec l'export corrigé, le même trajet a réussi en 52 opérations, toutes terminées, entre les ticks 446 315 et 447 771. Le personnage est passé de (379,723 ; 365,375) à (399,980 ; 363,953), avec ses stocks et sa santé conservés. Cette correction de développement n'est pas une campagne sans assistance. Les blocages répétés dus à d'autres causes nécessitent encore une stratégie de replanification plus générale.
 
 La boucle de production ajoute une première exploration par frontières et des trajets successifs vers des entités connues ; cette mémoire reste limitée à un appel. Le dégagement par minage, les routes très étroites, les véhicules, les implantations multi-bâtiments et le raccordement des flux ne sont pas encore traités. Les obstacles mobiles sont revus par observation et blocage, sans prédiction de trajectoire. La priorité de défense est intégrée, mais le scénario spatial ne qualifie pas encore une attaque pendant la marche. Les trois campagnes normales jusqu'à la fusée restent à réaliser.
