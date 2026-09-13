@@ -35,6 +35,16 @@ Dans les deux essais, le moteur constate la consommation de 136 plaques de fer, 
 
 Une seconde exécution identique constate les réserves suffisantes sans construction ni ravitaillement supplémentaire. Le pilote connecté reste attaché au personnage 17. Une capture native montrant les deux installations et le personnage a été inspectée. Rapports privés : `15160470c52447b28e0dcb47b49b0c57` et `74fe009c68a64911acb19b64c80b42f5`.
 
+## Objectif du modèle dans le monde de développement
+
+Le 13 septembre 2026, `glm-5.3-flash:cloud` a demandé trois tourelles actives avec au moins 100 coups chacune. Dans la partie normale déjà utilisée pour le développement, le contrôleur a atteint ce seuil entre les ticks **6941005 et 7015915** : deux tourelles construites, trois ravitaillées et trois réserves de 100 coups constatées par la photographie d'usine. Les positions des nouvelles installations ont été calculées en C#. Six des quinze bâtiments industriels connus étaient alors couverts ; neuf restaient exposés.
+
+Les sept fabrications du personnage ont consommé au total 240 plaques de fer et 20 plaques de cuivre : 40 chargeurs, 20 engrenages intermédiaires et deux tourelles ont été produits. Les stocks existants et la connexion foreuse–four ont fourni les plaques de fer ; la foreuse à charbon et son coffre ont assuré le combustible. Ce segment contient **un charbon miné manuellement pour l'amorçage**, aucun minage manuel de fer, de cuivre ou de pierre. Les 90 chargeurs déjà équipés sont conservés lors des fabrications : les nouveaux produits sont livrés dans le sac selon le [contrat de livraison native](craft-delivery.md).
+
+Une nouvelle demande portant sur le même seuil de trois tourelles a constaté la réussite sans construction ni ravitaillement. Le modèle a ensuite demandé six tourelles au total. Une lecture RCON indépendante au tick 7068275 a confirmé quatre tourelles actives, avec 100 coups chacune, pendant cette extension. Cette lecture porte sur la force `factorio_agent` ; une recherche dans la force `player` ne décrit pas cette usine. La dernière lecture des conditions, au tick 7075185, confirme le mode pacifique désactivé, pollution, expansion et évolution actives, et zéro fusée lancée.
+
+Ces observations proviennent du journal privé `strategic-production-5346fef2990f4daca6579c2b1e198e19`, dans un monde de développement ayant reçu des corrections et des reprises antérieures. Elles prouvent cette exécution d'objectif LLM en headless avec approvisionnement réel ; elles ne qualifient pas une campagne autonome depuis le départ jusqu'à la fusée. L'objectif de six tourelles n'est pas déclaré terminé par ces observations.
+
 ## Limites
 
 La couverture mesurée concerne les centres des bâtiments industriels propres connus sur la surface du personnage, dans la portée native des tourelles chargées. Elle ne prouve ni une enceinte continue, ni une puissance de feu suffisante contre toute attaque. Les tourelles désactivées ne sont pas réactivées automatiquement. Les prototypes électriques, les autres catégories d'armes, les qualités supérieures et les déplacements entre surfaces ne sont pas pris en charge ici.
