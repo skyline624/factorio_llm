@@ -54,3 +54,10 @@ Ces essais utilisent un terrain dégagé et une mort provoquée. Ils ne prouvent
 Les tests hors ligne couvrent notamment la filiation native, les mondes incompatibles, les résultats inconnus, la mort entre objectifs, la persistance avant récupération, une interruption de récupération et une seconde mort. Ils complètent les essais natifs sans les remplacer.
 
 Le [réarmement à partir des armes et munitions portées](equipment.md) est maintenant intégré à la boucle de défense et qualifié séparément. Il ne couvre pas encore les armures, les sites dangereux ni la reconstruction.
+## Incident de récupération pendant l'exploration pétrolière
+
+Le 13 septembre 2026, la partie normale a subi une mort pendant l'exploration pétrolière, puis trois nouvelles morts pendant la récupération. Les ticks natifs sont 9526682, 9531772, 9536881 et 9541710. Les positions des morts successives se rapprochent de l'usine ; il ne s'agit pas de quatre reprises réussies. Le contrôleur a été interrompu, puis le monde sauvegardé au tick 9549042 et son serveur arrêté. Les cadavres, pertes et changements d'incarnation sont conservés sans restauration.
+
+Le diagnostic du code établit que la retraite actuelle exige une tourelle chargée observée dans la zone locale. Hors de cette couverture, un personnage armé continue le combat. Malgré la borne de quatre tentatives, la récupération réessaie les déplacements vers les corps après réapparition sans stratégie tenant compte des morts successives. Ces limites restent à corriger avant de relancer cette récupération.
+
+Un reçu de tir terminé par `actor_dead` déclare 998 munitions consommées en deux ticks. Le calcul soustrait le contenu final de l'inventaire de munitions au contenu initial ; à la mort, le transfert vers le cadavre peut fausser cette attribution. Ce nombre ne doit pas être interprété comme un nombre de tirs prouvé. La comptabilité des effets lors de la mort nécessite également une correction et une qualification native.
