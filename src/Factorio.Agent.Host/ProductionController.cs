@@ -43,12 +43,17 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             if (ready is not null)
             {
                 await TravelAsync(ready.Position, 3, catalog);
+                ProductionState arrived = await ObserveAsync(deadline.Token);
+                if (arrived.Scope != state.Scope || arrived.ControlMode != "ai") throw new InvalidOperationException("Actor changed before stock collection.");
+                long count = Math.Min(arrived.Entities.FirstOrDefault(e => e.Id == ready.Id)?.Count("output", item) ?? 0,
+                    Math.Max(0, targetStock - arrived.Inventory.GetValueOrDefault(item)));
+                if (count == 0) continue;
                 await ActAsync("take", new
                 {
                     entityId = ready.Id,
                     inventory = "output",
                     item,
-                    count = Math.Min(ready.Count("output", item), targetStock - state.Inventory.GetValueOrDefault(item))
+                    count
                 }, 600);
                 continue;
             }
@@ -69,10 +74,13 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             }
             ProductionStep step = planner.Next(item, targetStock, state.Inventory, catalog, map,
                 state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id)).Select(e => e.AsMachine()).ToArray(),
-                allowExtractionPreparation: !SmeltingPreparationController.IsPreparing);
+                allowExtractionPreparation: !SmeltingPreparationController.IsPreparing && !StoredResourceExtractionController.IsPreparing);
             await journal.AppendAsync("production-step", new { item, targetStock, stepNumber, state.Tick, step }, deadline.Token);
             switch (step.Kind)
             {
+                case "extract":
+                    await new StoredResourceExtractionController(game, journal).RunAsync(step.Item, step.Quantity, deadline.Token);
+                    break;
                 case "prepare-smelting":
                     await new SmeltingPreparationController(game, journal).PrepareAsync(step.Item, deadline.Token);
                     await new AutomatedSmeltingController(game, journal).RunAsync(step.Item, step.Quantity, deadline.Token);
@@ -186,6 +194,13 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 if (current.Inventory.GetValueOrDefault(step.Item) + output >= initialOutput + expectedOutput) return;
                 if (furnace.InventoryTotal("fuel") == 0)
                 {
+                    FactorySnapshot burnerPhoto = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: deadline.Token);
+                    if (burnerPhoto.Scope != state.Scope) throw new InvalidDataException("Furnace burner scope changed.");
+                    if (!NativeBurnerStock.From(burnerPhoto, entityId).Empty)
+                    {
+                        await ActAsync("wait", new { ticks = 60 }, 180);
+                        continue;
+                    }
                     var fuels = catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.FuelCategory is not null
                         && machine.Value.FuelCategories.ContainsKey(p.Value.FuelCategory)).OrderByDescending(p => p.Value.FuelValue).ToArray();
                     var carried = fuels.FirstOrDefault(p => current.Inventory.GetValueOrDefault(p.Key) > 0);
@@ -226,8 +241,17 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             && catalog.Machines.Values.Any(m => m.EntityName == e.Name && m.Categories.ContainsKey(recipe.Category)))
             .OrderBy(e => e.Position.DistanceTo(actorPosition)).FirstOrDefault(e => e.AsMachine().CanProcess(recipe));
 
-    private static double MiningDistance(SpatialEntity source, SpatialSnapshot map) =>
-        map.Prototypes[source.Name].Type == "resource" ? 1 : 3;
+    internal static double MiningDistance(SpatialEntity source, SpatialSnapshot map)
+    {
+        bool resource = map.Prototypes[source.Name].Type == "resource";
+        double reach = resource
+            ? map.Actor.ResourceReachDistance ?? throw new InvalidDataException("Native resource reach is required before manual mining.")
+            : map.Actor.ReachDistance;
+        if (!double.IsFinite(reach) || reach < .5) throw new InvalidDataException("Invalid native mining reach.");
+        // Leave room for the native movement tolerance while allowing interaction beside an occupied deposit.
+        // General reach is not a guarantee that a tree can be mined from that distance.
+        return Math.Min(resource ? 10 : 3, reach - .3);
+    }
 
     internal async Task<ProductionState> ObserveAsync(CancellationToken token)
     {

@@ -65,7 +65,8 @@ public sealed record FluidPortGeometry(int Index, string Type, int Direction, st
     [property: JsonConverter(typeof(NativeArrayConverter<MapPosition>))] IReadOnlyList<MapPosition> Positions,
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Categories);
 public sealed record TileBuildRule(WorldBox Area, CollisionMask CollidingTiles, CollisionMask RequiredTiles);
-public sealed record SpatialActor(string Id, string Name, MapPosition Position, double BuildDistance, double ReachDistance, string ControlMode);
+public sealed record SpatialActor(string Id, string Name, MapPosition Position, double BuildDistance, double ReachDistance, string ControlMode,
+    double? ResourceReachDistance = null);
 public sealed record TileRun(int X, int Y, int Length, string Name);
 public sealed record SpatialEntity(string Id, string Name, MapPosition Position, WorldBox Bounds, int Direction, string Force, double? Amount = null,
     MapPosition? DropPosition = null, string? DropTargetId = null,
@@ -101,7 +102,8 @@ public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int S
                 || !map.Bounds.Contains(map.Actor.Position) || !map.Prototypes.ContainsKey(map.Actor.Name)
                 || map.Actor.ControlMode is not ("ai" or "manual")
                 || !double.IsFinite(map.Actor.BuildDistance) || map.Actor.BuildDistance <= 0
-                || !double.IsFinite(map.Actor.ReachDistance) || map.Actor.ReachDistance <= 0)
+                || !double.IsFinite(map.Actor.ReachDistance) || map.Actor.ReachDistance <= 0
+                || map.Actor.ResourceReachDistance is { } resourceReach && (!double.IsFinite(resourceReach) || resourceReach <= 0))
                 throw new InvalidDataException("Incomplete or inconsistent spatial observation.");
             foreach (EntityGeometry geometry in map.Prototypes.Values)
                 if (!ValidBox(geometry.CollisionBox) || geometry.TileWidth < 0 || geometry.TileHeight < 0)

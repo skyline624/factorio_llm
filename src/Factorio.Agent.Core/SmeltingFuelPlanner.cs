@@ -23,13 +23,9 @@ public sealed class SmeltingFuelPlanner
         var drill = map.Prototypes[map.Items[plan.DrillItem].EntityName];
         var furnace = map.Prototypes[map.Entities.Single(e => e.Id == plan.Connection.ReceiverId).Name];
         var nativeFurnace = catalog.Machines.Values.First(m => m.EntityName == furnace.Name);
-        double speed = Positive(drill.MiningSpeed);
-        double miningSecondsPerItem = plan.Connection.ResourceIds.Select(id => map.Entities.Single(e => e.Id == id))
-            .Select(e => Positive(map.Prototypes[e.Name].MiningTime) / speed /
-                catalog.Mining[e.Name].Single(p => p.Name == plan.Recipe.Ingredients[0].Name && p.DeterministicItem).Amount!.Value).Max();
         double batches = Math.Ceiling(missingOutput / plan.Recipe.Products[0].Amount!.Value);
-        double drillEnergy = batches * plan.Recipe.Ingredients[0].Amount!.Value * miningSecondsPerItem * 60
-            * Positive(drill.EnergyPerTick) / Positive(drill.BurnerEffectivity);
+        double drillEnergy = ExtractionPlanner.WorkEnergy(plan.Connection, map, plan.DrillItem, catalog,
+            plan.Recipe.Ingredients[0].Name, batches * plan.Recipe.Ingredients[0].Amount!.Value);
         double furnaceEnergy = batches * plan.Recipe.EnergySeconds / Positive(nativeFurnace.CraftingSpeed) * 60
             * Positive(furnace.EnergyPerTick) / Positive(furnace.BurnerEffectivity);
         if (!double.IsFinite(drillEnergy + furnaceEnergy)) throw new InvalidDataException("Invalid native smelting fuel estimate.");

@@ -66,7 +66,7 @@ end
 function M.production()
   local c = Actor.get()
   U.check(c ~= nil, "actor_dead", "Production catalog requires a living character")
-  local result = {scope = Actor.scope(), collectedTick = game.tick, recipes = {}, items = {}, mining = {}, machines = {}, assemblers = {},
+  local result = {scope = Actor.scope(), collectedTick = game.tick, recipes = {}, items = {}, mining = {}, miningSourceTypes = {}, machines = {}, assemblers = {},
     handCategories = c.prototype.crafting_categories}
   for name, recipe in pairs(c.force.recipes) do
     if not recipe.hidden then
@@ -102,6 +102,7 @@ function M.production()
       local properties = entity.mineable_properties
       if properties and properties.minable and not properties.required_fluid and #(properties.products or {}) > 0 then
         result.mining[name] = ingredients(properties.products or {})
+        result.miningSourceTypes[name] = entity.type
       end
     end
   end

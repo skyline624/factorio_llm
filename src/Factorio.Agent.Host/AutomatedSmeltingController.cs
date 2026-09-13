@@ -133,6 +133,9 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             ProductionState state = await production.ObserveAsync(token);
             RequireScope(state.Scope);
             if (state.Entities.Single(e => e.Id == entityId).InventoryTotal("fuel") > 0) return;
+            var burning = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            RequireScope(burning.Scope);
+            if (!NativeBurnerStock.From(burning, entityId).Empty) return;
             string fuel = fuelPlan.Fuel;
             int procurement = fuelPlan.ProcurementTarget(entityId == drillId, state.Inventory.GetValueOrDefault(fuel),
                 state.Entities.Single(e => e.Id == drillId).Count("fuel", fuel),

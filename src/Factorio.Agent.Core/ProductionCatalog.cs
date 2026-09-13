@@ -25,7 +25,8 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
     [property: JsonConverter(typeof(NativeArrayConverter<NativeRecipe>))] IReadOnlyList<NativeRecipe> Recipes,
     IReadOnlyDictionary<string, NativeItem> Items, IReadOnlyDictionary<string, NativeMaterial[]> Mining,
     IReadOnlyDictionary<string, NativeFurnace> Machines, IReadOnlyDictionary<string, bool> HandCategories,
-    IReadOnlyDictionary<string, NativeAssembler>? Assemblers = null)
+    IReadOnlyDictionary<string, NativeAssembler>? Assemblers = null,
+    IReadOnlyDictionary<string, string>? MiningSourceTypes = null)
 {
     public bool CanHandCraft(NativeRecipe recipe) => !recipe.HandCraftingDisabled && HandCategories.ContainsKey(recipe.Category);
 
@@ -79,6 +80,8 @@ public sealed class ProductionPlanner
                     .Select(p => p.Key).ToArray();
                 if (sources.Length > 0)
                 {
+                    if (allowExtractionPreparation && new StoredResourceExtractionPlanner().Options(catalog, inventory, wanted).Count > 0)
+                        return new("extract", wanted, total);
                     SpatialEntity? source = map.Entities.Where(e => sources.Contains(e.Name) && e.Amount is null or > 0)
                         .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).ThenBy(e => e.Id, StringComparer.Ordinal).FirstOrDefault();
                     return source is null

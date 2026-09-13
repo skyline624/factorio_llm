@@ -86,7 +86,8 @@ function M.observe(args)
   local result = {scope = Actor.scope(), collectedTick = game.tick, surfaceIndex = c.surface.index,
     bounds = {min = {x = x0, y = y0}, max = {x = x1, y = y1}},
     actor = {id = U.entity_id(c), name = c.name, position = U.copy(c.position),
-      buildDistance = c.build_distance, reachDistance = c.reach_distance, controlMode = Actor.state().controlMode},
+      buildDistance = c.build_distance, reachDistance = c.reach_distance,
+      resourceReachDistance = c.resource_reach_distance, controlMode = Actor.state().controlMode},
     prototypes = {[c.name] = prototype(c.prototype)}, tilePrototypes = {}, tileFluids = {}, rows = {}, entities = {}, items = {},
     coverage = {atomic = true, complete = true, visibility = "current-character-local-area", radius = radius}}
   U.check(args.items == nil or type(args.items) == "table", "invalid_arguments", "items must be an array")

@@ -2,10 +2,69 @@ namespace Factorio.Agent.Core;
 
 public sealed record ExtractionPlacement(PlacementCandidate Drill, string ReceiverId, MapPosition OutputPosition,
     IReadOnlyList<string> ResourceIds);
+public sealed record ExtractionSite(PlacementCandidate Receiver, ExtractionPlacement Connection);
+public sealed record InstalledExtraction(string DrillId, ExtractionPlacement Connection);
 
 /// <summary>Solves native drill output containment, tile alignment and resource coverage against observed receivers.</summary>
 public sealed class ExtractionPlanner
 {
+    public static double WorkEnergy(ExtractionPlacement connection, SpatialSnapshot map, string drillItem,
+        ProductionCatalog catalog, string resourceItem, double quantity)
+    {
+        if (map.Scope != catalog.Scope || quantity <= 0 || !double.IsFinite(quantity))
+            throw new InvalidDataException("Invalid native extraction energy request.");
+        var drill = map.Prototypes[map.Items[drillItem].EntityName];
+        double seconds = connection.ResourceIds.Select(id => map.Entities.Single(e => e.Id == id))
+            .Select(e => Positive(map.Prototypes[e.Name].MiningTime) / Positive(drill.MiningSpeed)
+                / catalog.Mining[e.Name].Single(p => p.Name == resourceItem && p.DeterministicItem).Amount!.Value).Max();
+        double energy = quantity * seconds * 60 * Positive(drill.EnergyPerTick) / Positive(drill.BurnerEffectivity);
+        return double.IsFinite(energy) ? energy : throw new InvalidDataException("Native extraction work overflowed.");
+        static double Positive(double? value) => value is { } n && n > 0 && double.IsFinite(n) ? n
+            : throw new InvalidDataException("Missing native extraction time, speed, energy or efficiency.");
+    }
+
+    public IReadOnlyList<InstalledExtraction> FindInstalled(SpatialSnapshot map, string drillItem, string resourceItem,
+        ProductionCatalog catalog, IReadOnlyList<SpatialEntity> receivers, IReadOnlySet<string> ownedIds)
+    {
+        var result = new List<InstalledExtraction>();
+        string name = map.Items[drillItem].EntityName;
+        foreach (SpatialEntity drill in map.Entities.Where(e => e.Name == name && ownedIds.Contains(e.Id) && e.DropPosition is not null))
+        {
+            SpatialEntity[] targets = receivers.Where(r => DropTile(drill.DropPosition!).Overlaps(r.Bounds)
+                && (drill.DropTargetId is null || drill.DropTargetId == r.Id)).ToArray();
+            if (targets.Length != 1) continue;
+            var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != drill.Id).ToArray() });
+            var connection = Find(field, drillItem, resourceItem, catalog, targets).FirstOrDefault(p => p.Drill.Position == drill.Position
+                && p.Drill.Direction == drill.Direction && p.OutputPosition.DistanceTo(drill.DropPosition!) <= 0.01);
+            if (connection is not null) result.Add(new(drill.Id, connection));
+        }
+        return result;
+    }
+
+    public ExtractionSite? FindNewSite(SpatialSnapshot map, string drillItem, string receiverItem, string resourceItem,
+        ProductionCatalog catalog, CancellationToken token = default)
+    {
+        var field = new SpatialCollisionField(map);
+        var geometry = map.Prototypes[map.Items[receiverItem].EntityName];
+        var deposits = map.Entities.Where(e => e.Amount > 0 && catalog.Mining.TryGetValue(e.Name, out var products)
+            && products.Length == 1 && products[0].Name == resourceItem && products[0].DeterministicItem)
+            .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).Take(16);
+        foreach (var deposit in deposits)
+        {
+            token.ThrowIfCancellationRequested();
+            foreach (var placement in new PlacementPlanner().FindCandidates(field, receiverItem, deposit.Position, false, 32))
+            {
+                token.ThrowIfCancellationRequested();
+                var receiver = new SpatialEntity("planned:receiver", geometry.Name, placement.Position,
+                    geometry.CollisionBox.Rotate(placement.Direction).Translate(placement.Position), placement.Direction, "planned");
+                var occupied = map with { Entities = [.. map.Entities, receiver] };
+                var connection = Find(new(occupied), drillItem, resourceItem, catalog, [receiver], 1).FirstOrDefault();
+                if (connection is not null) return new(placement, connection);
+            }
+        }
+        return null;
+    }
+
     public IReadOnlyList<ExtractionPlacement> Find(SpatialCollisionField field, string drillItem, string resourceItem,
         ProductionCatalog catalog, IReadOnlyList<SpatialEntity> receivers, int limit = 100)
     {

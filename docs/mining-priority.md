@@ -34,7 +34,7 @@ La décision tient désormais compte des ingrédients chargés, de la cuisson en
 
 ## Limites
 
-- L'extraction générale de charbon ou de pierre vers un coffre reste à intégrer. Leur demande peut encore conduire au minage manuel ; la politique ne garantit pas encore zéro minage manuel après le démarrage.
+- L'[extraction de ressources vers un coffre](raw-extraction.md) complète le chemin des plaques pour le charbon et la pierre. Le minage manuel reste autorisé pendant l'amorçage des équipements ; la politique ne garantit pas encore zéro minage manuel après le démarrage.
 - La réutilisation d'installations éloignées pendant l'amorçage imbriqué est incomplète. Les réservations ne constituent pas encore une allocation globale du combustible entre tous les consommateurs de l'usine.
 - La préparation automatique décrite ici concerne les machines à combustible. Les foreuses électriques, la relocalisation après épuisement et les réseaux complets restent incomplets.
 - Le monde normal a subi plusieurs corrections de développement. Une recherche précédente avait expiré après avoir obtenu les 75 premières plaques de cuivre par l'ancien chemin manuel ; ces stocks ont été conservés, sans restauration. La recherche logistique n'est pas démontrée par les lots décrits ici.

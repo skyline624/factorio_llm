@@ -24,19 +24,8 @@ public sealed class SmeltingPlanner
                 && catalog.Machines.Values.Any(m => m.EntityName == e.Name && m.Categories.ContainsKey(recipe.Category))).ToArray();
             foreach (string drillItem in drills)
             {
-                string name = map.Items[drillItem].EntityName;
-                foreach (SpatialEntity installed in map.Entities.Where(e => e.Name == name && knownMachines.ContainsKey(e.Id)
-                    && e.DropPosition is not null))
-                {
-                    SpatialEntity[] targets = receivers.Where(r => ExtractionPlanner.DropTile(installed.DropPosition!).Overlaps(r.Bounds)
-                        && (installed.DropTargetId is null || installed.DropTargetId == r.Id)).ToArray();
-                    if (targets.Length != 1) continue; // An ambiguous drop tile must not select an arbitrary receiver.
-                    var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != installed.Id).ToArray() });
-                    ExtractionPlacement? connection = new ExtractionPlanner().Find(field, drillItem, recipe.Ingredients[0].Name, catalog, targets)
-                        .FirstOrDefault(p => p.Drill.Position == installed.Position && p.Drill.Direction == installed.Direction
-                            && p.OutputPosition.DistanceTo(installed.DropPosition!) <= 0.01);
-                    if (connection is not null) opportunities.Add(new(recipe, drillItem, connection, installed.Id));
-                }
+                foreach (var installed in new ExtractionPlanner().FindInstalled(map, drillItem, recipe.Ingredients[0].Name, catalog, receivers, knownMachines.Keys.ToHashSet(StringComparer.Ordinal)))
+                    opportunities.Add(new(recipe, drillItem, installed.Connection, installed.DrillId));
                 if (inventory.GetValueOrDefault(drillItem) > 0 || constructibleDrills?.Contains(drillItem) == true)
                     opportunities.AddRange(new ExtractionPlanner().Find(new(map), drillItem, recipe.Ingredients[0].Name, catalog, receivers)
                         .Select(p => new SmeltingPlan(recipe, drillItem, p)));

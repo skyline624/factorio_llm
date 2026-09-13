@@ -71,6 +71,7 @@ local function capture(args)
       position = U.copy(entity.position), direction = entity.direction, force = entity.force.name,
       inventories = {}, transportLines = {}, fluidStores = {}}
     local fuel = entity.get_fuel_inventory()
+    if entity.burner then metadata.burnerRemainingJoules = entity.burner.remaining_burning_fuel end
     if fuel and fuel.valid then
       local owner = fuel.entity_owner
       U.check(owner and owner.valid and fuel.index, "inventory_identity_unavailable", "Fuel inventory identity is unavailable")

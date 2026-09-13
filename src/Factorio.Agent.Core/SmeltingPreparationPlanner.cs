@@ -27,30 +27,15 @@ public sealed class SmeltingPreparationPlanner
         CancellationToken token = default)
     {
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Smelting construction observations span different scopes.");
-        var field = new SpatialCollisionField(map);
         foreach (var equipment in Options(catalog, inventory, item))
         {
             token.ThrowIfCancellationRequested();
             if (!map.Items.TryGetValue(equipment.DrillItem, out var drillItem)
                 || !map.Items.TryGetValue(equipment.FurnaceItem, out var furnaceItem)) continue;
             if (map.Prototypes[drillItem.EntityName].FuelCategories is not { Count: > 0 }) continue;
-            var geometry = map.Prototypes[furnaceItem.EntityName];
-            var deposits = map.Entities.Where(e => e.Amount > 0 && catalog.Mining.TryGetValue(e.Name, out var products)
-                && products.Length == 1 && products[0].Name == equipment.Recipe.Ingredients[0].Name && products[0].DeterministicItem)
-                .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).Take(16);
-            foreach (var deposit in deposits)
-            {
-                token.ThrowIfCancellationRequested();
-                foreach (var furnace in new PlacementPlanner().FindCandidates(field, equipment.FurnaceItem, deposit.Position, false, 32))
-                {
-                    var receiver = new SpatialEntity("planned:furnace", geometry.Name, furnace.Position,
-                        geometry.CollisionBox.Rotate(furnace.Direction).Translate(furnace.Position), furnace.Direction, "planned");
-                    var occupied = map with { Entities = [.. map.Entities, receiver] };
-                    var connection = new ExtractionPlanner().Find(new(occupied), equipment.DrillItem, equipment.Recipe.Ingredients[0].Name,
-                        catalog, [receiver], 1).FirstOrDefault();
-                    if (connection is not null) return new(equipment, furnace, connection);
-                }
-            }
+            var site = new ExtractionPlanner().FindNewSite(map, equipment.DrillItem, equipment.FurnaceItem,
+                equipment.Recipe.Ingredients[0].Name, catalog, token);
+            if (site is not null) return new(equipment, site.Receiver, site.Connection);
         }
         return null;
     }
