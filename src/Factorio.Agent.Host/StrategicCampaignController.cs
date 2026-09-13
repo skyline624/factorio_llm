@@ -14,11 +14,14 @@ public sealed record StrategicMemory(int Version, ActorScope Scope, long Tick, b
 
 /// <summary>Sequential strategic goals under the caller's actor lease. Unknown outcomes are never retried.</summary>
 public sealed class StrategicCampaignController(IGameClient game, IStrategicGoalRunner runner, string memoryPath,
-    string? journalPath = null, ICorpseRecovery? recovery = null)
+    string? journalPath = null, ICorpseRecovery? recovery = null, CampaignJournal? campaignJournal = null)
 {
     public async Task<StrategicCampaignResult> RunAsync(int maxGoals, CancellationToken token = default)
     {
         if (maxGoals is < 1 or > 10000) throw new ArgumentOutOfRangeException(nameof(maxGoals));
+        if (campaignJournal is not null && journalPath is not null && Path.GetFullPath(journalPath) != campaignJournal.IndexPath)
+            throw new ArgumentException("The campaign journal index does not match the configured journal path.", nameof(journalPath));
+        string? activeJournalPath = campaignJournal?.CurrentPath ?? journalPath;
         var observation = await ObserveAsync(token, allowDead: true);
         StrategicMemory memory = File.Exists(memoryPath)
             ? JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(memoryPath, token), Protocol.Json)
@@ -27,15 +30,15 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
         if (memory.Version != 1 || memory.Scope is null || memory.Tick < 0 || memory.PreviousResult?.Length > 4000)
             throw new InvalidDataException("Malformed strategic memory.");
         if ((!observation.Alive || memory.Scope.Incarnation != observation.Scope.Incarnation || memory.Recovery is not null)
-            && journalPath is not null)
+            && activeJournalPath is not null)
         {
-            memory = await new StrategicRecoveryController(game, memoryPath, journalPath, recovery).ResumeAsync(token);
+            memory = await new StrategicRecoveryController(game, memoryPath, activeJournalPath, recovery).ResumeAsync(token);
             observation = await ObserveAsync(token);
         }
         Validate(memory, observation);
         if (memory.Pending && memory.PendingJournal is { } pendingJournal)
         {
-            memory = await new StrategicRecoveryController(game, memoryPath, journalPath ?? pendingJournal, recovery).ResumeAsync(token);
+            memory = await new StrategicRecoveryController(game, memoryPath, activeJournalPath ?? pendingJournal, recovery).ResumeAsync(token);
             observation = await ObserveAsync(token);
         }
         if (memory.Pending) throw new InvalidDataException("An earlier strategic execution has no verified terminal outcome. Reconcile its journal and native effects before resuming.");
@@ -46,9 +49,10 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             token.ThrowIfCancellationRequested();
             Validate(memory, observation);
             if (observation.Rockets > 0) return new(true, index, observation.Tick, "rocket-observed");
+            if (campaignJournal is not null) activeJournalPath = await campaignJournal.BeginGoalAsync(index, token);
             // Persist uncertainty before any goal can dispatch native actions. Exceptions leave this marker intact.
             await LocalJson.WriteAsync(memoryPath, memory with { Scope = observation.Scope, Tick = observation.Tick, Pending = true,
-                PendingJournal = journalPath is null ? null : Path.GetFullPath(journalPath) }, token);
+                PendingJournal = activeJournalPath is null ? null : Path.GetFullPath(activeJournalPath) }, token);
             StrategicGoalResult result;
             CampaignObservation after;
             try
@@ -58,7 +62,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 Validate(memory with { Tick = observation.Tick }, after);
                 if (after.Scope != observation.Scope) throw new InvalidDataException("Actor scope changed during strategic execution; reconcile partial effects.");
             }
-            catch (Exception error) when (!token.IsCancellationRequested && journalPath is not null)
+            catch (Exception error) when (!token.IsCancellationRequested && activeJournalPath is not null)
             {
                 string failureCode = error switch
                 {
@@ -70,13 +74,13 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                     _ => "execution_failed"
                 };
                 // Detailed diagnostics stay in the private journal; only the bounded failure category goes to the model.
-                await new ControllerJournal(journalPath).AppendAsync("strategic-execution-error", new
+                await new ControllerJournal(activeJournalPath).AppendAsync("strategic-execution-error", new
                 {
                     exceptionType = error.GetType().FullName, failureCode,
                     message = error.Message[..Math.Min(error.Message.Length, 2000)],
                     stackTrace = error.StackTrace is { } stack ? stack[..Math.Min(stack.Length, 4000)] : null
                 }, token);
-                memory = await new StrategicRecoveryController(game, memoryPath, journalPath, recovery).ResumeAsync(token);
+                memory = await new StrategicRecoveryController(game, memoryPath, activeJournalPath, recovery).ResumeAsync(token);
                 observation = await ObserveAsync(token);
                 continue;
             }

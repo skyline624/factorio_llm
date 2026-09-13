@@ -12,6 +12,18 @@ Les propositions refusées par la validation sémantique reviennent comme résul
 
 La boucle signale `rocket-observed` uniquement lorsque le compteur natif de fusées est strictement positif. Cela constate un lancement dans le monde ; cela ne qualifie pas à lui seul l'historique, la graine, l'absence d'assistance ou les trois campagnes finales.
 
+## Journaux séparés par objectif
+
+`run-campaign` crée un index local puis un fichier distinct pour chaque tentative d'objectif. L'index conserve les références `goal-journal` ; la mémoire enregistre le chemin exact du segment dans `pendingJournal` avant toute exécution. Les anciens segments restent intacts. `run-goal` conserve son journal unique.
+
+La réconciliation lit le segment de la tentative interrompue : les objectifs terminés n'alourdissent plus cette lecture. Sa limite de 64 Mio reste applicable à chaque segment ; cette séparation ne borne pas la taille d'un objectif particulièrement long. Les journaux anciens restent lisibles selon leur format précédent. Un échec de création du segment ou d'écriture de l'index empêche l'exécution de l'objectif.
+
+La commande `verify-campaign-journals --session FILE` exige une session de test explicite. Elle prépare six plaques de fer et exécute trois fabrications natives distinctes, en omettant volontairement le reçu final de la deuxième dans son journal. La reprise retrouve ce reçu dans le moteur avant la troisième fabrication. Ce test n'appelle pas le LLM et ne constitue pas une campagne.
+
+Le 13 septembre 2026, les essais Factorio 2.0.77 ont réussi en headless (ticks 282260 à 282410), puis avec un pilote connecté au même personnage 391 (284793 à 284989). Dans chaque essai : trois segments, trois identifiants d'opération distincts, stocks successifs de zéro, un puis deux engrenages avant fabrication, six plaques consommées, trois engrenages finaux, file vide et mémoire sans tentative en attente. Le reçu omis n'a provoqué aucune répétition. Une capture native du client connecté a également été inspectée.
+
+Les tests hors ligne couvrent la séparation, la conservation des preuves précédentes, l'annulation, l'échec d'écriture de l'index, la récupération après mort et la reprise d'un segment malgré un ancien historique de 65 Mio. Les 596 tests réussissent ; le test cloud optionnel reste exclu de cette exécution ordinaire.
+
 ## État de validation
 
 Les tests hors ligne vérifient le transfert du résultat précédent entre objectifs, la persistance entre instances, l'arrêt sur fusée native, l'arrêt de budget, le refus d'une nouvelle exécution après timeout, les mondes ou dates incompatibles, une opération native encore active, les changements de portée pendant une exécution et la détection des propositions répétées. Le contrôleur stratégique concret transmet les objectifs scientifiques et renvoie les propositions non prises en charge sans effectuer leurs actions.
@@ -99,3 +111,10 @@ La recherche a ensuite terminé entre les ticks 7929791 et 8078825. Le laboratoi
 `radar` a terminé entre les ticks 8079318 et 8110466, avec 20 packs rouges consommés et 103 observations alimentées. Le modèle a ensuite choisi `engine` au tick d'observation 8110499. Ses 100 packs rouges exigeaient un complément de 95 packs : les installations existantes ont fourni 95 cuivres et 190 fers, puis le personnage a fabriqué 95 engrenages et 95 packs rouges. Le stock rouge a atteint 100 au tick 8232915.
 
 `engine` a terminé entre les ticks 8115499 et 8348075, après approvisionnement du laboratoire 647 : 100 packs rouges et 100 verts consommés, 764 observations alimentées. La lecture indépendante au tick 8354815 confirme les trois technologies, la recette des moteurs activée, 250 points de vie, zéro pack rouge et 25 verts portés. Le journal complet de ces quatre objectifs ne contient aucune opération de minage manuel. La commande a atteint son budget au tick 8348105, sans fusée ; la suite a été lancée dans le même serveur avec un nouveau journal et un budget de dix objectifs. Ces résultats restent ceux du monde de développement, sans qualification finale depuis un départ neuf.
+
+
+## Fluides recherchés et reprise avec journaux séparés
+
+Le laboratoire 647 a terminé `fluid-handling` entre les ticks 8353441 et 8602317, avec 50 packs rouges et 50 verts consommés et 378 relevés alimentés. Les foreuses et fours existants ont fourni les métaux supplémentaires ; le journal de cette séquence ne contient aucune opération de minage manuel. Les fabrications de certains composants et packs restent effectuées par le personnage. La lecture native au tick 8609298 confirme la recherche, le personnage 1683 à 250 points de vie et aucun pilote connecté.
+
+Le modèle a ensuite choisi `oil-gathering`. Cette tentative a été interrompue pour sauvegarder la partie et effectuer les tests de journaux dans une fixture distincte. La reprise de la dernière sauvegarde a réconcilié ses 19 opérations au tick 8611336, sans les rejouer, puis démarré une nouvelle tentative dans son propre segment. La lecture au tick 8620359 confirme `fluid-handling` conservée et `oil-gathering` encore inachevée. Aucune fusée ni campagne finale qualifiée n’est établie.

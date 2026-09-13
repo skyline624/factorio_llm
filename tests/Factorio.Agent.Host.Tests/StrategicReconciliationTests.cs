@@ -44,8 +44,10 @@ public sealed class StrategicReconciliationTests : IDisposable
         Assert.DoesNotContain("operation", game.Calls);
     }
 
-    [Fact]
-    public async Task CampaignRecoversBeforeAskingForAnotherGoalAfterNativeRespawn()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CampaignRecoversBeforeAskingForAnotherGoalAfterNativeRespawn(bool segmented)
     {
         var game = await PrepareAsync(false);
         game.AfterDeath = true;
@@ -59,12 +61,37 @@ public sealed class StrategicReconciliationTests : IDisposable
             Assert.Equal(scope, pending.Scope);
         });
         var next = new NextGoal();
-        await new StrategicCampaignController(game, next, Memory, Path.Combine(directory, "recovery.jsonl"), recovery).RunAsync(1);
+        string recoveryPath = Path.Combine(directory, "recovery.jsonl");
+        using var segments = segmented ? new CampaignJournal(recoveryPath) : null;
+        await new StrategicCampaignController(game, next, Memory, recoveryPath, recovery, segments).RunAsync(1);
         Assert.Equal(1, recovery.Calls);
         Assert.Contains("death-recovery-observed", next.Previous);
         Assert.False((await ReadMemoryAsync()).Pending);
         Assert.Null((await ReadMemoryAsync()).Recovery);
         Assert.DoesNotContain("submit", game.Calls);
+    }
+
+    [Fact]
+    public async Task InterruptedSegmentReconcilesWithoutReadingOversizedCompletedHistory()
+    {
+        var game = await PrepareAsync(false);
+        string interrupted = await File.ReadAllTextAsync(Journal);
+        using var segments = new CampaignJournal(Journal);
+        string pendingPath = await segments.BeginGoalAsync(0);
+        await File.AppendAllTextAsync(pendingPath, interrupted);
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize(
+            (await ReadMemoryAsync()) with { PendingJournal = pendingPath }, Protocol.Json));
+        // The old history is deliberately unreadable within the reconciliation budget.
+        using (var archive = new FileStream(Journal, FileMode.Open, FileAccess.Write))
+            archive.SetLength(65L * 1024 * 1024);
+        var next = new NextGoal();
+        await new StrategicCampaignController(game, next, Memory, Journal, campaignJournal: segments).RunAsync(1);
+        Assert.Contains("interrupted-goal-reconciled", next.Previous);
+        Assert.Equal(1, game.Calls.Count(c => c == "operation"));
+        Assert.DoesNotContain("submit", game.Calls);
+        Assert.False((await ReadMemoryAsync()).Pending);
+        Assert.NotEqual(pendingPath, segments.CurrentPath);
+        Assert.True(new FileInfo(pendingPath).Length < 1024 * 1024);
     }
 
     [Theory]

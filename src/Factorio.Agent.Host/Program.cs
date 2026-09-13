@@ -33,6 +33,7 @@ try
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
           verify-assembly-batches --session FILE
+          verify-campaign-journals --session FILE
           verify-furnace-fleet --session FILE [--item steel-plate|stone-brick]
           verify-electric-extraction --session FILE [--item iron-ore|iron-plate]
           verify-smelting-fuel --session FILE
@@ -169,6 +170,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new AssemblyBatchQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-campaign-journals":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new CampaignJournalQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-smelting-fuel":
@@ -354,14 +361,16 @@ try
             string journalPath = Path.Combine(session.Directory, $"strategic-production-{Guid.NewGuid():N}.jsonl");
             using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
             var planner = new OllamaStrategicPlanner(http, new OllamaOptions { MaxAttempts = 1 });
-            var controller = new StrategicProductionController(game, planner, new ControllerJournal(journalPath));
+            using var campaignJournal = args[0] == "run-campaign" ? new CampaignJournal(journalPath) : null;
+            IControllerJournal journal = campaignJournal is null ? new ControllerJournal(journalPath) : campaignJournal;
+            var controller = new StrategicProductionController(game, planner, journal);
             if (args[0] == "run-campaign")
             {
                 string memoryPath = Path.Combine(session.Directory, "strategic-memory.json");
                 int maxGoals = int.Parse(Option("max-goals") ?? "10", CultureInfo.InvariantCulture);
-                var result = await new StrategicCampaignController(game, controller, memoryPath, journalPath)
+                var result = await new StrategicCampaignController(game, controller, memoryPath, journalPath, campaignJournal: campaignJournal)
                     .RunAsync(maxGoals, shutdown.Token);
-                Print(new { result, journalPath, memoryPath });
+                Print(new { result, journalPath, memoryPath, journalLayout = "per-goal" });
             }
             else Print(new { result = await controller.RunOnceAsync(shutdown.Token), journalPath });
             break;
