@@ -25,7 +25,6 @@ public sealed class RetreatPlanner
 {
     public static bool Needed(SafetyObservation state) => state.Alive && state.ControlMode == "ai" && !state.StopUnconfirmed
         && state.Health > 0 && state.Position is not null && state.LocalEnemiesComplete && state.Enemies.Count > 0
-        && state.Defenses is { Count: > 0 }
         && (state.MaxHealth is { } maximum && state.Health <= maximum * .4
             || !state.Weapon.Ready && EquipmentPolicy.Select(state) is null);
 
@@ -39,8 +38,8 @@ public sealed class RetreatPlanner
         var start = map.Actor.Position;
         double Separation(MapPosition point) => state.Enemies.Min(e => point.DistanceTo(e.Position));
         double initialSeparation = Separation(start);
-        var candidates = new List<(DefensiveRefuge Refuge, MapPosition Destination, double Cost)>();
-        foreach (var refuge in state.Defenses!)
+        var candidates = new List<(string? RefugeId, MapPosition Destination, double Cost)>();
+        foreach (var refuge in state.Defenses ?? [])
         {
             var entity = map.Entities.SingleOrDefault(e => e.Id == refuge.Id);
             if (entity is null || map.Prototypes[entity.Name].Type != "ammo-turret" || entity.Position != refuge.Position) continue;
@@ -51,13 +50,26 @@ public sealed class RetreatPlanner
                     var point = new MapPosition(x, y);
                     if (point.DistanceTo(refuge.Position) > radius || start.DistanceTo(point) > 32
                         || Separation(point) < initialSeparation + 2 || !field.Walkable(point)) continue;
-                    candidates.Add((refuge, point, start.DistanceTo(point) + point.DistanceTo(refuge.Position) * .5));
+                    candidates.Add((refuge.Id, point, start.DistanceTo(point) + point.DistanceTo(refuge.Position) * .5));
+                }
+        }
+        if (state.Defenses is not { Count: > 0 })
+        {
+            // A local escape is useful even without turret coverage. It proves increased
+            // separation on observed terrain, not safety from pursuit or hidden enemies.
+            for (int x = (int)Math.Ceiling(start.X - 12); x <= Math.Floor(start.X + 12); x++)
+                for (int y = (int)Math.Ceiling(start.Y - 12); y <= Math.Floor(start.Y + 12); y++)
+                {
+                    var point = new MapPosition(x, y);
+                    double distance = start.DistanceTo(point), gain = Separation(point) - initialSeparation;
+                    if (distance is < 4 or > 12 || gain < 2 || !field.Walkable(point)) continue;
+                    candidates.Add((null, point, distance - 2 * gain));
                 }
         }
         long began = Stopwatch.GetTimestamp();
         int attempted = 0;
         bool limited = false;
-        foreach (var candidate in candidates.OrderBy(c => c.Cost).ThenBy(c => c.Refuge.Id, StringComparer.Ordinal)
+        foreach (var candidate in candidates.OrderBy(c => c.Cost).ThenBy(c => c.RefugeId, StringComparer.Ordinal)
             .ThenBy(c => c.Destination.X).ThenBy(c => c.Destination.Y))
         {
             if (++attempted > 12 || Stopwatch.GetElapsedTime(began) > TimeSpan.FromMilliseconds(200)) return new("search-budget");
@@ -80,7 +92,7 @@ public sealed class RetreatPlanner
                 start.Y + (first.Y - start.Y) * 2 / distance);
             double clearance = route.UsesTightStartConnector ? 0 : .18;
             if (distance < .1 || !field.SteeringRegionClear(start, next, clearance)) continue;
-            return new("found", candidate.Refuge.Id, candidate.Destination, next, route);
+            return new(candidate.RefugeId is null ? "separation" : "found", candidate.RefugeId, candidate.Destination, next, route);
         }
         return new(limited ? "search-budget" : "no-safe-candidate");
     }

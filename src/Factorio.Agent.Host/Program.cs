@@ -41,8 +41,10 @@ try
           verify-death-recovery --session FILE [--stationary-threat]
           verify-equipment --session FILE
           verify-retreat --session FILE
+          verify-uncovered-retreat --session FILE
           verify-defense-deployment --session FILE
           verify-armed-crafting --session FILE
+          verify-shooting-death --session FILE
           assemble --session FILE --item NAME --quantity N
           produce-fluid --session FILE --fluid NAME --quantity N
           connect-fluid --session FILE --source ID --target ID --fluid NAME
@@ -204,6 +206,12 @@ try
             Print(new { report = await new EquipmentQualification(session).RunAsync(shutdown.Token) });
             break;
         }
+        case "verify-uncovered-retreat":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new UncoveredRetreatQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
         case "verify-retreat":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
@@ -214,6 +222,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new DefenseDeploymentQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-shooting-death":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new ShootingDeathQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-armed-crafting":

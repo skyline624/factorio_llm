@@ -1,3 +1,4 @@
+local ShotAccounting = require("scripts.shot_accounting")
 local M = {}
 
 function M.records()
@@ -15,6 +16,7 @@ function M.register(event)
   if not death or death.unitNumber ~= event.unit_number or death.tick ~= event.tick
     or death.surfaceIndex ~= event.surface_index then return end
   local records = M.records()
+  local proven = {}
   for index, entity in ipairs(event.corpses) do
     if entity.valid and entity.type == "character-corpse" then
       -- Corpses are neutral and have no unit_number. Position alone cannot
@@ -22,7 +24,13 @@ function M.register(event)
       local id = "corpse:" .. death.unitNumber .. ":" .. death.tick .. ":" .. index
       records[id] = {entity = entity, deathTick = death.tick, incarnation = death.incarnation,
         actorUnitNumber = death.unitNumber}
+      proven[id] = entity
     end
+  end
+  local shot = s.pendingShotDeath and s.receipts[s.pendingShotDeath]
+  if shot and shot.request.scope.incarnation == death.incarnation then
+    ShotAccounting.reconcile(shot, proven, death.tick)
+    s.pendingShotDeath = nil
   end
 end
 

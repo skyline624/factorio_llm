@@ -7,6 +7,31 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class DefenseControllerTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CriticalActorSeeksSeparationWithoutATurret(bool armed)
+    {
+        var fake = new GameStub { Armed = armed, Health = 50 };
+        await new DefenseController(fake, new JournalStub()).StepAsync();
+        Assert.Equal("move", fake.Submission?.Kind);
+        var next = fake.Submission!.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+        Assert.True(next.DistanceTo(new(4, 0)) > 4);
+        Assert.InRange(next.DistanceTo(new(0, 0)), .1, 2.01);
+    }
+
+    [Fact]
+    public async Task CriticalHealthPreemptsAnOwnedShootingBurst()
+    {
+        var fake = new GameStub();
+        var defense = new DefenseController(fake, new JournalStub());
+        await defense.StepAsync();
+        Assert.Equal("shoot", fake.Submission?.Kind);
+        fake.Health = 50;
+        Assert.Equal("preempted", (await defense.StepAsync()).State);
+        Assert.Contains("cancel", fake.Calls);
+    }
+
     [Fact]
     public async Task UnknownRetreatSubmissionIsQueriedWithoutAnotherMove()
     {
@@ -98,7 +123,8 @@ public sealed class DefenseControllerTests
         else loadout["carried"]![0]!["bullet"] = false;
         var fake = new GameStub { Armed = false, Loadout = loadout };
         await new DefenseController(fake, new JournalStub()).StepAsync();
-        Assert.Equal(["observe"], fake.Calls);
+        Assert.Equal("move", fake.Submission?.Kind);
+        Assert.False(fake.Submission!.Args.TryGetProperty("compartment", out _));
     }
 
     [Fact]
@@ -225,9 +251,8 @@ public sealed class DefenseControllerTests
     [InlineData("manual", true, false, true, 4)]
     [InlineData("ai", false, false, true, 4)]
     [InlineData("ai", true, true, true, 4)]
-    [InlineData("ai", true, false, false, 4)]
     [InlineData("ai", true, false, true, 40)]
-    public async Task No_mutation_when_manual_dead_stopping_unarmed_or_out_of_range(
+    public async Task No_mutation_when_manual_dead_stopping_or_out_of_range(
         string mode, bool alive, bool stopping, bool armed, double distance)
     {
         var fake = new GameStub { Mode = mode, Alive = alive, Stopping = stopping, Armed = armed, Distance = distance };
@@ -322,7 +347,7 @@ public sealed class DefenseControllerTests
         public bool Alive { get; init; } = true;
         public bool Stopping { get; init; }
         public bool Armed { get; init; } = true;
-        public double Health { get; init; } = 250;
+        public double Health { get; set; } = 250;
         public object? Defenses { get; init; }
         public bool StaleSpatial { get; init; }
         public bool RefugeBlocked { get; init; }

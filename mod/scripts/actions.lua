@@ -5,6 +5,7 @@ local Visibility = require("scripts.visibility")
 local CraftAccounting = require("scripts.craft_accounting")
 local CraftDelivery = require("scripts.craft_delivery")
 local Equipment = require("scripts.equipment")
+local ShotAccounting = require("scripts.shot_accounting")
 local M = {}
 
 M.capabilities = {"move", "mine", "craft", "wait", "build", "insert", "take", "set_recipe",
@@ -12,6 +13,7 @@ M.capabilities = {"move", "mine", "craft", "wait", "build", "insert", "take", "s
 local starts, steps = {}, {}
 starts.equip, starts.select_weapon = Equipment.equip, Equipment.select
 M.account_craft = CraftAccounting.update
+M.account_shot_death = ShotAccounting.on_death
 
 local function main_inventory(c) return c.get_main_inventory() end
 local function target(c, args, owned)
@@ -32,7 +34,7 @@ function M.measure(record, c)
     effects.produced = math.max(0, main_inventory(c).get_item_count(w.product) - w.beforeProduct)
   end
   if w.expected and w.accounting then effects.products = CraftAccounting.products(record, c) end
-  if w.beforeRounds then
+  if w.beforeRounds and not w.shotDeathTick then
     effects.roundsConsumed = w.beforeRounds - U.ammo(c.get_inventory(defines.inventory.character_ammo))
   end
 end
@@ -268,6 +270,7 @@ starts.shoot = function(r, c, args)
   r.work.endTick = game.tick + U.number(args.ticks, "ticks", 1, 3600, 60, true)
   r.work.beforeAmmo = U.inventory(c.get_inventory(defines.inventory.character_ammo))
   r.work.beforeRounds = U.ammo(c.get_inventory(defines.inventory.character_ammo))
+  ShotAccounting.prepare(r, c)
   U.check(r.work.beforeRounds > 0, "no_ammo", "No loaded ammunition is available")
   r.receipt.effects.targetId = U.entity_id(entity)
   r.receipt.effects.beforeHealth = entity.health
