@@ -63,25 +63,47 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
                         let candidate = planner.Find(map, resourceName, item, pole, ownedIds)
                         where candidate is not null
                         select (Item: item, Pole: pole, Plan: candidate)).FirstOrDefault();
-        if (selected.Plan is null)
-            throw new InvalidOperationException("No clear compatible extraction site with a local electric supply or single-pole extension. Reconcile or extend the network.");
-        ResourceExtractionPlacement plan = selected.Plan;
-        await journal.AppendAsync("resource-research-placement", new { technology, resourceName, selected.Item, selected.Pole, plan, map.Scope, map.CollectedTick }, token);
-        await executor.RunAsync(selected.Item, 1, token);
-        if (plan.AdditionalPole is not null) await executor.RunAsync(selected.Pole, 1, token);
-        string sourceId = plan.PoleId;
-        if (plan.AdditionalPole is not null)
+        var sites = machines.Select(item => (Item: item, Site: planner.FindSite(map, resourceName, item, ownedIds)))
+            .Where(candidate => candidate.Site is not null).ToArray();
+        var existing = sites.FirstOrDefault(candidate => candidate.Site!.ExistingMachineId is not null);
+        string machineId;
+        if (existing.Site is not null || selected.Plan is null)
         {
-            string addedId = await power.BuildAtAsync(selected.Pole, plan.AdditionalPole, catalog, controller, token);
-            map = await MapAsync();
-            if (Network(map, addedId) is not { } network || network != Network(map, sourceId))
-                throw new InvalidDataException("The extraction pole did not connect to the planned source network.");
-            sourceId = addedId;
+            var remote = existing.Site is not null ? existing : sites.FirstOrDefault();
+            var site = remote.Site ?? throw new InvalidOperationException("No clear compatible observed fluid extraction site.");
+            await journal.AppendAsync("resource-research-grid-placement", new
+                { technology, resourceName, remote.Item, site, map.Scope, map.CollectedTick }, token);
+            if (site.ExistingMachineId is { } installed) machineId = installed;
+            else
+            {
+                await executor.RunAsync(remote.Item, 1, token);
+                machineId = await power.BuildAtAsync(remote.Item, site.Machine, catalog, controller, token);
+            }
+            await new PowerGridController(game, journal).ConnectAsync(machineId, catalog, controller, token);
         }
-        string machineId = await power.BuildAtAsync(selected.Item, plan.Machine, catalog, controller, token);
+        else
+        {
+            ResourceExtractionPlacement plan = selected.Plan;
+            await journal.AppendAsync("resource-research-placement", new { technology, resourceName, selected.Item, selected.Pole, plan, map.Scope, map.CollectedTick }, token);
+            await executor.RunAsync(selected.Item, 1, token);
+            if (plan.AdditionalPole is not null) await executor.RunAsync(selected.Pole, 1, token);
+            string sourceId = plan.PoleId;
+            if (plan.AdditionalPole is not null)
+            {
+                string addedId = await power.BuildAtAsync(selected.Pole, plan.AdditionalPole, catalog, controller, token);
+                map = await MapAsync();
+                if (Network(map, addedId) is not { } network || network != Network(map, sourceId))
+                    throw new InvalidDataException("The extraction pole did not connect to the planned source network.");
+                sourceId = addedId;
+            }
+            machineId = await power.BuildAtAsync(selected.Item, plan.Machine, catalog, controller, token);
+            map = await MapAsync();
+            if (Network(map, machineId) is not { } localNetwork || localNetwork != Network(map, sourceId))
+                throw new InvalidDataException("The resource extractor has not joined the expected native electric network.");
+        }
         map = await MapAsync();
-        if (Network(map, machineId) is not { } machineNetwork || machineNetwork != Network(map, sourceId))
-            throw new InvalidDataException("The resource extractor has not joined the expected native electric network.");
+        long machineNetwork = Network(map, machineId)
+            ?? throw new InvalidDataException("The resource extractor has no verified native electric network.");
         await power.MaintainFuelAsync(machineId, 0, catalog, controller, false, token);
         int powered = 0;
         for (int attempt = 0; attempt < 120; attempt++)

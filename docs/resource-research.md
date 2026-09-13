@@ -4,7 +4,7 @@ La commande `research --session FILE --technology oil-processing` peut désormai
 
 C# conserve le nom exact de l'entité dans `TechnologyStep.Entity`. Il cherche le gisement dans les observations locales, avec l'historique comme destination de recherche éventuelle. Il choisit un extracteur électrique compatible avec la catégorie native de la ressource et doté d'une sortie fluide. Le placement est centré sur le gisement observé ; les orientations, collisions, zones électriques et distances de fil proviennent des prototypes du jeu.
 
-Le plan utilise un poteau propre déjà connecté et, si nécessaire, un poteau supplémentaire. Les équipements doivent être portés ou avoir une recette disponible. Le personnage sort de l'emprise prévue avant la validation native et la construction ; les autres personnages restent des obstacles. Chaque construction consomme son objet et produit un reçu. Les identifiants de réseau du poteau ajouté et du chevalet doivent correspondre au réseau prévu.
+Le plan privilégie un raccordement local à un poteau propre déjà connecté. Il peut aussi réutiliser un chevalet propre déjà installé ou poser un chevalet sur un gisement sans alimentation locale, puis prolonger le réseau électrique connu avec des poteaux calculés en C#. Chaque liaison est vérifiée dans le moteur avant la suivante. Les équipements doivent être portés ou avoir une recette disponible. Le personnage sort de l'emprise prévue avant la validation native et la construction ; les autres personnages restent des obstacles. Chaque construction consomme son objet et produit un reçu. Les identifiants de réseau du poteau ajouté et du chevalet doivent correspondre au réseau prévu.
 
 L'exécuteur surveille ensuite le chevalet alimenté, le fluide de son circuit observé dans une photographie d'usine et le drapeau natif de recherche. Il ne confond pas la quantité de minerai du gisement avec un stock de pétrole utilisable. Il ne crédite pas de fluide dans l'inventaire et n'accorde aucun drapeau technologique. Les statistiques de cette extraction restent entièrement gérées par le moteur.
 
@@ -16,9 +16,19 @@ Une première tentative a refusé le site avant mutation parce que le personnage
 
 Une lecture indépendante au tick 234998 confirme `oil-processing.researched=true`, la recette de raffinerie disponible, environ 509,575 unités produites, aucune consommation et la même quantité dans le tampon du chevalet, à la précision numérique du moteur. Le gisement contient alors 299490 unités. Aucun joueur n'est connecté et le personnage conserve 250 points de vie.
 
+## Pompage distant et réemploi vérifiés
+
+`verify-fluid-extraction --session FILE` exige une session explicitement marquée comme fixture. Elle prépare une rive, un gisement à 70 cases de l'origine, les équipements et le prérequis `oil-gathering`. La production électrique est construite par le contrôleur, puis son combustible et ses tampons sont vidés pour vérifier le ravitaillement. La cible `oil-processing` reste non recherchée avant l'essai ; aucun pétrole produit n'est injecté.
+
+Le 13 septembre 2026, l'essai headless a construit le chevalet 512 et 13 poteaux, puis rechargé la chaudière 508 du réseau 5. Entre les ticks 289428 et 297626, l'extraction a débloqué `oil-processing` et fourni environ 69,98 unités de pétrole observées. Le moteur confirme un chevalet consommé depuis l'inventaire, une seule construction de chevalet et aucune opération de minage manuel.
+
+L'option `--reuse` prépare un chevalet déjà posé, sans autre chevalet porté. Avec le pilote connecté au personnage 391, le même contrôleur a conservé le chevalet 594, construit 13 poteaux et rechargé la chaudière 590 du réseau 19. Entre les ticks 321944 et 331257, il a débloqué le raffinage et produit environ 76,64 unités supplémentaires, sans nouveau chevalet construit ni minage manuel. Une capture native inspectée montre la ligne et le chevalet avec la recherche terminée. Le client a été lancé réduit puis fermé ; un seul serveur headless et un seul client ont coexisté.
+
+Les 603 tests hors ligne passent, dont les cas de gisement sans réseau local, de réemploi propre et de refus d'un extracteur étranger ou incompatible. Ces essais prouvent ce raccordement et ce déclencheur dans des fixtures préparées ; ils ne qualifient pas une campagne autonome jusqu'à la fusée.
+
 ## Limites actuelles
 
-L'extraction qualifiée concerne un gisement proche d'un réseau existant, raccordable avec au plus un nouveau poteau. Les avant-postes éloignés, l'extension électrique sur plusieurs segments, la reprise d'une construction d'extraction partielle et les ressources solides nécessitant un fluide ne sont pas encore pris en charge. Le contrôleur peut explorer mais ne construit pas encore un réseau électrique distant.
+L'extension électrique reste limitée à 128 liaisons par tentative et à un terrain accessible dans les observations successives. Un chevalet propre déjà posé peut être réutilisé ; les poteaux construits avant une interruption restent dans le monde. Cela ne garantit ni une route pour tout terrain, ni la récupération de toutes les constructions partielles. Les ressources solides nécessitant un fluide et les déclencheurs de recherche par extraction solide restent hors de ce contrôleur. Le transport du pétrole vers une raffinerie distante constitue une étape séparée.
 
 L'exécution exige un fluide présent dans le circuit observé et le déblocage natif ; elle n'est pas une mesure générale de débit et ne qualifie pas encore un circuit continuellement vidé par une raffinerie. Un premier [raffinage avec tuyaux et stockage de sortie](fluid-production.md) est désormais qualifié en fixture ; chimie complète et production industrielle restent à implémenter. Les budgets scientifiques actuels et le laboratoire unique ne suffisent pas aux grandes recherches finales.
 

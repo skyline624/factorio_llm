@@ -5,6 +5,55 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class ResourceExtractionPlannerTests
 {
     [Fact]
+    public void DistantDepositCanBeSelectedBeforeItsGridIsExtended()
+    {
+        var map = Map();
+        map = map with { Entities = map.Entities.Where(e => e.Id != "power").ToArray() };
+        var site = new ResourceExtractionPlanner().FindSite(map, "oil", "pumpjack", new HashSet<string>());
+        Assert.NotNull(site);
+        Assert.Equal("oil-1", site.ResourceId);
+        Assert.Equal(new MapPosition(5.5, 5.5), site.Machine.Position);
+        Assert.Null(site.ExistingMachineId);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void InterruptedInstallationReusesOnlyAnOwnedCompatibleExtractor(bool owned)
+    {
+        var map = Map();
+        var position = new MapPosition(5.5, 5.5);
+        map = map with { Entities = [..map.Entities, new("installed", "pumpjack", position,
+            map.Prototypes["pumpjack"].CollisionBox.Translate(position), 4, owned ? "agent" : "other")] };
+        var site = new ResourceExtractionPlanner().FindSite(map, "oil", "pumpjack",
+            owned ? new HashSet<string> { "installed" } : new HashSet<string>());
+        if (owned)
+        {
+            Assert.NotNull(site);
+            Assert.Equal("installed", site.ExistingMachineId);
+            Assert.Equal(4, site.Machine.Direction);
+        }
+        else Assert.Null(site);
+    }
+
+    [Theory]
+    [InlineData("wrong-category")]
+    [InlineData("no-output")]
+    [InlineData("not-electric")]
+    [InlineData("exhausted")]
+    public void UnpoweredSiteStillRequiresUsableFluidExtraction(string fault)
+    {
+        var map = Map();
+        var prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes);
+        if (fault == "wrong-category") prototypes["pumpjack"] = prototypes["pumpjack"] with { ResourceCategories = new Dictionary<string, bool> { ["solid"] = true } };
+        if (fault == "no-output") prototypes["pumpjack"] = prototypes["pumpjack"] with { FluidBoxes = [] };
+        if (fault == "not-electric") prototypes["pumpjack"] = prototypes["pumpjack"] with { IsElectric = false };
+        map = map with { Prototypes = prototypes, Entities = map.Entities.Select(e =>
+            fault == "exhausted" && e.Id == "oil-1" ? e with { Amount = 0 } : e).ToArray() };
+        Assert.Null(new ResourceExtractionPlanner().FindSite(map, "oil", "pumpjack", new HashSet<string>()));
+    }
+
+    [Fact]
     public void PlacesFluidExtractorExactlyOnCompatibleObservedResource()
     {
         var map = Map();

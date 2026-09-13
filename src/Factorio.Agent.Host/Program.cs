@@ -34,6 +34,7 @@ try
           verify-furnace-fuel --session FILE
           verify-assembly-batches --session FILE
           verify-campaign-journals --session FILE
+          verify-fluid-extraction --session FILE [--reuse]
           verify-furnace-fleet --session FILE [--item steel-plate|stone-brick]
           verify-electric-extraction --session FILE [--item iron-ore|iron-plate]
           verify-smelting-fuel --session FILE
@@ -176,6 +177,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new CampaignJournalQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-fluid-extraction":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new FluidExtractionQualification(session, options.ContainsKey("reuse")).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-smelting-fuel":
@@ -491,7 +498,7 @@ static Dictionary<string, string> Parse(string[] values)
         string value = values[index];
         if (!value.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException($"Expected option, got {value}.");
         string name = value[2..];
-        string contents = name is "fixture" or "stationary-threat" ? "true" : ++index < values.Length ? values[index] : throw new ArgumentException($"Missing value for {value}.");
+        string contents = name is "fixture" or "stationary-threat" or "reuse" ? "true" : ++index < values.Length ? values[index] : throw new ArgumentException($"Missing value for {value}.");
         if (!options.TryAdd(name, contents)) throw new ArgumentException($"Duplicate option {value}.");
     }
     return options;
