@@ -58,6 +58,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             availableFluidConversions = catalog.Recipes.Where(r => r.Enabled && r.Ingredients.Count == 1 && r.Products.Count == 1
                 && r.Ingredients[0].DeterministicFluid && r.Products[0].DeterministicFluid).Select(r => r.Name).ToArray(),
             technologyCollection = new { science.StartTick, science.EndTick },
+            rocketResearchDependencies = SiloResearchDependencies.Read(catalog, science.Technologies),
             nativeTechnologyIdentifiers = science.Technologies.Keys.Order(StringComparer.Ordinal).ToArray(),
             researchedTechnologies = science.Technologies.Values.Where(t => t.Researched).Select(t => t.Name).Order(StringComparer.Ordinal).ToArray(),
             availableResearch = science.Technologies.Values.Where(t => t.Enabled && t.Available && !t.Researched)

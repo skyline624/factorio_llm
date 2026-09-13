@@ -7,6 +7,57 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class StrategicResearchTests
 {
     [Fact]
+    public async Task StrategyReceivesObservedSiloResearchDependenciesRatherThanUnrelatedAvailableResearch()
+    {
+        var planner = new Planner(unsupported: true);
+        var game = new Game
+        {
+            IncludeSilo = true,
+            Technologies =
+            [
+                new("automation", true, true, false, [], [], 10, 600),
+                new("engine", true, false, true, ["automation"], [new("red", 1)], 10, 600),
+                new("circuit-network", true, false, true, ["automation"], [new("red", 1)], 100, 600),
+                new("launch-engineering", true, false, false, ["engine"], [new("red", 1)], 100, 600,
+                    Effects: Protocol.ToElement(new[] { new { type = "unlock-recipe", recipe = "silo-construction" } }))
+            ]
+        };
+        await new StrategicProductionController(game, planner, new Journal()).RunOnceAsync();
+        using var facts = System.Text.Json.JsonDocument.Parse(planner.Context!.Facts);
+        Assert.True(facts.RootElement.TryGetProperty("rocketResearchDependencies", out var rocket));
+        Assert.Equal("launch-engineering", Assert.Single(rocket.GetProperty("unlockTechnologies").EnumerateArray()).GetString());
+        var dependencies = rocket.GetProperty("prerequisites");
+        Assert.Equal("engine", Assert.Single(dependencies.GetProperty("launch-engineering").EnumerateArray()).GetString());
+        Assert.Equal("automation", Assert.Single(dependencies.GetProperty("engine").EnumerateArray()).GetString());
+        Assert.False(dependencies.TryGetProperty("circuit-network", out _));
+        Assert.Equal("engine", Assert.Single(rocket.GetProperty("availableResearch").EnumerateArray()).GetString());
+        Assert.Equal(new[] { "engine", "launch-engineering" }, rocket.GetProperty("remainingTechnologies").EnumerateArray().Select(x => x.GetString()));
+        Assert.DoesNotContain("position", planner.Context.Facts);
+        Assert.DoesNotContain("submit", game.Actions);
+    }
+
+    [Theory]
+    [InlineData("unobserved")]
+    [InlineData("launch-engineering")]
+    public async Task IncompleteOrCyclicSiloDependenciesCannotBeSentAsReliableFacts(string prerequisite)
+    {
+        var planner = new Planner(unsupported: true);
+        var game = new Game
+        {
+            IncludeSilo = true,
+            Technologies =
+            [
+                new("launch-engineering", true, false, false, [prerequisite], [], 100, 600,
+                    Effects: Protocol.ToElement(new[] { new { type = "unlock-recipe", recipe = "silo-construction" } }))
+            ]
+        };
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new StrategicProductionController(game, planner, new Journal()).RunOnceAsync());
+        Assert.Null(planner.Context);
+        Assert.DoesNotContain("submit", game.Actions);
+    }
+
+    [Fact]
     public async Task DefenseProposalCompletesFromInstalledReservesWithoutCarriedStockExecution()
     {
         var game = new Game { IncludeDefense = true, DefenseRounds = 100 };
@@ -75,6 +126,8 @@ public sealed class StrategicResearchTests
     }
     private sealed class Game : IGameClient
     {
+        public bool IncludeSilo { get; init; }
+        public NativeTechnology[] Technologies { get; init; } = [new("automation", true, true, false, [], [new("red", 1)], 10, 600)];
         public bool IncludeDefense { get; init; }
         public int DefenseRounds { get; init; } = 94;
         public List<string> Actions { get; } = [];
@@ -105,15 +158,18 @@ public sealed class StrategicResearchTests
                 },
                 "factory_snapshot" => new FactorySnapshotPage("factory", scope, scope, tick, tick + 1000, records.Length, 0, records.Length, true,
                     Protocol.ToElement(new { atomic = true, knownInventoriesComplete = true, knownBeltAndInserterTransitComplete = true, fluidSegmentsDeduplicated = true }), records),
-                "production_catalog" => new ProductionCatalog(scope, tick, [], new Dictionary<string, NativeItem>
+                "production_catalog" => new ProductionCatalog(scope, tick,
+                    IncludeSilo ? [new("silo-construction", false, "crafting", 1, [], [new("silo-item", "item", 1)], false)] : [],
+                    new Dictionary<string, NativeItem>
                     { ["firearm-magazine"] = new(0, 200, AmmoCategory: "bullet", MagazineSize: 10),
+                      ["silo-item"] = new(0, 1, PlaceEntity: "silo-entity", PlaceEntityType: "rocket-silo"),
                       ["gun-turret"] = new(0, 50, PlaceEntity: "gun-turret", PlaceEntityType: "ammo-turret") }, new Dictionary<string, NativeMaterial[]>(),
                     new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>(),
                     Turrets: IncludeDefense ? new Dictionary<string, NativeTurret> { ["gun-turret"] = new("gun-turret", 18, ["bullet"]) } : null),
                 "technologies" => new
                 {
-                    items = new[] { new NativeTechnology("automation", true, true, false, [], [new("red", 1)], 10, 600) },
-                    total = 1,
+                    items = Technologies,
+                    total = Technologies.Length,
                     offset = 0,
                     limit = request.Arguments.TryGetProperty("name", out _) ? 1 : 100,
                     collectedTick = tick,
