@@ -10,8 +10,8 @@ public sealed class SmeltingPlanner
         IReadOnlySet<string>? constructibleDrills = null)
     {
         if (catalog.Scope != map.Scope) throw new InvalidDataException("Smelting observations span different actor scopes.");
-        string[] drills = map.Items.Where(p => map.Prototypes[p.Value.EntityName].Type == "mining-drill"
-            && map.Prototypes[p.Value.EntityName].FuelCategories is { Count: > 0 }).Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
+        string[] drills = map.Items.Where(p => ExtractionPlanner.SupportsSolidOutput(map.Prototypes[p.Value.EntityName]))
+            .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
         NativeRecipe[] recipes = catalog.Recipes.Where(r => r.Enabled && r.Products.Count == 1 && r.Products[0].Name == item
             && r.Products[0].DeterministicItem && r.Ingredients.Count == 1 && r.Ingredients[0].DeterministicItem
             && !catalog.CanHandCraft(r) && catalog.Machines.Values.Any(m => m.Categories.ContainsKey(r.Category)))
@@ -31,7 +31,10 @@ public sealed class SmeltingPlanner
                         .Select(p => new SmeltingPlan(recipe, drillItem, p)));
             }
         }
-        return opportunities.OrderByDescending(p => p.ExistingDrillId is not null).ThenBy(p => p.Connection.Drill.Score)
+        return opportunities.OrderByDescending(p => p.ExistingDrillId is not null)
+            .ThenByDescending(p => inventory.GetValueOrDefault(p.DrillItem) > 0)
+            .ThenByDescending(p => map.Prototypes[map.Items[p.DrillItem].EntityName].IsElectric)
+            .ThenBy(p => p.Connection.Drill.Score)
             .ThenBy(p => p.Recipe.Name, StringComparer.Ordinal).ThenBy(p => p.Connection.ReceiverId, StringComparer.Ordinal).FirstOrDefault();
     }
 }

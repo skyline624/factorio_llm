@@ -27,8 +27,7 @@ public sealed class StoredResourceExtractionPlanner
     {
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Resource extraction observations span different scopes.");
         var options = Options(catalog, inventory, item).Where(o => map.Items.TryGetValue(o.DrillItem, out var drill)
-            && (map.Prototypes[drill.EntityName].FuelCategories is { Count: > 0 }
-                || map.Prototypes[drill.EntityName] is { IsElectric: true, MiningOutput: not null })
+            && ExtractionPlanner.SupportsSolidOutput(map.Prototypes[drill.EntityName])
             && map.Items.ContainsKey(o.ChestItem))
             .OrderByDescending(o => map.Prototypes[map.Items[o.DrillItem].EntityName].IsElectric)
             .ThenByDescending(o => map.Prototypes[map.Items[o.DrillItem].EntityName].MiningSpeed).ToArray();

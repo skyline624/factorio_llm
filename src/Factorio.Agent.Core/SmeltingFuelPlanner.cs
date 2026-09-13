@@ -31,9 +31,10 @@ public sealed class SmeltingFuelPlanner
         if (!double.IsFinite(drillEnergy + furnaceEnergy)) throw new InvalidDataException("Invalid native smelting fuel estimate.");
         const double margin = 1.25;
         return catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.StackSize > 0 && p.Value.FuelCategory is { } category
-                && drill.FuelCategories?.ContainsKey(category) == true && nativeFurnace.FuelCategories.ContainsKey(category)
+                && (drill.IsElectric || drill.FuelCategories?.ContainsKey(category) == true) && nativeFurnace.FuelCategories.ContainsKey(category)
                 && catalog.Mining.Values.Any(products => products.Any(m => m.Name == p.Key && m.DeterministicItem)))
-            .Select(p => new SmeltingFuelPlan(p.Key, Reserve(drillEnergy, p.Value), Reserve(furnaceEnergy, p.Value), drillEnergy, furnaceEnergy, margin))
+            .Select(p => new SmeltingFuelPlan(p.Key, drill.IsElectric ? 0 : Reserve(drillEnergy, p.Value),
+                Reserve(furnaceEnergy, p.Value), drillEnergy, furnaceEnergy, margin))
             .OrderByDescending(p => available.GetValueOrDefault(p.Fuel) >= p.DrillReserve + p.FurnaceReserve)
             .ThenByDescending(p => available.GetValueOrDefault(p.Fuel) > 0)
             .ThenByDescending(p => carried.GetValueOrDefault(p.Fuel) > 0)

@@ -35,6 +35,8 @@ Les quantités solides conservent les qualités sous la clé `objet@qualité` lo
 
 Le C# produit trois agrégats séparés : `inventoryItems`, `transitItems`, `fluids`. Ces totaux ne disent pas que tous les objets sont accessibles au personnage ou disponibles pour une opération particulière. Les emplacements, rôles et compartiments restent dans les enregistrements détaillés.
 
+Les foreuses exposent un enregistrement `work` de type `native-mining` : progression normale et bonus, état moteur et cible courante. Ces indications ne sont pas des minerais disponibles. Dans Factorio 2.0.77, une foreuse peut retenir un minerai déjà compté comme extrait dans une sortie interne qui n'est pas exposée comme inventaire Lua. `internalOutputBufferObservable:false` et `coverage.miningDrillInternalBuffersComplete:false` signalent cette limite ; aucune quantité n'est inventée ou assimilée à zéro. Un bilan global exige donc une autre preuve, par exemple une observation après libération de cette sortie dans une fixture contrôlée.
+
 ## Capacité et réservations
 
 Chaque inventaire expose `slots`, `usableSlots`, `bar`, `filters` et ses piles. Les objets derrière une barre restent comptés physiquement ; la barre limite l'insertion automatique, pas l'existence des objets.

@@ -125,6 +125,15 @@ local function capture(args)
       add("held:" .. id, "transit", id, "inserter-hand", {items = stack_items(entity.held_stack),
         stack = stack_data(entity.held_stack), position = U.copy(entity.held_stack_position)})
     end
+    if entity.type == "mining-drill" then
+      local target = entity.mining_target
+      add("work:" .. id, "work", id, "native-mining", {progress = entity.mining_progress,
+        bonusProgress = entity.bonus_mining_progress, status = entity.status,
+        targetId = target and target.valid and U.entity_id(target),
+        targetName = target and target.valid and target.name,
+        internalOutputBufferObservable = false,
+        collection = "native-mining-progress-not-physical-stock"})
+    end
     local boxes = entity.fluidbox
     for index = 1, #boxes do
       local segment = boxes.get_fluid_segment_id(index)
@@ -172,6 +181,7 @@ local function capture(args)
     collectedTick = game.tick, expiresTick = game.tick + lifetime, records = records,
     coverage = {atomic = true, knownEntityCount = #ids, knownInventoriesComplete = true,
       knownBeltAndInserterTransitComplete = true, fluidSegmentsDeduplicated = true,
+      miningDrillInternalBuffersComplete = false,
       factoryDiscoveryComplete = false, groundItemsComplete = false, reservationsSource = "controller",
       scope = "known-own-entities-actor-and-proven-corpses", capacityItems = requested_capacity}}
 end

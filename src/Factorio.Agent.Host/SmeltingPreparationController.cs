@@ -12,9 +12,15 @@ internal sealed class SmeltingPreparationController(IGameClient game, IControlle
     public async Task PrepareAsync(string item, CancellationToken token)
     {
         if (Preparing.Value) throw new InvalidOperationException("Recursive extraction installation is not a bootstrap route.");
+        await BootstrapAsync(() => PrepareCoreAsync(item, token));
+    }
+
+    internal static async Task BootstrapAsync(Func<Task> action)
+    {
+        bool previous = Preparing.Value;
         Preparing.Value = true;
-        try { await PrepareCoreAsync(item, token); }
-        finally { Preparing.Value = false; }
+        try { await action(); }
+        finally { Preparing.Value = previous; }
     }
 
     private async Task PrepareCoreAsync(string item, CancellationToken token)

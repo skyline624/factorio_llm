@@ -6,6 +6,18 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class SmeltingPlannerTests
 {
     [Fact]
+    public void InstalledElectricDrillIsReusedForDirectFurnaceSupply()
+    {
+        var (map, catalog) = Setup(installed: true);
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            { ["drill"] = map.Prototypes["drill"] with { IsElectric = true, FuelCategories = null } } };
+        var plan = new SmeltingPlanner().Find("plate", catalog, map, new Dictionary<string, long>(), Owned());
+        Assert.NotNull(plan);
+        Assert.Equal("installed", plan.ExistingDrillId);
+        Assert.Equal("receiver", plan.Connection.ReceiverId);
+    }
+
+    [Fact]
     public void CarriedDrillCanSupplyAnExistingCompatibleFurnace()
     {
         var (map, catalog) = Setup();

@@ -27,12 +27,16 @@ public sealed class SmeltingPreparationPlanner
         CancellationToken token = default)
     {
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Smelting construction observations span different scopes.");
-        foreach (var equipment in Options(catalog, inventory, item))
+        foreach (var equipment in Options(catalog, inventory, item)
+            .Where(o => map.Items.ContainsKey(o.DrillItem))
+            .OrderByDescending(o => inventory.GetValueOrDefault(o.DrillItem) > 0)
+            .ThenByDescending(o => inventory.GetValueOrDefault(o.FurnaceItem) > 0)
+            .ThenByDescending(o => map.Prototypes[map.Items[o.DrillItem].EntityName].IsElectric))
         {
             token.ThrowIfCancellationRequested();
             if (!map.Items.TryGetValue(equipment.DrillItem, out var drillItem)
                 || !map.Items.TryGetValue(equipment.FurnaceItem, out var furnaceItem)) continue;
-            if (map.Prototypes[drillItem.EntityName].FuelCategories is not { Count: > 0 }) continue;
+            if (!ExtractionPlanner.SupportsSolidOutput(map.Prototypes[drillItem.EntityName])) continue;
             var site = new ExtractionPlanner().FindNewSite(map, equipment.DrillItem, equipment.FurnaceItem,
                 equipment.Recipe.Ingredients[0].Name, catalog, token);
             if (site is not null) return new(equipment, site.Receiver, site.Connection);

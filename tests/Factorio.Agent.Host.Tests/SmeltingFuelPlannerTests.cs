@@ -39,6 +39,21 @@ public sealed class SmeltingFuelPlannerTests
     }
 
     [Fact]
+    public void ElectricDrillWorkDoesNotCreateABurnerFuelReserve()
+    {
+        var (map, catalog, plan) = Setup();
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            { ["drill"] = map.Prototypes["drill"] with { IsElectric = true, FuelCategories = null,
+                MiningSpeed = .5, EnergyPerTick = 1500, BurnerEffectivity = null } } };
+        var fuel = new SmeltingFuelPlanner().Choose(plan, map, catalog, 25, new Dictionary<string, long>(),
+            new Dictionary<string, long> { ["wood"] = 30 });
+        Assert.Equal(4500000, fuel.DrillWorkJoules);
+        Assert.Equal(0, fuel.DrillReserve);
+        Assert.Equal(5, fuel.FurnaceReserve);
+        Assert.Equal(5, fuel.ProcurementTarget(false, 0, 0, 0));
+    }
+
+    [Fact]
     public void MissingMiningRateDoesNotBecomeAnArbitraryTwoItemTrip()
     {
         var (map, catalog, plan) = Setup();

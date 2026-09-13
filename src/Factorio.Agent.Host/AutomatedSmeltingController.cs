@@ -42,13 +42,12 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             map = await spatial.CaptureAsync([chosen.Item], radius: 48, cancellationToken: token);
             RequireScope(map.Scope);
             receiver = map.Entities.Single(e => e.Id == chosen.Plan.ReceiverId);
-            if (!new ExtractionPlanner().Find(new SpatialCollisionField(map), chosen.Item, recipe.Ingredients[0].Name, catalog, [receiver])
+            var constructionMap = map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() };
+            if (!new ExtractionPlanner().Find(new SpatialCollisionField(constructionMap), chosen.Item, recipe.Ingredients[0].Name, catalog, [receiver])
                 .Any(p => p.Drill.Position == chosen.Plan.Drill.Position && p.Drill.Direction == chosen.Plan.Drill.Direction))
                 throw new InvalidOperationException("Extraction geometry changed before construction; replan from observations.");
-            PlacementValidation validation = await spatial.ValidateAsync(map.Scope, chosen.Item, [chosen.Plan.Drill], token);
-            if (!validation.Candidates[0].Allowed || !validation.Candidates[0].InReach) throw new InvalidOperationException("Native drill placement was refused.");
-            OperationReceipt built = await WorkAsync("build", new { item = chosen.Item, chosen.Plan.Drill.Position, chosen.Plan.Drill.Direction });
-            string builtId = built.Effects.GetProperty("entityId").GetString()!;
+            string builtId = await new PoweredMachineController(game, journal).BuildAtAsync(chosen.Item,
+                chosen.Plan.Drill, catalog, controller, token, [receiver.Position]);
             map = await spatial.CaptureAsync([plan.DrillItem], radius: 48, cancellationToken: token);
             RequireScope(map.Scope);
             drill = map.Entities.Single(e => e.Id == builtId);
@@ -78,6 +77,15 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             checked((int)(targetStock - initial.Inventory.GetValueOrDefault(item))), initial.Inventory, availableFuel);
         await journal.AppendAsync("smelting-fuel-plan", new { fuelPlan, map.CollectedTick,
             interpretation = "Conservative work estimate and stack-bounded reserve; completion still requires native output." }, token);
+        bool electric = map.Prototypes[drill.Name].IsElectric;
+        if (electric)
+        {
+            var supplied = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            RequireScope(supplied.Scope);
+            int batches = checked((int)Math.Ceiling((targetStock - initial.Inventory.GetValueOrDefault(item)) / recipe.Products[0].Amount!.Value));
+            if (FurnaceRequirements.From(supplied, receiver.Id, recipe, batches).InputToInsert > 0)
+                await EnsurePowerAsync(fuelPlan.DrillWorkJoules, reserve: true);
+        }
         for (int iteration = 0; iteration < 1800; iteration++)
         {
             ProductionState state = await production.ObserveAsync(token);
@@ -119,11 +127,26 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
                 await journal.AppendAsync("automated-smelting-result", result, token);
                 return result;
             }
-            if (needsExtraction) await FuelAsync(drillId, drill.Position, fuelPlan.DrillReserve);
+            if (needsExtraction && electric && iteration % 10 == 0)
+                await EnsurePowerAsync(0, reserve: false);
+            else if (needsExtraction && !electric) await FuelAsync(drillId, drill.Position, fuelPlan.DrillReserve);
             await FuelAsync(receiver.Id, receiver.Position, fuelPlan.FurnaceReserve, needsExtraction);
-            await controller.WorkAsync("wait", new { ticks = 60 }, 180, token: token);
+            await WorkAsync("wait", new { ticks = 60 });
         }
         throw new TimeoutException("Automated smelting exhausted its observation budget; inspect the installed machines.");
+
+        async Task EnsurePowerAsync(double energy, bool reserve)
+        {
+            using var protectedMachines = ProductionReservations.Enter(new HashSet<string>(StringComparer.Ordinal) { drillId, receiver.Id });
+            await SmeltingPreparationController.BootstrapAsync(() =>
+                new PowerGridController(game, journal).ConnectAsync(drillId, catalog, controller, token));
+            await new PoweredMachineController(game, journal).MaintainFuelAsync(drillId, energy, catalog, controller, reserve, token);
+            await controller.ApproachEntityAsync(drillId, drill.Position, catalog, token);
+            var powered = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
+            RequireScope(powered.Scope);
+            await journal.AppendAsync("smelting-electric-supply", new { drillId, energy, reserve,
+                powered.CollectedTick, power = powered.Entities.Single(e => e.Id == drillId).Power }, token);
+        }
 
         void RequireScope(ActorScope scope)
         {

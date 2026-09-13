@@ -1,4 +1,4 @@
-# Extraction électrique vers un coffre
+# Extraction électrique vers un coffre ou un four
 
 La production générale de ressources solides peut construire une foreuse électrique et son coffre, puis raccorder la foreuse au réseau. Les installations existantes restent prioritaires. Pour une nouvelle installation, une foreuse électrique disponible ou fabricable peut être choisie avant une foreuse à combustible. Le placement du coffre, la couverture du minerai, l'orientation et la sortie de la foreuse sont calculés à partir des propriétés natives.
 
@@ -28,6 +28,20 @@ Les 494 tests hors ligne passent, avec un test cloud optionnel ignoré. Les test
 
 Deux essais antérieurs ne sont pas comptés comme réussis : le premier a été arrêté après le choix coûteux de grands poteaux malgré un stock de petits poteaux ; le second a construit la liaison mais s'est arrêté faute d'export de la consommation électrique dans l'observation Lua. Les deux défauts ont été corrigés avant la preuve ci-dessus.
 
+## Fusion directe avec une foreuse électrique
+
+Le chemin direct accepte également une foreuse électrique alimentant un four à combustible. Les installations existantes et les équipements déjà portés sont privilégiés. Le besoin électrique de la foreuse et le combustible du four sont calculés séparément ; aucun combustible n'est inséré dans une foreuse électrique. Le raccordement et l'entretien de la chaudière distante utilisent les contrôleurs communs, avec protection des deux machines pendant les approvisionnements imbriqués.
+
+La variante de qualification `verify-electric-extraction --session FILE --item iron-plate` fournit un four dans la préparation puis demande 50 plaques. Le bilan conserve la lecture en fonctionnement. Après production seulement, une phase artificielle désactive le four, retire les gisements accessibles et transfère une petite quantité de minerai existant vers le personnage pour libérer l'entrée. Elle exige des compteurs de production inchangés pendant le vidage et vérifie ensuite exactement le minerai extrait, consommé, chargé et porté. Ce diagnostic traite une sortie interne non observable de la foreuse ; il ne fait pas partie d'une campagne autonome.
+
+L'alimentation de la foreuse est relue et journalisée pendant l'extraction. Si le minerai déjà chargé et engagé suffit à finir le lot, le contrôleur peut laisser la foreuse s'arrêter et terminer seulement la cuisson. La qualification exige une observation alimentée sur le bon réseau pendant ce travail, sans imposer une réserve électrique inutile à la fin.
+
+Le test headless du 13 septembre 2026 passe entre les ticks 813573 et 832154 pour la production : 50 plaques portées, treize liaisons électriques, un ravitaillement de trois charbons à la chaudière distante et zéro minage manuel. Deux lectures constatent 1 600 joules sur le réseau 75 pendant l'approvisionnement. Après le vidage de fixture, le bilan est `140 minerais extraits = 51 consommés + 79 dans le four + 10 portés`. Les 51 consommés correspondent aux 50 plaques et à une cuisson engagée. Le four finit le lot avec le minerai déjà chargé, alors que la réserve électrique est épuisée.
+
+La même variante passe avec le pilote connecté entre les ticks 849626 et 868955 : 50 plaques, treize liaisons, un ravitaillement de chaudière, deux observations alimentées et zéro minage manuel. Le personnage reste le numéro 17. Avant vidage, 150 minerais ont été extraits, 51 consommés et 98 sont chargés ; le dernier minerai demeure dans la sortie interne. Le vidage le livre sans modifier les compteurs et ferme le bilan `150 = 51 + 89 + 10`. La capture native inspectée montre la centrale, les poteaux et la foreuse alimentant le four. Le client unique a été lancé réduit, puis fermé ; la fixture a été sauvegardée et arrêtée.
+
+Un essai antérieur avait correctement produit les 50 plaques et fermé le bilan, mais échoué sur l'ancien critère exigeant de l'énergie à la lecture finale. Un autre avait révélé un minerai retenu dans la sortie opaque ; un diagnostic séparé a constaté sa livraison après libération de place, sans nouvelle extraction. Ces essais restent des échecs de qualification, conservés comme diagnostics. Les 499 tests hors ligne passent, avec un test cloud optionnel ignoré.
+
 ## Limites
 
-Ce chemin concerne la livraison des ressources solides dans un coffre. Le chemin direct foreuse–four conserve ses restrictions actuelles aux machines à combustible. L'extension générale en plusieurs foreuses, l'allocation persistante de l'énergie entre tous les consommateurs, la reconstruction complète après destruction et les campagnes finales restent à développer ou à qualifier. L'entretien distant reconnaît les chaudières reliées directement à un générateur observé du réseau ; il ne résout pas toutes les topologies de vapeur.
+L'extension générale en plusieurs foreuses, l'allocation persistante de l'énergie entre tous les consommateurs, la reconstruction complète après destruction et les campagnes finales restent à développer ou à qualifier. L'entretien distant reconnaît les chaudières reliées directement à un générateur observé du réseau ; il ne résout pas toutes les topologies de vapeur.

@@ -17,6 +17,35 @@ public sealed class SmeltingPreparationTests
     }
 
     [Fact]
+    public void AvailableFurnaceIsUsedBeforeManufacturingAnotherModel()
+    {
+        var (map, catalog) = Setup();
+        map = map with { Items = new Dictionary<string, PlaceableItem>(map.Items)
+            { ["advanced-furnace"] = map.Items["furnace-item"] } };
+        catalog = catalog with { Items = new Dictionary<string, NativeItem>(catalog.Items)
+            { ["advanced-furnace"] = catalog.Items["furnace-item"] },
+            Machines = new Dictionary<string, NativeFurnace>(catalog.Machines)
+            { ["advanced-furnace"] = catalog.Machines["furnace-item"] },
+            Recipes = [.. catalog.Recipes, new("advanced-furnace", true, "crafting", 3,
+                [new("plate", "item", 30)], [new("advanced-furnace", "item", 1)], false)] };
+        var site = new SmeltingPreparationPlanner().Find(map, catalog,
+            new Dictionary<string, long> { ["drill-item"] = 1, ["furnace-item"] = 1 }, "plate");
+        Assert.NotNull(site);
+        Assert.Equal("furnace-item", site.Equipment.FurnaceItem);
+    }
+
+    [Fact]
+    public void NewDirectSmeltingSiteSupportsAnElectricDrill()
+    {
+        var (map, catalog) = Setup();
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            { ["drill"] = map.Prototypes["drill"] with { IsElectric = true, FuelCategories = null } } };
+        var site = new SmeltingPreparationPlanner().Find(map, catalog, new Dictionary<string, long>(), "plate");
+        Assert.NotNull(site);
+        Assert.Equal("drill-item", site.Equipment.DrillItem);
+    }
+
+    [Fact]
     public void LockedDrillRecipesDoNotPromiseConstructibleMachines()
     {
         var (_, catalog) = Setup();

@@ -32,7 +32,7 @@ try
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
           verify-furnace-fleet --session FILE [--item steel-plate|stone-brick]
-          verify-electric-extraction --session FILE
+          verify-electric-extraction --session FILE [--item iron-ore|iron-plate]
           assemble --session FILE --item NAME --quantity N
           produce-fluid --session FILE --fluid NAME --quantity N
           connect-fluid --session FILE --source ID --target ID --fluid NAME
@@ -144,7 +144,7 @@ try
         case "verify-electric-extraction":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
-            Print(new { report = await new ElectricExtractionQualification(session).RunAsync(shutdown.Token) });
+            Print(new { report = await new ElectricExtractionQualification(session, Option("item") ?? "iron-ore").RunAsync(shutdown.Token) });
             break;
         }
         case "verify-furnace-fuel":
