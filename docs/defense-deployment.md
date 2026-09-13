@@ -43,7 +43,11 @@ Les sept fabrications du personnage ont consommé au total 240 plaques de fer et
 
 Une nouvelle demande portant sur le même seuil de trois tourelles a constaté la réussite sans construction ni ravitaillement. Le modèle a ensuite demandé six tourelles au total. Une lecture RCON indépendante au tick 7068275 a confirmé quatre tourelles actives, avec 100 coups chacune, pendant cette extension. Cette lecture porte sur la force `factorio_agent` ; une recherche dans la force `player` ne décrit pas cette usine. La dernière lecture des conditions, au tick 7075185, confirme le mode pacifique désactivé, pollution, expansion et évolution actives, et zéro fusée lancée.
 
-Ces observations proviennent du journal privé `strategic-production-5346fef2990f4daca6579c2b1e198e19`, dans un monde de développement ayant reçu des corrections et des reprises antérieures. Elles prouvent cette exécution d'objectif LLM en headless avec approvisionnement réel ; elles ne qualifient pas une campagne autonome depuis le départ jusqu'à la fusée. L'objectif de six tourelles n'est pas déclaré terminé par ces observations.
+L'extension à six a ensuite réussi entre les ticks **7017143 et 7151012** : trois tourelles supplémentaires construites et ravitaillées, quinze bâtiments industriels connus couverts, aucun de ces quinze centres restant hors portée. Ses fabrications ont consommé 240 plaques de fer et 30 plaques de cuivre pour trois tourelles et 30 chargeurs, avec les engrenages intermédiaires. Deux charbons ont été minés manuellement pour l'amorçage ; aucun prélèvement n'a vidé une tourelle existante. La lecture native indépendante au tick **7158279** confirme les six tourelles actives avec exactement 100 coups chacune. Cette couverture géométrique ne prouve pas une capacité à repousser toute attaque.
+
+Le modèle a alors choisi `circuit-network` comme prochain objectif scientifique. Cette décision ne prouve pas encore que la recherche soit démarrée ou terminée : la lecture au tick 7158279 constate encore une recherche courante absente et zéro fusée.
+
+Ces observations proviennent du journal privé `strategic-production-5346fef2990f4daca6579c2b1e198e19`, dans un monde de développement ayant reçu des corrections et des reprises antérieures. Elles prouvent ces exécutions d'objectifs LLM en headless avec approvisionnement réel ; elles ne qualifient pas une campagne autonome depuis le départ jusqu'à la fusée.
 
 ## Limites
 
