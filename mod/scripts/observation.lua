@@ -69,7 +69,7 @@ function M.observe(args)
       awaitingController = s.awaitingController == true, checkpointId = s.checkpointId,
       pilotIndex = s.pilotIndex, pilotError = s.pilotError, stopUnconfirmed = s.stopUnconfirmed == true,
       respawnError = s.respawnError},
-    operation = Operations.last_receipt(), entities = {}, resources = {}, enemies = {}, players = {},
+    operation = Operations.last_receipt(), entities = {}, resources = {}, enemies = {}, players = {}, defenses = {},
     coverage = {radius = radius, limit = limit, atomic = true, collectionStartTick = game.tick,
       collectionEndTick = game.tick, factoryComplete = false, transitComplete = false,
       fluidsAggregateSafe = false, enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility", enemyComplete = false},
@@ -136,6 +136,8 @@ function M.observe(args)
   end
   for _, entity in ipairs(c.surface.find_entities_filtered{position = c.position, radius = radius, force = c.force}) do
     if entity ~= c then s.known[U.entity_id(entity)] = entity end
+    local defense = Weapons.defense(entity)
+    if defense then result.defenses[#result.defenses + 1] = defense end
   end
   local ids = {}
   for id, entity in pairs(s.known) do

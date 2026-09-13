@@ -64,4 +64,22 @@ function M.loadout(character)
   return result
 end
 
+function M.defense(entity)
+  if entity.type ~= "ammo-turret" or not entity.active or entity.health <= 0 or entity.quality.name ~= "normal"
+    or entity.prototype.electric_energy_source_prototype then return nil end
+  local attack = entity.prototype.attack_parameters
+  if not attack or attack.type ~= "projectile" or attack.min_range ~= 0 then return nil end
+  local inventory = entity.get_inventory(defines.inventory.turret_ammo)
+  if not inventory then return nil end
+  for i = 1, #inventory do
+    local stack = inventory[i]
+    if stack.valid_for_read and stack.quality.name == "normal" and stack.prototype.ammo_category.name == "bullet" then
+      local kind = stack.prototype.get_ammo_type("turret")
+      return {id = tostring(entity.unit_number), position = {x = entity.position.x, y = entity.position.y},
+        range = attack.range * (kind and kind.range_modifier or 1),
+        ammoRounds = (stack.count - 1) * stack.prototype.magazine_size + stack.ammo, collectedTick = game.tick}
+    end
+  end
+end
+
 return M

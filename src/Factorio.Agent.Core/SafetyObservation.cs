@@ -5,7 +5,8 @@ namespace Factorio.Agent.Core;
 /// <summary>A validated, current projection of engine facts needed by the reflex loop.</summary>
 public sealed record SafetyObservation(long Tick, ActorScope Scope, bool Alive, string ControlMode,
     bool StopUnconfirmed, MapPosition? Position, double Health, WeaponState Weapon,
-    IReadOnlyList<VisibleThreat> Enemies, OperationReceipt? Operation, EquipmentState? Loadout = null)
+    IReadOnlyList<VisibleThreat> Enemies, OperationReceipt? Operation, EquipmentState? Loadout = null,
+    double? MaxHealth = null, IReadOnlyList<DefensiveRefuge>? Defenses = null, bool LocalEnemiesComplete = false)
 {
     public static SafetyObservation Parse(GameResponse response)
     {
@@ -32,6 +33,8 @@ public sealed record SafetyObservation(long Tick, ActorScope Scope, bool Alive, 
             MapPosition? position = alive ? ReadPosition(agent.GetProperty("position")) : null;
             double health = alive ? Finite(agent.GetProperty("health")) : 0;
             if (health < 0) throw new InvalidDataException("Negative actor health.");
+            double? maxHealth = alive && agent.TryGetProperty("maxHealth", out var maximum) ? Finite(maximum) : null;
+            if (maxHealth is <= 0 || maxHealth is not null && health > maxHealth) throw new InvalidDataException("Invalid native maximum health.");
             WeaponState weapon = WeaponState.Unavailable;
             if (alive)
             {
@@ -67,7 +70,9 @@ public sealed record SafetyObservation(long Tick, ActorScope Scope, bool Alive, 
             return new(tick, scope, alive, mode, agent.GetProperty("stopUnconfirmed").GetBoolean(),
                 position, health, weapon, enemies.AsReadOnly(), operation,
                 alive && agent.TryGetProperty("loadout", out var loadout) && loadout.ValueKind != JsonValueKind.Null
-                    ? EquipmentState.Parse(loadout) : null);
+                    ? EquipmentState.Parse(loadout) : null, maxHealth,
+                data.TryGetProperty("defenses", out var defenses) ? DefensiveRefuge.Read(defenses, tick) : [],
+                coverage.TryGetProperty("enemiesTruncated", out var truncated) && !truncated.GetBoolean());
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or OverflowException)
         {

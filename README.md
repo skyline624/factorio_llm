@@ -150,3 +150,5 @@ Le [raffinage et le routage des tuyaux](docs/fluid-production.md) sont accessibl
 `fuel-feeder --session FILE --boiler ID --reserve 50 --ticks 3600` construit et vérifie un ravitaillement par coffre et bras. Un [essai dans l’économie normale](docs/fuel-feeder.md) confirme les transferts natifs et une alimentation sous faible charge pendant plus d’une minute. La maintenance de production renouvelle désormais un coffre reconnu, en conservant son combustible et en excluant ce coffre des sources de collecte. Elle ne garantit pas une alimentation continue pendant les longs trajets.
 
 La défense sait désormais [équiper les armes portées, recharger et sélectionner une arme chargée](docs/equipment.md), avec conservation native des cartouches. Les essais préparés headless et avec pilote connecté couvrent trois attaques successives ; la fuite et le réapprovisionnement stratégique restent à compléter.
+
+Le [repli vers une tourelle chargée observée](docs/retreat.md) est qualifié en headless et avec pilote : le personnage désarmé contourne un obstacle pendant la poursuite. Cette couverture locale ne remplace pas une défense durable de toute l’usine.

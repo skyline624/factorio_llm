@@ -90,3 +90,7 @@ Ressources et obstacles naturels sont découverts dans le rayon local demandé ;
 Les fichiers Lua ont passé une vérification syntaxique locale et la représentation canonique a été vérifiée sur permutations de clés et nombres doubles voisins. Ces contrôles ne qualifient pas le moteur. Les rapports d’intégration du host constituent la preuve des actions réellement essayées, de leur version de mod et de leurs effets. Aucun chargement seul, inventaire injecté de fixture ou RPC accepté ne vaut progression autonome jusqu’à la fusée.
 
 Les premières qualifications natives et du pilote sont décrites dans [validation.md](validation.md), avec leurs limites.
+
+## Couverture défensive locale
+
+`observe.data.defenses` contient les tourelles à munitions propres, actives, non électriques et de qualité normale, dans le rayon observé, avec une pile normale de balles utilisable : `{id,position,range,ammoRounds,collectedTick}`. Une tourelle vide est exclue. `range` tient compte du modificateur de portée de la munition pour une tourelle ; `ammoRounds` décrit la pile observée. Cette liste ne révèle aucun ennemi supplémentaire et ne garantit pas la supériorité de la défense. Le repli exige aussi `coverage.enemiesTruncated=false`.

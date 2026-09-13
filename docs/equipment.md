@@ -24,3 +24,5 @@ Les premiers essais ont révélé des champs Lua absents pour les emplacements v
 ## Limites
 
 Il s'agit de combats courts et préparés, sans inférence cloud. La qualification ne prouve pas la survie durable d'une usine contre toutes les attaques. La fuite, le réapprovisionnement stratégique en munitions, les armures, les remplacements d'équipement occupé et les autres catégories d'armes restent à compléter. Le rechargement s'effectue lorsque l'arme n'est plus prête ; ce n'est pas une politique de réserve permanente. Le système ne fabrique pas de munitions pendant le réflexe de défense et ne prétend pas avoir récupéré des objets encore dans un corps inaccessible.
+
+Un [repli C# vers une tourelle propre observée et chargée](retreat.md) complète maintenant le réflexe de tir et de réarmement. Il est qualifié dans des scénarios préparés ; la fuite générale et la survie durable restent à compléter.

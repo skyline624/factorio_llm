@@ -36,6 +36,7 @@ try
           verify-smelting-fuel --session FILE
           verify-death-recovery --session FILE
           verify-equipment --session FILE
+          verify-retreat --session FILE
           assemble --session FILE --item NAME --quantity N
           produce-fluid --session FILE --fluid NAME --quantity N
           connect-fluid --session FILE --source ID --target ID --fluid NAME
@@ -166,6 +167,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new EquipmentQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-retreat":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new RetreatQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-furnace-fuel":

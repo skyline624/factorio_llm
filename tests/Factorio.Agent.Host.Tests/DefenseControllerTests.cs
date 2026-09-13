@@ -8,6 +8,79 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class DefenseControllerTests
 {
     [Fact]
+    public async Task UnknownRetreatSubmissionIsQueriedWithoutAnotherMove()
+    {
+        var fake = new GameStub { Armed = false, Defenses = Refuge(), LoseSubmitResponse = true };
+        var defense = new DefenseController(fake, new JournalStub());
+        await Assert.ThrowsAsync<OperationOutcomeUnknownException>(() => defense.StepAsync());
+        await defense.StepAsync();
+        await defense.StepAsync();
+        Assert.Equal("move", fake.Submission?.Kind);
+        Assert.Single(fake.Calls, c => c == "submit");
+        Assert.Single(fake.Calls, c => c == "operation");
+    }
+
+    [Fact]
+    public async Task TruncatedEnemyCoverageDoesNotSupportARetreatRoute()
+    {
+        var fake = new GameStub { Armed = false, Defenses = Refuge(), EnemiesTruncated = true };
+        await new DefenseController(fake, new JournalStub()).StepAsync();
+        Assert.Equal(["observe"], fake.Calls);
+    }
+
+    [Theory]
+    [InlineData("stale")]
+    [InlineData("empty")]
+    public async Task UnprovenTurretCoverageCannotTriggerMovement(string failure)
+    {
+        var refuges = JsonSerializer.SerializeToNode(Refuge(), Protocol.Json)!;
+        if (failure == "stale") refuges[0]!["collectedTick"] = 99;
+        else refuges[0]!["ammoRounds"] = 0;
+        var fake = new GameStub { Armed = false, Defenses = refuges };
+        await Assert.ThrowsAsync<InvalidDataException>(() => new DefenseController(fake, new JournalStub()).StepAsync());
+        Assert.Equal(["observe"], fake.Calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnarmedOrCriticallyHurtActorRetreatsTowardObservedLoadedTurret(bool armed)
+    {
+        var fake = new GameStub { Armed = armed, Health = armed ? 50 : 250, Defenses = Refuge() };
+        var defense = new DefenseController(fake, new JournalStub());
+        Assert.Equal("defending", (await defense.StepAsync()).State);
+        Assert.Equal("move", fake.Submission?.Kind);
+        var destination = fake.Submission!.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+        Assert.True(destination.X < 0);
+        Assert.InRange(destination.DistanceTo(new(0, 0)), .1, 2.01);
+        await defense.StepAsync();
+        Assert.Single(fake.Calls, x => x == "submit");
+    }
+
+    [Fact]
+    public async Task RetreatPreemptsWorkAndRejectsAChangedSpatialScope()
+    {
+        var fake = new GameStub { Armed = false, Defenses = Refuge(), StaleSpatial = true,
+            Active = Receipt("work", "wait", "running") };
+        var defense = new DefenseController(fake, new JournalStub());
+        Assert.Equal("preempted", (await defense.StepAsync()).State);
+        await Assert.ThrowsAsync<InvalidDataException>(() => defense.StepAsync());
+        Assert.DoesNotContain("submit", fake.Calls);
+    }
+
+    [Fact]
+    public async Task ARefugeAcrossAnImpassableWallDoesNotCauseABlindMove()
+    {
+        var fake = new GameStub { Armed = false, Defenses = Refuge(), RefugeBlocked = true };
+        await new DefenseController(fake, new JournalStub()).StepAsync();
+        Assert.Contains("spatial", fake.Calls);
+        Assert.DoesNotContain("submit", fake.Calls);
+    }
+
+    private static object Refuge() => new[] { new { id = "safe", position = new MapPosition(-8, 0), range = 8d,
+        ammoRounds = 100, collectedTick = 100L } };
+
+    [Fact]
     public async Task TerminalEquipmentWithoutTransferEvidenceCannotBeCalledSuccessful()
     {
         var fake = new GameStub { Armed = false, Loadout = Loadout(null, "gun", false), CompleteSubmission = true };
@@ -249,12 +322,17 @@ public sealed class DefenseControllerTests
         public bool Alive { get; init; } = true;
         public bool Stopping { get; init; }
         public bool Armed { get; init; } = true;
+        public double Health { get; init; } = 250;
+        public object? Defenses { get; init; }
+        public bool StaleSpatial { get; init; }
+        public bool RefugeBlocked { get; init; }
         public double Distance { get; init; } = 4;
         public long ObservationTick { get; init; } = 100;
         public bool LoseSubmitResponse { get; init; }
         public bool CompleteSubmission { get; init; }
         public bool LoseCancelResponse { get; init; }
         public bool EnemiesEmptyObject { get; init; }
+        public bool EnemiesTruncated { get; init; }
         public object? Loadout { get; init; }
         public JsonElement? Active { get; set; }
         public OperationSubmission? Submission { get; private set; }
@@ -271,9 +349,10 @@ public sealed class DefenseControllerTests
                     {
                         ["scope"] = Scope, ["collectedTick"] = ObservationTick,
                         ["coverage"] = new { atomic = true, collectionStartTick = ObservationTick, collectionEndTick = ObservationTick,
-                            enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
+                            enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility", enemiesTruncated = EnemiesTruncated },
                         ["agent"] = new { alive = Alive, controlMode = Mode, stopUnconfirmed = Stopping,
-                            position = new MapPosition(0, 0), health = 250, weapon = new { ready = Armed, rounds = Armed ? 100 : 0, range = 15 }, loadout = Loadout },
+                            position = new MapPosition(0, 0), health = Health, maxHealth = 250, weapon = new { ready = Armed, rounds = Armed ? 100 : 0, range = 15 }, loadout = Loadout },
+                        ["defenses"] = Defenses ?? new { },
                         ["enemies"] = EnemiesEmptyObject ? new { } : (object)new[]
                         {
                             new { id = "near", position = new MapPosition(Distance, 0), collectedTick = ObservationTick }
@@ -281,6 +360,14 @@ public sealed class DefenseControllerTests
                     };
                     if (Active is not null) observed["operation"] = Active.Value;
                     data = observed;
+                    break;
+                case "spatial":
+                    var map = SpatialPlannerTests.Map([]);
+                    var turret = map.Prototypes["furnace"] with { Name = "gun-turret", Type = "ammo-turret" };
+                    var entities = new List<SpatialEntity> { new("safe", "gun-turret", new(-8, 0), turret.CollisionBox.Translate(new(-8, 0)), 0, "agent") };
+                    if (RefugeBlocked) entities.Add(new("wall", "wall", new(-2, 0), new(new(-2.5, -12), new(-1.5, 13)), 0, "agent"));
+                    data = map with { Scope = StaleSpatial ? Scope with { Generation = Scope.Generation + 1 } : Scope,
+                        Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { ["gun-turret"] = turret }, Entities = entities };
                     break;
                 case "cancel":
                     Active = Receipt(request.Arguments.GetProperty("operationId").GetString()!, "wait", "cancelled");

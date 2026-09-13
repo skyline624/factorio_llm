@@ -37,13 +37,17 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         }
         VisibleThreat? target = DefensePolicy.SelectTarget(observation);
         EquipmentDecision? equipment = target is null ? EquipmentPolicy.Select(observation) : null;
-        if (target is null && equipment is null) return new("observing", observation.Tick);
+        bool retreat = RetreatPlanner.Needed(observation);
+        if (observation.Operation is { IsTerminal: false } own && own.OperationId == ownedOperation)
+            return new("defending", observation.Tick, own.OperationId);
+        if (target is null && equipment is null && !retreat) return new("observing", observation.Tick);
         if (observation.Operation is { IsTerminal: false } active)
         {
             if (active.OperationId == ownedOperation) return new("defending", observation.Tick, active.OperationId);
             if (target is null && observation.Enemies.Count == 0) return new("observing", observation.Tick);
             await journal.AppendAsync("cancel-intent", new { active.OperationId, observation.Tick, targetId = target?.Id,
-                reason = target is not null ? "Visible enemy in current weapon range preempts existing work."
+                reason = retreat ? "Visible danger requires a route toward observed loaded defenses."
+                    : target is not null ? "Visible enemy in current weapon range preempts existing work."
                     : "A visible enemy requires restoring carried weapons before continuing work." }, token);
             try
             {
@@ -60,9 +64,21 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
                 throw;
             }
         }
-        var submission = OperationSubmission.Create(observation.Scope, equipment?.Kind ?? "shoot",
-            equipment?.Arguments ?? new { entityId = target!.Id, ticks = 60 },
-            observation.Tick + 180, new { position = observation.Position, positionTolerance = 0.5 });
+        OperationSubmission? submission = null;
+        if (retreat)
+        {
+            var map = await new SpatialClient(game).CaptureAsync(cancellationToken: token);
+            var plan = new RetreatPlanner().Find(observation, map, token);
+            await journal.AppendAsync("retreat-plan", new { map.Scope, map.CollectedTick, observation.Health, plan,
+                interpretation = "Local loaded-turret coverage and observed paths; no guarantee against unseen or faster threats." }, token);
+            if (plan.Next is not null)
+                submission = OperationSubmission.Create(map.Scope, "move", new { position = plan.Next, tolerance = .15 },
+                    map.CollectedTick + 180, new { position = map.Actor.Position, positionTolerance = .5 });
+        }
+        if (submission is null && target is null && equipment is null) return new("observing", observation.Tick);
+        submission ??= OperationSubmission.Create(observation.Scope, equipment?.Kind ?? "shoot",
+            equipment?.Arguments ?? new { entityId = target!.Id, ticks = 60 }, observation.Tick + 180,
+            new { position = observation.Position, positionTolerance = 0.5 });
         await journal.AppendAsync("submission", submission, token);
         ownedOperation = submission.OperationId;
         ownedSubmission = submission;
