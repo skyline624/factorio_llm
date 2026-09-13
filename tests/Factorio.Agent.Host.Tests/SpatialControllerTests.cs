@@ -8,6 +8,37 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class SpatialControllerTests
 {
     [Fact]
+    public void OpenTerrainCombinesShortWaypointsIntoOneBoundedMove()
+    {
+        var field = new SpatialCollisionField(SpatialPlannerTests.Map([]));
+        var points = SpatialController.Subdivide(field.Map.Actor.Position, [new(7, 3)]);
+        var chosen = SpatialController.SelectWaypoint(field, new(RouteStatus.Found, points, 0, 8));
+        Assert.Equal(new MapPosition(7, 3), chosen);
+    }
+
+    [Fact]
+    public void NativeSteeringCannotShortcutBesideAnObstacleOutsideTheStraightLine()
+    {
+        var map = SpatialPlannerTests.Map([]);
+        var wall = new SpatialEntity("wall", "wall", new(3, 0), new(new(2.7, -.3), new(3.3, .3)), 0, "own");
+        map = map with { Entities = [wall] };
+        var field = new SpatialCollisionField(map);
+        var points = SpatialController.Subdivide(map.Actor.Position, [new(7, 3)]);
+        Assert.True(field.SegmentClear(map.Actor.Position, new(7, 3)));
+        var chosen = SpatialController.SelectWaypoint(field, new(RouteStatus.Found, points, 0, 8));
+        Assert.True(chosen.X < wall.Bounds.Min.X);
+    }
+
+    [Fact]
+    public void CombinedMoveRemainsWithinEightTiles()
+    {
+        var field = new SpatialCollisionField(SpatialPlannerTests.Map([]));
+        var points = SpatialController.Subdivide(field.Map.Actor.Position, [new(12, 0)]);
+        var chosen = SpatialController.SelectWaypoint(field, new(RouteStatus.Found, points, 0, 12));
+        Assert.InRange(chosen.DistanceTo(field.Map.Actor.Position), 7, 8);
+    }
+
+    [Fact]
     public void Long_oblique_route_is_subdivided_before_native_eight_direction_steering()
     {
         var start = new MapPosition(-8, -63);

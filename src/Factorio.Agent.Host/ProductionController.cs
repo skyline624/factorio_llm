@@ -102,7 +102,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     await ActAsync("mine", new { name = step.Source.Name, position = step.Source.Position, count = step.Quantity }, 36000);
                     break;
                 case "craft":
-                    await ActAsync("craft", new { recipe = step.Recipe!.Name, count = step.Quantity }, 36000);
+                    await ActAsync("craft", new { recipe = step.Recipe!.Name, count = step.Quantity },
+                        HandcraftTiming.DeadlineTicks(step.Recipe, step.Quantity));
                     break;
                 case "smelt":
                     await SmeltAsync(step, state, catalog, map);
@@ -201,32 +202,41 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                         await ActAsync("wait", new { ticks = 60 }, 180);
                         continue;
                     }
-                    var fuels = catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.FuelCategory is not null
-                        && machine.Value.FuelCategories.ContainsKey(p.Value.FuelCategory)).OrderByDescending(p => p.Value.FuelValue).ToArray();
-                    var carried = fuels.FirstOrDefault(p => current.Inventory.GetValueOrDefault(p.Key) > 0);
-                    if (carried.Key is null)
+                    await controller.ApproachEntityAsync(entityId, position, catalog, deadline.Token);
+                    map = await spatial.CaptureAsync(radius: 48, cancellationToken: deadline.Token);
+                    if (map.Scope != state.Scope) throw new InvalidDataException("Furnace fuel geometry scope changed.");
+                    bool bootstrap = SmeltingPreparationController.IsPreparing || StoredResourceExtractionController.IsPreparing;
+                    var availableFuel = catalog.Items.Where(p => p.Value.FuelValue > 0).ToDictionary(p => p.Key,
+                        p => checked(current.Inventory.GetValueOrDefault(p.Key) + current.Entities
+                            .Where(e => e.Id != entityId && !ProductionReservations.Current.Contains(e.Id)).Sum(e => e.Count("output", p.Key))),
+                        StringComparer.Ordinal);
+                    int remainingBatches = Math.Max(1, checked((int)Math.Ceiling((initialOutput + expectedOutput
+                        - current.Inventory.GetValueOrDefault(step.Item) - output) / recipe.Products[0].Amount!.Value)));
+                    var fuelPlan = FurnaceFuelPlanner.Choose(recipe, machine.Value, map.Prototypes[furnace.Name], remainingBatches,
+                        catalog, current.Inventory, availableFuel, bootstrap);
+                    // During equipment bootstrap only, a cold furnace may need one manually obtained starter item.
+                    int target = bootstrap ? checked((int)Math.Min(fuelPlan.Reserve, Math.Max(1, availableFuel.GetValueOrDefault(fuelPlan.Fuel))))
+                        : fuelPlan.Reserve;
+                    await journal.AppendAsync("furnace-fuel-plan", new { entityId, fuelPlan, target, bootstrap, map.CollectedTick }, deadline.Token);
+                    using (ProductionReservations.Enter(new HashSet<string> { entityId }))
+                        await new ProductionGoalExecutor(game, journal).RunAsync(fuelPlan.Fuel, target, deadline.Token);
+                    await controller.ApproachEntityAsync(entityId, position, catalog, deadline.Token);
+                    FactorySnapshot fuelStock = await new FactorySnapshotClient(game).CaptureAsync([fuelPlan.Fuel], cancellationToken: deadline.Token);
+                    ProductionState supplied = await ObserveAsync(deadline.Token);
+                    if (fuelStock.Scope != state.Scope || supplied.Scope != state.Scope)
+                        throw new InvalidDataException("Actor changed while procuring furnace fuel.");
+                    string fuelId = fuelStock.Records.Single(r => r.Kind == "entity" && r.EntityId == entityId).Data.GetProperty("fuelInventoryId").GetString()
+                        ?? throw new InvalidDataException("Missing native furnace fuel inventory identity.");
+                    var fuelInventory = fuelStock.Records.Single(r => r.Kind == "inventory" && r.Id == fuelId && r.EntityId == entityId);
+                    long capacity = fuelInventory.Data.GetProperty("capacityHints").GetProperty(fuelPlan.Fuel).GetProperty("insertable").GetInt64();
+                    long loaded = supplied.Entities.Single(e => e.Id == entityId).Count("fuel", fuelPlan.Fuel);
+                    int count = checked((int)Math.Min(Math.Max(0, fuelPlan.Reserve - loaded),
+                        Math.Min(capacity, supplied.Inventory.GetValueOrDefault(fuelPlan.Fuel))));
+                    if (count > 0)
                     {
-                        map = await spatial.CaptureAsync(radius: 48, cancellationToken: deadline.Token);
-                        ProductionStep? fuelStep = fuels.Select(p => planner.Next(p.Key, 1, current.Inventory, catalog, map,
-                            current.Entities.Select(e => e.AsMachine()).ToArray()))
-                            .FirstOrDefault(p => p.Kind == "mine");
-                        if (fuelStep is null)
-                        {
-                            string? wantedFuel = fuels.FirstOrDefault(p => catalog.Mining.Values.Any(products =>
-                                products.Any(material => material.Name == p.Key && material.DeterministicItem))).Key;
-                            if (wantedFuel is null) throw new InvalidOperationException("No known solid extraction route for compatible fuel.");
-                            ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, wantedFuel, token: deadline.Token);
-                            await journal.AppendAsync("fuel-exploration-frontier", new { wantedFuel, frontier = next.Position, next.CollectedTick }, deadline.Token);
-                            await controller.NavigateAsync(next.Position, cancellationToken: deadline.Token);
-                            continue;
-                        }
-                        await TravelAsync(fuelStep.Source!.Position, MiningDistance(fuelStep.Source, map), catalog);
-                        await ActAsync("mine", new { name = fuelStep.Source.Name, position = fuelStep.Source.Position, count = 1 }, 36000);
-                        await TravelAsync(position, 3, catalog);
-                        carried = fuels.First(p => p.Key == fuelStep.Item);
+                        var inserted = await ActAsync("insert", new { entityId, inventory = "fuel", item = fuelPlan.Fuel, count }, 600);
+                        if (inserted.Status != "completed") throw new InvalidOperationException("Furnace fuel transfer requires reconciliation.");
                     }
-                    await TravelAsync(position, 3, catalog);
-                    await ActAsync("insert", new { entityId, inventory = "fuel", item = carried.Key, count = 1 }, 600);
                 }
                 await ActAsync("wait", new { ticks = 60 }, 180);
             }

@@ -5,6 +5,31 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class ProductionPlannerTests
 {
+    [Fact]
+    public void SciencePackLotAllowsNativeDurationAndQueueTransitions()
+    {
+        var recipe = Recipe("science", [Item("iron-plate", 1)], [Item("science", 1)]) with { EnergySeconds = 5 };
+        var step = Next("science", 120, new() { ["iron-plate"] = 120 }, Catalog() with { Recipes = [recipe] });
+        Assert.Equal("craft", step.Kind);
+        Assert.Equal(120, step.Quantity);
+        Assert.InRange(HandcraftTiming.DeadlineTicks(recipe, step.Quantity), 36300, HandcraftTiming.MaximumTicks);
+    }
+
+    [Fact]
+    public void SlowCraftsSplitWithinNativeOperationHorizonAndPreserveRemainingGoal()
+    {
+        var recipe = Recipe("slow", [Item("iron-plate", 1)], [Item("slow", 1)]) with { EnergySeconds = 120 };
+        var catalog = Catalog() with { Recipes = [recipe] };
+        var step = Next("slow", 100, new() { ["iron-plate"] = 100 }, catalog);
+        Assert.Equal("craft", step.Kind);
+        Assert.InRange(step.Quantity, 1, 99);
+        Assert.InRange(HandcraftTiming.DeadlineTicks(recipe, step.Quantity), 1, HandcraftTiming.MaximumTicks);
+        Assert.Throws<ArgumentOutOfRangeException>(() => HandcraftTiming.DeadlineTicks(recipe, step.Quantity + 1));
+        var remaining = Next("slow", 100, new() { ["slow"] = 99, ["iron-plate"] = 1 }, catalog);
+        Assert.Equal("craft", remaining.Kind);
+        Assert.Equal(1, remaining.Quantity);
+    }
+
     [Theory]
     [InlineData(0, 0, "automate", "plate", 1000)]
     [InlineData(0, 1000, "craft", "gear", 500)]

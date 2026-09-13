@@ -58,6 +58,17 @@ public sealed class SpatialCollisionField
 
     public bool Walkable(MapPosition position, double clearance = 0.18) => SegmentClear(position, position, clearance);
 
+    /// <summary>Conservatively covers native eight-direction steering, which need not follow the straight segment.</summary>
+    public bool SteeringRegionClear(MapPosition from, MapPosition to, double clearance = 0.18)
+    {
+        if (!double.IsFinite(clearance) || clearance < 0) throw new ArgumentOutOfRangeException(nameof(clearance));
+        var body = Character.CollisionBox;
+        var region = new WorldBox(new(Math.Min(from.X, to.X) + body.Min.X - clearance, Math.Min(from.Y, to.Y) + body.Min.Y - clearance),
+            new(Math.Max(from.X, to.X) + body.Max.X + clearance, Math.Max(from.Y, to.Y) + body.Max.Y + clearance));
+        return Map.Bounds.Contains(region) && !Query(region).Any(obstacle => obstacle.Id != Map.Actor.Id
+            && Character.Mask.CollidesWith(obstacle.Mask, obstacle.Tile) && obstacle.Shape.Overlaps(region));
+    }
+
     public bool SegmentClear(MapPosition from, MapPosition to, double clearance = 0.18)
     {
         if (!double.IsFinite(clearance) || clearance < 0) throw new ArgumentOutOfRangeException(nameof(clearance));

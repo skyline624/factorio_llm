@@ -201,6 +201,14 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         // Skipping it still requires the actual body to sweep clear from the actual stopped position.
         if (index > 0 && !field.SegmentClear(start, next, 0))
             throw new NavigationPlanningException(RouteStatus.StartBlocked, "The reached corner cannot safely connect to the next segment.");
+        // A clear straight line alone does not bound the native eight-direction pursuit trajectory.
+        // Combine only short waypoints whose whole steering rectangle is known clear; retain tight corners otherwise.
+        for (int candidate = index + 1; candidate < route.Waypoints.Count; candidate++)
+        {
+            var point = route.Waypoints[candidate];
+            if (start.DistanceTo(point) > 8 || !field.SteeringRegionClear(start, point)) break;
+            next = point;
+        }
         return next;
     }
 

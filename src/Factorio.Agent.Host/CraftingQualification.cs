@@ -87,6 +87,23 @@ public sealed class CraftingQualification(RuntimeSession session)
             Require(receipt.Status == "failed" && receipt.Error?.Code == "direct_ingredients_missing"
                 && Delta(after, before, "plates") == 0, "A hidden recursive handcraft queue was not refused before mutation.");
             evidence.Add(new { check = "recursive-craft-refused", before, after, receipt = receipt.Evidence });
+
+            // A 120-pack lot takes more than the former fixed 36000-tick deadline once queue transitions are included.
+            await session.CreateRcon().ExecuteAsync("""
+                /silent-command local c=game.surfaces.nauvis.find_entities_filtered{type='character',force='factorio_agent'}[1]; assert(c.crafting_queue_size==0); c.get_main_inventory().clear(); assert(c.force.recipes['automation-science-pack'].enabled); assert(c.insert{name='iron-gear-wheel',count=120}==120); assert(c.insert{name='copper-plate',count=120}==120); rcon.print('large-craft-ready')
+                """, token);
+            before = await ReadAsync(token);
+            string lotJournal = Path.ChangeExtension(path, ".jsonl");
+            var lot = await new ProductionGoalExecutor(game, new ControllerJournal(lotJournal))
+                .RunAsync("automation-science-pack", 120, token);
+            after = await ReadAsync(token);
+            Require(lot.FinalStock == 120 && Delta(after, before, "redPacks") == 120
+                && Delta(after, before, "redPackProduction") == 120
+                && Delta(after, before, "gearsConsumed") == 120
+                && Delta(after, before, "copperConsumed") == 120
+                && after.GetProperty("queueSize").GetInt32() == 0,
+                "A large handcraft lot did not finish with exact native products and costs.");
+            evidence.Add(new { check = "native-duration-large-handcraft", before, after, lot, lotJournal });
             passed = true;
             return path;
 
@@ -110,7 +127,7 @@ public sealed class CraftingQualification(RuntimeSession session)
     private async Task<JsonElement> ReadAsync(CancellationToken token)
     {
         string json = await session.CreateRcon().ExecuteAsync("""
-            /sc local c=game.surfaces.nauvis.find_entities_filtered{type="character",force="factorio_agent"}[1]; local s=c.force.get_item_production_statistics(c.surface); rcon.print(helpers.table_to_json({tick=game.tick,labs=c.get_item_count("lab"),gears=c.get_item_count("iron-gear-wheel"),plates=c.get_item_count("iron-plate"),cables=c.get_item_count("copper-cable"),labProduction=s.get_input_count("lab"),gearProduction=s.get_input_count("iron-gear-wheel"),cableProduction=s.get_input_count("copper-cable"),gearsConsumed=s.get_output_count("iron-gear-wheel"),researched=c.force.technologies["automation-science-pack"].researched,players=#game.connected_players}));
+            /sc local c=game.surfaces.nauvis.find_entities_filtered{type="character",force="factorio_agent"}[1]; local s=c.force.get_item_production_statistics(c.surface); rcon.print(helpers.table_to_json({tick=game.tick,labs=c.get_item_count("lab"),gears=c.get_item_count("iron-gear-wheel"),plates=c.get_item_count("iron-plate"),cables=c.get_item_count("copper-cable"),labProduction=s.get_input_count("lab"),gearProduction=s.get_input_count("iron-gear-wheel"),cableProduction=s.get_input_count("copper-cable"),gearsConsumed=s.get_output_count("iron-gear-wheel"),researched=c.force.technologies["automation-science-pack"].researched,players=#game.connected_players,redPacks=c.get_item_count('automation-science-pack'),redPackProduction=s.get_input_count('automation-science-pack'),copperConsumed=s.get_output_count('copper-plate'),queueSize=c.crafting_queue_size,speed=game.speed}));
             """, token);
         return JsonSerializer.Deserialize<JsonElement>(json);
     }

@@ -32,10 +32,18 @@ Le [transport RCON et la reprise des fours](rcon-lifetime.md) ont été corrigé
 
 La décision tient désormais compte des ingrédients chargés, de la cuisson engagée et des produits prêts avant de ravitailler la foreuse. Si ces stocks suffisent au lot, sa réserve est exclue de l'approvisionnement. La sauvegarde est conservée au tick 1273330. Les 405 tests hors ligne passent ; ces essais restent des validations de développement avec les interventions documentées.
 
-## Limites
+## Four froid : approvisionnement mécanique du combustible
+
+Le chemin général des fours utilise désormais le même approvisionnement que les objectifs de production. Il récupère les stocks accessibles puis demande l'extraction mécanique du combustible manquant. La réserve dépend du temps de recette, du nombre de cycles, de la vitesse du four, de son énergie et du pouvoir calorifique natifs, avec une marge de 25 %. Un bois déjà porté reste utilisable, mais sa présence ne déclenche pas une nouvelle récolte manuelle pour compléter la réserve. Pendant l'amorçage des équipements seulement, un four froid peut demander un premier combustible manuel.
+
+La commande `verify-furnace-fuel` exige une session explicitement préparée. Le test headless du 13 septembre 2026 utilise un four froid, une foreuse, un coffre contenant un charbon et 25 plaques de fer. Entre les ticks 146518 et 152464, le moteur constate cinq plaques d'acier produites, 25 plaques de fer consommées, dix charbons extraits et trois consommés. Le stock final de charbon est huit : `1 + 10 - 3`. Le journal ne contient aucune opération de minage manuel. Ces objets préparés qualifient ce chemin de production, sans constituer une progression de campagne.
+
+## Limites restantes
 
 - L'[extraction de ressources vers un coffre](raw-extraction.md) complète le chemin des plaques pour le charbon et la pierre. Le minage manuel reste autorisé pendant l'amorçage des équipements ; la politique ne garantit pas encore zéro minage manuel après le démarrage.
 - La réutilisation d'installations éloignées pendant l'amorçage imbriqué est incomplète. Les réservations ne constituent pas encore une allocation globale du combustible entre tous les consommateurs de l'usine.
 - La préparation automatique décrite ici concerne les machines à combustible. La [récupération d'une foreuse épuisée](extractor-recovery.md) est intégrée avec une première preuve de reprise vers le même four. Les foreuses électriques et les réseaux complets restent incomplets.
 - Le monde normal a subi plusieurs corrections de développement. Une recherche précédente avait expiré après avoir obtenu les 75 premières plaques de cuivre par l'ancien chemin manuel ; ces stocks ont été conservés, sans restauration. La recherche logistique n'est pas démontrée par les lots décrits ici.
 - Aucun de ces essais ne constitue une campagne finale sans assistance. Zéro fusée et zéro campagne qualifiée sur trois.
+
+Le même scénario a également réussi avec un joueur connecté au personnage existant, entre les ticks 162073 et 168088 : cinq aciers, 25 fers consommés, dix charbons extraits, trois consommés, huit restants et zéro minage manuel. Une capture native du client a été inspectée pendant la cuisson.
