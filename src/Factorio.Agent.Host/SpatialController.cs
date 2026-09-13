@@ -60,6 +60,9 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         var receipts = new List<OperationReceipt>();
         var remaining = new List<MapPosition>();
         int plans = 0, clearedTrees = 0;
+        SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: deadline.Token);
+        RequireAi(initial);
+        ActorScope scope = initial.Scope;
         while (plans < 256)
         {
             deadline.Token.ThrowIfCancellationRequested();
@@ -73,9 +76,9 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             try { map = await spatial.CaptureAsync(cancellationToken: deadline.Token); }
             catch (GameRpcException error) when (error.Error.Code == "actor_dead")
             {
-                await Task.Delay(500, deadline.Token);
-                continue;
+                throw new InvalidDataException("The actor died during navigation; reconcile before choosing a new route.", error);
             }
+            if (map.Scope != scope) throw new InvalidDataException("Actor scope changed during navigation; the previous route is no longer executable.");
             RequireAi(map);
             if (map.Actor.Position.DistanceTo(destination) <= arrivalDistance)
                 return new(destination, map.Actor.Position, arrivalDistance, plans, receipts.AsReadOnly());
@@ -278,6 +281,9 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         object? preconditions = null, CancellationToken token = default)
     {
         if (durationTicks is < 1 or > 216000) throw new ArgumentOutOfRangeException(nameof(durationTicks));
+        SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: token);
+        RequireAi(initial);
+        ActorScope scope = initial.Scope;
         while (true)
         {
             DefenseStep reflex = await DefenseStepAsync(token);
@@ -287,6 +293,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 continue;
             }
             SpatialSnapshot map = await spatial.CaptureAsync(cancellationToken: token);
+            if (map.Scope != scope) throw new InvalidDataException("Actor scope changed before work submission; reconcile the previous intent.");
             RequireAi(map);
             return await ExecuteAsync(OperationSubmission.Create(map.Scope, kind, arguments,
                 map.CollectedTick + durationTicks, preconditions), token);

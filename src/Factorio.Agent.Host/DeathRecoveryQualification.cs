@@ -100,21 +100,61 @@ public sealed class DeathRecoveryQualification(RuntimeSession session)
             if (!killed)
             {
                 killed = true;
-                var submission = OperationSubmission.Create(scope, "wait", new { ticks = 1200 }, observed.Tick + 1800);
-                await journal.AppendAsync("submission", submission, token);
-                var receipt = await new OperationClient(game).SubmitAsync(submission, token);
-                await journal.AppendAsync("receipt", receipt, token);
-                Require(!receipt.IsTerminal, "Prepared death requires an active native operation.");
-                const string kill = "/silent-command local c=game.surfaces.nauvis.find_entities_filtered{type='character',force=game.forces.factorio_agent}[1]; assert(c); c.die(game.forces.enemy); rcon.print('native-death-fixture')";
-                Require((await session.CreateRcon().ExecuteAsync(kill, token)).Trim() == "native-death-fixture", "Prepared native death not acknowledged.");
-                await journal.AppendAsync("fixture-native-death", new { scope, submission.OperationId }, token);
-                throw new InvalidOperationException("Prepared native death interrupted the fixture goal.");
+                using var movementDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                movementDeadline.CancelAfter(TimeSpan.FromSeconds(20));
+                var tracked = new TrackingJournal(journal);
+                await using var spatial = new SpatialController(game, tracked);
+                Task<NavigationResult> navigating = spatial.NavigateAsync(new(30, 8), cancellationToken: movementDeadline.Token);
+                try
+                {
+                    string? movingId = null;
+                    while (!navigating.IsCompleted)
+                    {
+                        var current = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 1, limit = 1 }), movementDeadline.Token);
+                        Require(current.Ok, "Movement observation rejected.");
+                        if (current.Data.TryGetProperty("operation", out var operation) && operation.ValueKind == JsonValueKind.Object
+                            && operation.GetProperty("status").GetString() is "running" or "accepted"
+                            && operation.GetProperty("kind").GetString() == "move"
+                            && tracked.Submissions.Any(s => s.OperationId == operation.GetProperty("operationId").GetString()))
+                        {
+                            movingId = operation.GetProperty("operationId").GetString();
+                            break;
+                        }
+                        await Task.Delay(10, movementDeadline.Token);
+                    }
+                    Require(movingId is not null, "Prepared death requires an observed active C# navigation operation.");
+                    const string kill = "/silent-command local c=game.surfaces.nauvis.find_entities_filtered{type='character',force=game.forces.factorio_agent}[1]; assert(c); c.die(game.forces.enemy); rcon.print('native-death-fixture')";
+                    Require((await session.CreateRcon().ExecuteAsync(kill, token)).Trim() == "native-death-fixture", "Prepared native death not acknowledged.");
+                    await journal.AppendAsync("fixture-native-death", new { scope, operationId = movingId }, token);
+                    bool invalidated = false;
+                    try { await navigating; }
+                    catch (InvalidDataException) { invalidated = true; }
+                    Require(invalidated && tracked.Submissions.All(s => s.Scope == scope),
+                        "Navigation continued its old intent after native death or dispatched for another incarnation.");
+                    await journal.AppendAsync("fixture-navigation-invalidated", new { scope, movingId, submissions = tracked.Submissions.Count }, token);
+                    throw new InvalidOperationException("Prepared native death interrupted navigation; recovery must choose fresh actions.");
+                }
+                finally
+                {
+                    movementDeadline.Cancel();
+                    try { await navigating; } catch (Exception) { }
+                }
             }
             RecoveryFeedbackObserved = previousResult?.Contains("death-recovery-observed", StringComparison.Ordinal) == true;
             Require(RecoveryFeedbackObserved, "Next goal did not receive the reconciled recovery outcome.");
             var production = await new ProductionGoalExecutor(game, journal).RunAsync("iron-gear-wheel", 10, token);
             return new(new("fixture", "Native production after corpse recovery", GoalCategory.Production, "iron-gear-wheel", 10,
                 GoalUnit.Items, GoalPriority.Normal, new(TimeSpan.Zero, 1, null, null, null)), Production: production);
+        }
+    }
+
+    private sealed class TrackingJournal(IControllerJournal inner) : IControllerJournal
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<OperationSubmission> Submissions { get; } = new();
+        public async Task AppendAsync(string type, object data, CancellationToken token)
+        {
+            await inner.AppendAsync(type, data, token);
+            if (type == "submission" && data is OperationSubmission submission) Submissions.Enqueue(submission);
         }
     }
 

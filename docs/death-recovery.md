@@ -21,6 +21,18 @@ Chaque essai constate une mort dans le même monde, un inventaire de réappariti
 
 Les rapports privés sont `f8ef307adf32423494e0b52d593f49bd` et `6075f765e539440c8bf9f55a065d4af0`. Deux préparations antérieures ont été refusées : motif de fixture trop long, puis monde de test ayant déjà lancé une fusée. Le motif respecte désormais la borne native et le lancement antérieur est contrôlé explicitement.
 
+## Mort pendant la navigation et identité de l'intention
+
+Dans le monde normal de développement, une attaque a tué le personnage au tick 7330836 pendant un approvisionnement. La navigation conservait sa destination après la réapparition et tentait de recalculer l'ancien trajet autour du nouvel emplacement, ce qui produisait `GoalOutsideSnapshot`. Quatre tentatives de récupération ont ensuite échoué avec de nouvelles morts. Le monde a été sauvegardé avec ces pertes, sans revenir à une sauvegarde antérieure. Cette séquence montre aussi que la récupération d'un site encore dangereux reste insuffisante.
+
+`NavigateAsync` et `WorkAsync` capturent désormais l'identité complète du personnage avant la boucle de défense. Un changement de monde, de session, d'incarnation ou de génération invalide l'intention avant toute nouvelle soumission. Une observation native `actor_dead` pendant la navigation remonte immédiatement vers la récupération ; le contrôleur n'attend plus la réapparition pour poursuivre son ancien trajet. Les reçus déjà produits restent dans le journal et les opérations inconnues conservent leur réconciliation par identifiant.
+
+Trois tests reproduisent le défaut : réapparition pendant l'observation de sécurité avant un déplacement, même transition avant un travail, puis mort pendant un déplacement déjà soumis. Ils vérifient qu'aucune nouvelle intention n'est adressée à l'incarnation suivante. La suite complète compte 573 tests réussis et un test cloud optionnel ignoré.
+
+`verify-death-recovery` observe maintenant un déplacement réellement engagé par le contrôleur C# avant de provoquer la mort de la fixture. Il exige l'invalidation de cette navigation, puis la récupération et la fabrication suivante avec coûts natifs. Les nouveaux essais réussissent en headless entre les ticks **204379 et 206068**, puis avec un pilote connecté entre **216198 et 218025**. Dans chaque cas : une mort, quatre transferts de récupération, 40 plaques récupérées puis 20 consommées pour dix engrenages, six charbons conservés et trois plaques du corps étranger inchangées. Le pilote suit le nouvel avatar après la réapparition et une capture native a été inspectée. Rapports privés : `5a9a5450e0504fa59cbe7a9a21fb9cb1` et `c1a7eac25e104ef5b3a6401f25c2b29e`.
+
+Ces essais à vitesse 4 dans une fixture dégagée prouvent l'invalidation et la reprise de l'intention, pas la survie pendant une récupération contestée par les ennemis.
+
 ## Limites
 
 Ces essais utilisent un terrain dégagé et une mort provoquée. Ils ne prouvent ni la récupération sous attaques répétées ni une campagne jusqu'à la fusée. Le rééquipement complet du personnage, la reconstruction de bâtiments détruits et l'évitement d'un site de mort encore dangereux restent à compléter. Les qualités non normales et les transferts entre surfaces ne sont pas pris en charge. Les objets bloqués par la capacité sont signalés au modèle ; ils ne sont pas supprimés du bilan. Une mémoire absente ou une provenance de mort insuffisante interdit de reconstruire un historique supposé.

@@ -7,6 +7,30 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class SpatialControllerTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RespawnDuringSafetyObservationCannotDispatchAnOldNavigationOrWorkIntent(bool work)
+    {
+        var game = new RespawningGame(duringObservation: true);
+        await using var controller = new SpatialController(game, new Journal());
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+        {
+            if (work) await controller.WorkAsync("wait", new { ticks = 60 }, 600);
+            else await controller.NavigateAsync(new(5, 0));
+        });
+        Assert.Equal(0, game.Submissions);
+    }
+
+    [Fact]
+    public async Task DeathDuringMoveCannotContinueTheOldRouteFromTheRespawnLocation()
+    {
+        var game = new RespawningGame(duringObservation: false);
+        await using var controller = new SpatialController(game, new Journal());
+        await Assert.ThrowsAsync<InvalidDataException>(() => controller.NavigateAsync(new(5, 0)));
+        Assert.Equal(1, game.Submissions);
+    }
+
     [Fact]
     public void OpenTerrainCombinesShortWaypointsIntoOneBoundedMove()
     {
@@ -94,6 +118,53 @@ public sealed class SpatialControllerTests
             token.ThrowIfCancellationRequested();
             Types.Add(type);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RespawningGame(bool duringObservation) : IGameClient
+    {
+        private bool respawned;
+        private MapPosition position = new(0, 0);
+        public int Submissions { get; private set; }
+
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            if (request.Action == "observe" && duringObservation) respawned = true;
+            var original = SpatialPlannerTests.Map([]);
+            var map = original with
+            {
+                Scope = original.Scope with { Incarnation = respawned ? 2 : 1, Generation = respawned ? 2 : 1 },
+                Actor = original.Actor with { Position = position }
+            };
+            object data;
+            switch (request.Action)
+            {
+                case "spatial": data = map; break;
+                case "observe":
+                    data = new
+                    {
+                        map.Scope, collectedTick = 100,
+                        coverage = new { atomic = true, collectionStartTick = 100, collectionEndTick = 100,
+                            enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
+                        agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position,
+                            health = 250, weapon = new { ready = false, rounds = 0, range = 0 } },
+                        enemies = Array.Empty<object>()
+                    };
+                    break;
+                case "submit":
+                    var submission = request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!;
+                    Submissions++;
+                    bool died = !duringObservation && Submissions == 1;
+                    if (died) respawned = true;
+                    else if (submission.Args.TryGetProperty("position", out var destination))
+                        position = destination.Deserialize<MapPosition>(Protocol.Json)!;
+                    data = new { submission.OperationId, submission.Kind, status = died ? "cancelled" : "completed",
+                        acceptedTick = 100, updatedTick = 100, effects = new { },
+                        error = died ? new { code = "actor_dead", message = "Native death cancelled the operation." } : null };
+                    break;
+                default: throw new InvalidOperationException(request.Action);
+            }
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, 100, Protocol.ToElement(data)));
         }
     }
 
