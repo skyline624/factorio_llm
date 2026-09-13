@@ -66,11 +66,14 @@ public sealed class RocketLaunchController(IGameClient game, IControllerJournal 
                 state = await ReadAsync();
                 silo = state.Silos.Single(s => s.Id == siloId);
             }
-            var batch = RocketPlanner.SupplyBatch(prototype, silo, recipe);
-            foreach (var input in batch.Where(p => p.Value > 0))
-            {
+            var batch = RocketPlanner.SupplyBatch(prototype, silo, recipe).Where(p => p.Value > 0).ToArray();
+            // Collect the bounded delivery before returning to the silo, instead of one round trip per ingredient.
+            foreach (var input in batch)
                 await new ProductionGoalExecutor(game, journal).RunAsync(input.Key, input.Value, token);
+            if (batch.Length > 0)
                 await controller.ApproachEntityAsync(siloId, silo.Position, catalog, token);
+            foreach (var input in batch)
+            {
                 state = await ReadAsync();
                 silo = state.Silos.Single(s => s.Id == siloId);
                 var fresh = RocketPlanner.SupplyBatch(prototype, silo, recipe);

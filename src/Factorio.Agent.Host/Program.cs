@@ -27,6 +27,7 @@ try
           prepare-research --session FILE --technology NAME
           research --session FILE --technology NAME
           launch-rocket --session FILE --item NAME
+          verify-rocket --session FILE
           assemble --session FILE --item NAME --quantity N
           produce-fluid --session FILE --fluid NAME --quantity N
           connect-fluid --session FILE --source ID --target ID --fluid NAME
@@ -121,6 +122,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new CraftingQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-rocket":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new RocketQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-native":
