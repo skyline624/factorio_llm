@@ -13,6 +13,16 @@ public sealed record AssemblyPlan(NativeRecipe Recipe, string MachineItem, strin
 
 public sealed class AssemblyPlanner
 {
+    public static int DeliveryBatchLimit(NativeRecipe recipe, IReadOnlyDictionary<string, NativeItem> items, int requested)
+    {
+        if (requested < 1) throw new ArgumentOutOfRangeException(nameof(requested));
+        if (recipe.Ingredients.Count == 0 || recipe.Ingredients.Any(i => !(i.DeterministicItem || i.DeterministicFluid)))
+            throw new InvalidDataException("Assembly delivery requires deterministic native ingredients.");
+        var solids = recipe.Ingredients.Where(i => i.DeterministicItem).ToArray();
+        return solids.Length == 0 ? Math.Min(16, requested)
+            : FurnaceBatchSizing.Limit(recipe with { Ingredients = solids }, items, Math.Min(1000, requested));
+    }
+
     public AssemblyPlan? Choose(string item, IEnumerable<NativeRecipe> recipes,
         IReadOnlyDictionary<string, NativeAssembler> machines, IReadOnlyList<KnownProductionMachine> known, bool configuredOnly = false)
     {
@@ -36,6 +46,13 @@ public sealed class AssemblyPlanner
 public sealed record AssemblyRequirements(IReadOnlyDictionary<string, int> InputsToInsert, long ReadyOutput, bool InProcess,
     IReadOnlyDictionary<string, double> FluidUnitsToSupply)
 {
+    public static bool HasSuppliedCycle(FactorySnapshot snapshot, string entityId, NativeRecipe recipe)
+    {
+        var cycle = From(snapshot, entityId, recipe, 1);
+        return cycle.InputsToInsert.Values.All(count => count == 0)
+            && cycle.FluidUnitsToSupply.Values.All(units => units <= 0);
+    }
+
     public static int BatchesAfterTransit(long targetStock, long carried, long outputTransit, double yield, int batchLimit)
     {
         if (targetStock < 0 || carried < 0 || outputTransit < 0 || !double.IsFinite(yield) || yield <= 0 || batchLimit < 1)

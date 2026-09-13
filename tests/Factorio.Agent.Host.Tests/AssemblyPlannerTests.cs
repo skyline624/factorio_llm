@@ -17,6 +17,23 @@ public sealed class AssemblyPlannerTests
     private static readonly NativeRecipe Circuit = new("electronic-circuit", true, "crafting", .5,
         [new("iron-plate", "item", 1), new("copper-cable", "item", 3)], [new("electronic-circuit", "item", 1)], false);
 
+    [Theory]
+    [InlineData(66, 198, false, true)]
+    [InlineData(1, 3, false, true)]
+    [InlineData(0, 0, true, true)]
+    [InlineData(1, 2, false, false)]
+    [InlineData(0, 0, false, false)]
+    public void ProcurementWaitsUntilNoCompleteNativeCycleRemains(int iron, int cable, bool engaged, bool supplied)
+    {
+        var snapshot = new FactorySnapshot("s", new("w", "s", "a", 1, 1), 10, 100, Protocol.ToElement(new { }),
+        [new("input", "inventory", "machine", "input", Protocol.ToElement(new
+            { items = new Dictionary<string, int> { ["iron-plate"] = iron, ["copper-cable"] = cable } })),
+         new("output", "inventory", "machine", "output", Protocol.ToElement(new { items = new Dictionary<string, int>() })),
+         new("work", "work", "machine", "machine-craft", Protocol.ToElement(new
+            { recipe = Circuit.Name, inProcess = engaged, inputInventoryId = "input", outputInventoryId = "output" }))]);
+        Assert.Equal(supplied, AssemblyRequirements.HasSuppliedCycle(snapshot, "machine", Circuit));
+    }
+
     [Fact]
     public void ChemicalRecipeRequiresObservedFluidCapability()
     {

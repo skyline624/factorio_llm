@@ -45,9 +45,8 @@ public sealed class AssemblyController(IGameClient game, IControllerJournal jour
         string[] inputs = recipe.Ingredients.Where(i => i.DeterministicItem).Select(i => i.Name).Distinct(StringComparer.Ordinal).ToArray();
         if (inputs.Length > 8) throw new InvalidOperationException("Assembly recipe exceeds the native capacity probe budget.");
         // Bound each delivery by one native stack per ingredient, then verify exact insertable counts.
-        int batchLimit = Math.Min(16, recipe.Ingredients.Where(i => i.DeterministicItem).GroupBy(i => i.Name)
-            .Select(g => checked((int)Math.Floor(catalog.Items[g.Key].StackSize / g.Sum(i => i.Amount!.Value)))).DefaultIfEmpty(16).Min());
-        if (batchLimit < 1) throw new InvalidOperationException("An ingredient batch exceeds the supported inventory delivery size.");
+        int requestedBatches = checked((int)Math.Ceiling((targetStock - initial.Inventory.GetValueOrDefault(item)) / recipe.Products[0].Amount!.Value));
+        int batchLimit = AssemblyPlanner.DeliveryBatchLimit(recipe, catalog.Items, requestedBatches);
         await using var controller = new SpatialController(game, journal);
         var power = new PoweredMachineController(game, journal);
         string machineId = plan.ExistingId ?? await power.InstallAsync(plan.MachineItem, catalog, controller, token);
@@ -65,7 +64,7 @@ public sealed class AssemblyController(IGameClient game, IControllerJournal jour
                 throw new InvalidOperationException("Unconfigured assembler contains fluid; refuse to discard it by selecting a recipe.");
             await ActAsync("set_recipe", new { entityId = machineId, recipe = recipe.Name });
         }
-        await journal.AppendAsync("assembly-start", new { initial.Scope, initial.Tick, item, targetStock, machineId, recipe, initialCrafts }, token);
+        await journal.AppendAsync("assembly-start", new { initial.Scope, initial.Tick, item, targetStock, machineId, recipe, initialCrafts, batchLimit }, token);
         if (recipe.Ingredients.Any(i => i.DeterministicFluid))
         {
             var prepared = await ObserveAsync();
@@ -125,6 +124,11 @@ public sealed class AssemblyController(IGameClient game, IControllerJournal jour
             {
                 await ActAsync("wait", new { ticks = 60 });
                 continue; // Completed products on the output line already cover this stock goal.
+            }
+            if (AssemblyRequirements.HasSuppliedCycle(snapshot, machineId, recipe))
+            {
+                await ActAsync("wait", new { ticks = 60 });
+                continue; // Consume the loaded batch before procuring small rolling top-ups.
             }
             foreach (string input in inputs)
             {

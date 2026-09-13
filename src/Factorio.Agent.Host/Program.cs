@@ -32,6 +32,7 @@ try
           deploy-defense --session FILE --item NAME --quantity N
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
+          verify-assembly-batches --session FILE
           verify-furnace-fleet --session FILE [--item steel-plate|stone-brick]
           verify-electric-extraction --session FILE [--item iron-ore|iron-plate]
           verify-smelting-fuel --session FILE
@@ -162,6 +163,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new ElectricExtractionQualification(session, Option("item") ?? "iron-ore").RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-assembly-batches":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new AssemblyBatchQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-smelting-fuel":

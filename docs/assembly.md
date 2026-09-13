@@ -4,7 +4,9 @@
 
 Le catalogue exporte les catégories acceptées, la limite d'ingrédients, la recette fixe éventuelle, la vitesse et la consommation électrique natives. Le placement et les extensions de poteaux utilisent le même composant que les laboratoires. La maintenance recherche une chaudière reliée au générateur du réseau observé et limite son combustible à la pile native.
 
-La photographie atomique de l'usine donne les identifiants natifs des inventaires d'entrée et de sortie. Les objets dans d'autres compartiments ne sont pas des ingrédients disponibles. Les bilans soustraient séparément les ingrédients présents, un éventuel cycle engagé et les produits prêts. Avant chaque transfert, le contrôleur relit l'état et la capacité native estimée ; le reçu du transfert établit la quantité réellement déplacée. Les lots sont limités à seize cycles et à une pile par ingrédient.
+La photographie atomique de l'usine donne les identifiants natifs des inventaires d'entrée et de sortie. Les objets dans d'autres compartiments ne sont pas des ingrédients disponibles. Les bilans soustraient séparément les ingrédients présents, un éventuel cycle engagé et les produits prêts. Avant chaque transfert, le contrôleur relit l'état et la capacité native estimée ; le reçu du transfert établit la quantité réellement déplacée.
+
+Les livraisons solides utilisent une pile native par ingrédient, dans la limite du besoin restant et de mille cycles. Les entrées répétées du même ingrédient partagent cette pile. Pour les circuits électroniques de base, une pile de 200 câbles autorise 66 cycles, contre seize auparavant. Les recettes exclusivement fluides conservent une limite de seize cycles. La taille calculée est journalisée ; elle ne remplace jamais la capacité d'insertion réellement observée. Tant qu'un cycle est alimenté ou engagé, le contrôleur attend la production avant d'approvisionner un nouveau lot, ce qui évite les déplacements pour de petits compléments.
 
 `produce` réutilise un assembleur déjà réglé sur la bonne recette. Une machine libre n'est pas réservée implicitement pour un produit fabricable à la main, ce qui évite que la production d'un ingrédient change la recette de la machine parente. Les recettes exclusivement mécaniques peuvent également déclencher l'assemblage. Les cycles de dépendances entre exécutions d'assemblage sont refusés.
 
@@ -18,9 +20,17 @@ Un objectif `produce electronic-circuit --quantity 15` a réutilisé cette machi
 
 La régression du laboratoire avec le composant électrique partagé a également terminé `automation` dans la fixture : dix packs consommés, 78 observations alimentées, ticks 60 350 à 66 960. La technologie avait été explicitement réinitialisée pour cet essai synthétique.
 
+## Validation des livraisons par piles natives
+
+`verify-assembly-batches --session FILE` exige une fixture explicite avant toute préparation. Le scénario fournit une assembleuse alimentée par une source électrique de test, 80 fers et 240 câbles. Il vérifie 80 circuits récupérés, 80 cycles natifs, les coûts exacts, des inventaires finaux vides et quatre transferts : 66 fers, 198 câbles, puis 14 fers et 42 câbles. Aucune opération de minage ou de fabrication manuelle n'est autorisée dans le journal de cet essai.
+
+Le 13 septembre 2026, le scénario passe en headless entre les ticks 266495 et 271681, puis avec le pilote connecté entre les ticks 273854 et 279168. Le personnage natif 391 est conservé. Les deux essais établissent le même bilan ; une capture native inspectée confirme le client connecté et l'installation alimentée. Le client unique a été lancé réduit puis fermé. Ces équipements et ingrédients préparés ne comptent pas comme progression de campagne.
+
+Cette correction répond aux petits lots observés dans le monde normal : un objectif de 200 packs verts a atteint sa limite de 45 minutes en conservant 176 circuits, sans terminer les packs. Le journal contient un charbon miné manuellement pour redémarrer une foreuse ; l'extraction des autres matières premières de cette tentative passe par les machines. Le dernier déplacement a un reçu terminal confirmé et le monde a été sauvegardé. La réussite du scénario préparé ne prouve pas encore l'achèvement de cet objectif scientifique.
+
 ## Limites actuelles
 
-Cette capacité traite un produit solide déterministe et jusqu’à huit ingrédients solides distincts, avec des entrées fluides compatibles. Le [plastique est qualifié en fixture](chemical-production.md). Les coproduits, transports continus par tapis/bras, dimensionnement industriel du réseau et coordination de machines restent à implémenter. Le compteur de cycles est une mesure native, distincte du stock final : une reprise peut récupérer des produits déjà terminés sans nouveau cycle. Une erreur ou un transfert partiel impose une réconciliation ; aucune répétition aveugle ne démarre une autre méthode.
+Cette capacité traite un produit solide déterministe et jusqu’à huit ingrédients solides distincts, avec des entrées fluides compatibles. Le [plastique est qualifié en fixture](chemical-production.md). Les coproduits, le dimensionnement industriel du réseau et la coordination générale de machines restent incomplets. Les [transports d'assemblage](assembly-transport.md) disposent de leur propre périmètre de validation. Le compteur de cycles est une mesure native, distincte du stock final : une reprise peut récupérer des produits déjà terminés sans nouveau cycle. Une erreur ou un transfert partiel impose une réconciliation ; aucune répétition aveugle ne démarre une autre méthode.
 
 ## Essai en économie normale
 
