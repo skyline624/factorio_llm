@@ -14,7 +14,7 @@ public static class Protocol
 
     public static readonly IReadOnlySet<string> Actions = new HashSet<string>(StringComparer.Ordinal)
     {
-        "hello", "observe", "factory_snapshot", "spatial", "validate_placement", "research_state",
+        "hello", "observe", "factory_snapshot", "spatial", "validate_placement", "research_state", "rocket_state",
         "submit", "operation", "cancel", "recipes", "technologies", "production_catalog", "mark_fixture", "prepare_checkpoint"
     };
 

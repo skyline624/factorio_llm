@@ -26,6 +26,7 @@ try
           research-plan --session FILE --technology NAME
           prepare-research --session FILE --technology NAME
           research --session FILE --technology NAME
+          launch-rocket --session FILE --item NAME
           assemble --session FILE --item NAME --quantity N
           produce-fluid --session FILE --fluid NAME --quantity N
           connect-fluid --session FILE --source ID --target ID --fluid NAME
@@ -104,6 +105,16 @@ try
             string journalPath = Path.Combine(session.Directory, $"laboratory-{Guid.NewGuid():N}.jsonl");
             var controller = new ResearchGoalExecutor(game, new ControllerJournal(journalPath));
             Print(new { result = await controller.RunAsync(Required("technology"), shutdown.Token), journalPath });
+            break;
+        }
+        case "launch-rocket":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            string journalPath = Path.Combine(session.Directory, $"rocket-{Guid.NewGuid():N}.jsonl");
+            var controller = new RocketLaunchController(game, new ControllerJournal(journalPath));
+            Print(new { result = await controller.RunAsync(Required("item"), shutdown.Token), journalPath });
             break;
         }
         case "verify-crafting":

@@ -8,6 +8,18 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class StrategicGroundingTests
 {
     [Fact]
+    public void LaunchRequiresNativeSiloAndSingleCompletion()
+    {
+        var catalog = Catalog() with { Items = new Dictionary<string, NativeItem>(Catalog().Items)
+            { ["rocket-silo"] = new(0, 1, PlaceEntity: "rocket-silo", PlaceEntityType: "rocket-silo") } };
+        var goal = Goal() with { Category = GoalCategory.Launch, Unit = GoalUnit.Completion, Quantity = 1, Target = "rocket-silo" };
+        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", catalog));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "iron-plate" }, "observation", catalog));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Unit = GoalUnit.Items }, "observation", catalog));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 2 }, "observation", catalog));
+    }
+
+    [Fact]
     public void Exact_native_stock_goal_can_be_grounded_without_model_coordinates()
     {
         Assert.Null(StrategicProductionController.GroundingFailure(Goal(), "observation", Catalog()));

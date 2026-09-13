@@ -5,7 +5,7 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
-public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null, FluidProductionResult? Fluid = null);
+public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null, FluidProductionResult? Fluid = null, RocketLaunchResult? Rocket = null);
 
 /// <summary>Grounds semantic production or research goals into verified native execution.</summary>
 public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal) : IStrategicGoalRunner
@@ -55,7 +55,9 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 "Prefer machine production and fuel over bulk hand mining. C# can prepare or reuse burner drills feeding compatible storage for deterministic solid deposits such as coal and stone; trees still require manual harvesting and machine bootstrap may need small manual quantities. " +
                 "Research goals use category research, unit completion, quantity 1 and an exact native technology identifier. C# resolves native prerequisites, supported craft-item triggers and laboratory research, including science production and power maintenance. It can also satisfy fluid resource mining triggers using a compatible electric extractor on an observed deposit near an existing network, with at most one new pole. Remote powered outposts and solid-resource mining triggers remain unsupported. " +
                 "Fluid production goals use category production, unit fluid_units and an exact native fluid identifier, up to 100000 units in the known factory. C# supports native refinery configuration and ordinary pipe routes in the observed construction area. Compatible chemical recipes may combine deterministic solid and fluid inputs, including sulfuric acid output, with finite fluid preparation and native pipe connections. Observed solid producer outputs can supply assemblers through calculated belts and inserters. Long-distance fluid networks, temperature-constrained chemistry, complete factory logistics and automatic relocation after resource depletion remain incomplete. " +
+                "Launch goals use category launch, unit completion, quantity 1 and an exact native rocket-silo item identifier. Research the silo and rocket-part recipes first. C# reuses or installs a silo, supplies bounded batches from native requirements and verifies the engine launch counter. Local powered placement and existing production capabilities still bound execution. " +
                 "Choose an unmet useful goal toward the rocket. Other meaningful goals remain permissible proposals with explicit unsupported results.",
+            nativeSiloItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "rocket-silo").Select(p => p.Key).ToArray(),
             scope = "Local observed resources; known own buildings; exact actor inventory at observedTick. Hidden areas and enemies are unknown."
         }, Protocol.Json);
         var context = new StrategicContext(observationId, facts,
@@ -94,6 +96,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             return new(goal, Fluid: await new FluidProductionController(game, journal).RunAsync(goal.Target, (double)goal.Quantity, token));
         if (goal.Category == GoalCategory.Research)
             return new(goal, Research: await new ResearchGoalExecutor(game, journal).RunAsync(goal.Target, token));
+        if (goal.Category == GoalCategory.Launch)
+            return new(goal, Rocket: await new RocketLaunchController(game, journal).RunAsync(goal.Target, token));
         return new(goal, Production: await new ProductionGoalExecutor(game, journal).RunAsync(goal.Target, (int)goal.Quantity, token));
     }
 
@@ -101,6 +105,13 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         IReadOnlyDictionary<string, NativeTechnology>? technologies = null)
     {
         if (goal.ObservationId != observationId) return "The proposal references a different observation.";
+        if (goal.Category == GoalCategory.Launch)
+        {
+            if (goal.Unit != GoalUnit.Completion || goal.Quantity != 1) return "Launch requires a completion goal with quantity 1.";
+            if (!catalog.Items.TryGetValue(goal.Target, out var silo) || silo.PlaceEntityType != "rocket-silo")
+                return "The target is not an exact native rocket-silo item identifier.";
+            return null;
+        }
         if (goal.Category == GoalCategory.Research)
         {
             if (goal.Unit != GoalUnit.Completion || goal.Quantity != 1) return "Research requires a completion goal with quantity 1.";

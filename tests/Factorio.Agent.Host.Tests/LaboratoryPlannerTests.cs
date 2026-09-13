@@ -5,6 +5,20 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class LaboratoryPlannerTests
 {
+    [Fact]
+    public void LargeSiloPlacementUsesItsWholeNativeFootprint()
+    {
+        var map = SteamPowerPlannerTests.Map(true);
+        var silo = new EntityGeometry("silo", "rocket-silo", new(new(-4.4, -4.4), new(4.4, 4.4)), map.Prototypes["boiler"].Mask, 9, 9);
+        var pole = new SpatialEntity("p", "pole", new(5.5, 5.5), new(new(5.35, 5.35), new(5.65, 5.65)), 0, "own", Power: new(0, 7));
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { ["silo"] = silo },
+            Entities = [pole], Items = new Dictionary<string, PlaceableItem>(map.Items) { ["silo"] = new("silo", 1) } };
+        var placement = new PoweredMachinePlanner().Place(map, "silo", pole);
+        Assert.NotNull(placement);
+        Assert.True(new SpatialCollisionField(map).PlacementClear(silo, placement.Position, placement.Direction));
+        Assert.True(new WorldBox(new(3, 3), new(8, 8)).Overlaps(silo.CollisionBox.Translate(placement.Position)));
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]

@@ -31,7 +31,7 @@ public sealed class PoweredMachinePlanner
         EntityGeometry poleGeometry = map.Prototypes[pole.Name];
         if (poleGeometry.SupplyArea is not > 0) return null;
         EntityGeometry machine = map.Prototypes[map.Items[machineItem].EntityName];
-        if (machine.Type is not ("lab" or "assembling-machine")) throw new InvalidDataException("Expected native powered machine geometry.");
+        if (machine.Type is not ("lab" or "assembling-machine" or "rocket-silo")) throw new InvalidDataException("Expected native powered machine geometry.");
         double radius = poleGeometry.SupplyArea.Value;
         var coverage = new WorldBox(new(pole.Position.X - radius, pole.Position.Y - radius), new(pole.Position.X + radius, pole.Position.Y + radius));
         var field = new SpatialCollisionField(map);

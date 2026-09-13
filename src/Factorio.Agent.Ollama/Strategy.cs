@@ -11,7 +11,7 @@ public interface IStrategicPlanner
 public sealed record StrategicContext(string ObservationId, string Facts,
     string? CurrentGoal = null, string? PreviousResult = null);
 
-public enum GoalCategory { Production, Research, Defense, Recovery, Exploration, Logistics, Other }
+public enum GoalCategory { Production, Research, Defense, Recovery, Exploration, Logistics, Other, Launch }
 public enum GoalUnit { Items, ItemsPerMinute, FluidUnits, FluidUnitsPerMinute, Completion }
 public enum GoalPriority { Low, Normal, High, Critical }
 
