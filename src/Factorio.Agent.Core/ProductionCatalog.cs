@@ -81,6 +81,10 @@ public sealed class ProductionPlanner
             if (missing > 1000 || !visiting.Add(wanted)) return new("unsupported", wanted, total, Reason: "Dependency cycle or batch exceeds 1000 items.");
             try
             {
+                // Stored outputs are physical supply, including for recursive ingredients.
+                // Collect to the carried-stock target, then replan from the native observation.
+                if (machines.Any(m => m.Output?.GetValueOrDefault(wanted) > 0))
+                    return new("collect", wanted, total);
                 string[] sources = catalog.Mining.Where(p => p.Value.Any(m => m.Name == wanted && m.DeterministicItem))
                     .Select(p => p.Key).ToArray();
                 if (sources.Length > 0)

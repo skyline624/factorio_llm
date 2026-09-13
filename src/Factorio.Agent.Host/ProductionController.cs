@@ -85,6 +85,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             await journal.AppendAsync("production-step", new { item, targetStock, stepNumber, state.Tick, step }, deadline.Token);
             switch (step.Kind)
             {
+                case "collect":
+                    await new ProductionController(game, journal).CollectAvailableAsync(step.Item, step.Quantity, deadline.Token);
+                    break;
                 case "extract":
                     await new StoredResourceExtractionController(game, journal).RunAsync(step.Item, step.Quantity, deadline.Token);
                     break;

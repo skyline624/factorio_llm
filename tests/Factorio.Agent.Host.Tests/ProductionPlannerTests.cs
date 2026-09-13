@@ -5,6 +5,34 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class ProductionPlannerTests
 {
+    [Theory]
+    [InlineData(0, 40)]
+    [InlineData(7, 40)]
+    [InlineData(0, 3)]
+    public void IntermediateRequirementCollectsExistingOutputBeforeProducingMore(long carried, long stored)
+    {
+        var step = new ProductionPlanner().Next("gear", 10,
+            new Dictionary<string, long> { ["iron-plate"] = carried }, Catalog(), SpatialPlannerTests.Map([]),
+            [new("stock", "iron-chest", null, Output: new Dictionary<string, long> { ["iron-plate"] = stored })]);
+
+        Assert.Equal("collect", step.Kind);
+        Assert.Equal("iron-plate", step.Item);
+        Assert.Equal(20, step.Quantity); // Carried stock target; a partial collection is re-observed before production.
+    }
+
+    [Fact]
+    public void StoredRawIngredientIsCollectedBeforeHandMining()
+    {
+        var step = new ProductionPlanner().Next("iron-plate", 10, new Dictionary<string, long>(),
+            Catalog(), SpatialPlannerTests.Map([]),
+            [new("known-furnace", "furnace", null),
+             new("stock", "iron-chest", null, Output: new Dictionary<string, long> { ["iron-ore"] = 10 })]);
+
+        Assert.Equal("collect", step.Kind);
+        Assert.Equal("iron-ore", step.Item);
+        Assert.Equal(10, step.Quantity);
+    }
+
     [Fact]
     public void SciencePackLotAllowsNativeDurationAndQueueTransitions()
     {

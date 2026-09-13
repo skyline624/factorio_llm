@@ -10,7 +10,7 @@ public interface IStrategicGoalRunner
 
 public sealed record StrategicCampaignResult(bool RocketLaunched, int GoalsExecuted, long EndTick, string StopReason = "goal-budget");
 public sealed record StrategicMemory(int Version, ActorScope Scope, long Tick, bool Pending, string? PreviousResult,
-    string? PendingJournal = null, NativeDeathTransition? Recovery = null);
+    string? PendingJournal = null, NativeDeathTransition? Recovery = null, bool RecoveryDeathObserved = false);
 
 /// <summary>Sequential strategic goals under the caller's actor lease. Unknown outcomes are never retried.</summary>
 public sealed class StrategicCampaignController(IGameClient game, IStrategicGoalRunner runner, string memoryPath,

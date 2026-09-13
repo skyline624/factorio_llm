@@ -97,7 +97,7 @@ public sealed class StrategicReconciliationTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task InterruptedRecoveryReconcilesItsOwnJournalBeforeASecondAttempt(bool secondDeath)
+    public async Task InterruptedRecoveryReconcilesBeforeRetryOrDeferralAfterAnotherDeath(bool secondDeath)
     {
         var game = await PrepareAsync(false);
         game.AfterDeath = true;
@@ -118,8 +118,16 @@ public sealed class StrategicReconciliationTests : IDisposable
             }
             throw new IOException("Synthetic lost recovery receipt");
         });
-        await new StrategicCampaignController(game, new NextGoal(), Memory, recoveryJournal, recovery).RunAsync(1);
-        Assert.Equal(2, recovery.Calls);
+        var next = new NextGoal();
+        await new StrategicCampaignController(game, next, Memory, recoveryJournal, recovery).RunAsync(1);
+        Assert.Equal(secondDeath ? 1 : 2, recovery.Calls);
+        if (secondDeath)
+        {
+            Assert.Contains("unsafe-corpses-deferred", next.Previous);
+            using var feedback = JsonDocument.Parse(next.Previous!);
+            Assert.Equal(17, feedback.RootElement.GetProperty("remaining").GetProperty("iron-plate").GetInt32());
+            Assert.Equal(0, feedback.RootElement.GetProperty("collectedItemTypes").GetInt32());
+        }
         Assert.Equal(2, game.Calls.Count(c => c == "operation"));
         Assert.Single(await File.ReadAllLinesAsync(recoveryJournal), line =>
         {
@@ -155,6 +163,33 @@ public sealed class StrategicReconciliationTests : IDisposable
         Assert.Equal(17, memory.Recovery.ActorUnitNumber);
         Assert.Contains("actor-death-reconciled", memory.PreviousResult);
         Assert.Equal(["observe", "operation", "observe"], game.Calls);
+    }
+
+    [Theory]
+    [InlineData("persisted", true)]
+    [InlineData("legacy", true)]
+    [InlineData("different-death", false)]
+    [InlineData("plain-text", false)]
+    public async Task RecoveryDeathDeferralSurvivesRestartAndRequiresMatchingLegacyProof(string mode, bool deferred)
+    {
+        var game = await PrepareAsync(false);
+        game.AfterDeath = true;
+        var death = new NativeDeathTransition(1, 37000, 17, 1, new(12, 8));
+        string feedback = mode == "plain-text" ? "an old result" : JsonSerializer.Serialize(new
+        {
+            outcome = "actor-death-reconciled", goal = new { category = "recovery" },
+            death = mode == "different-death" ? death with { DeathTick = 36900 } : death
+        }, Protocol.Json);
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize(new StrategicMemory(1,
+            Scope with { SessionId = "new-session", Incarnation = 2, Generation = 4 }, 39999, false, feedback,
+            Recovery: death, RecoveryDeathObserved: mode == "persisted"), Protocol.Json));
+        var recovery = new RecoveryStub((_, _) => Task.CompletedTask);
+        var result = await new StrategicRecoveryController(game, Memory, Journal, recovery).ResumeAsync(default);
+        Assert.Equal(deferred ? 0 : 1, recovery.Calls);
+        Assert.False(result.Pending);
+        Assert.Null(result.Recovery);
+        if (deferred) Assert.Contains("unsafe-corpses-deferred", result.PreviousResult);
+        Assert.DoesNotContain("submit", game.Calls);
     }
 
     [Theory]
@@ -372,7 +407,11 @@ public sealed class StrategicReconciliationTests : IDisposable
             return Task.FromResult(new GameResponse(1, request.RequestId, true, 40000 + Calls.Count, Protocol.ToElement(new
             {
                 scope = current, collectedTick = 40000 + Calls.Count,
-                recovery = new { knownCorpsesComplete = true, lastDeath = new
+                recovery = new { knownCorpsesComplete = true,
+                    corpses = new[] { new { id = $"corpse:{NativeIncarnation + 15}:{LastDeathTick}:1", incarnation = NativeIncarnation - 1,
+                        deathTick = LastDeathTick, actorUnitNumber = NativeIncarnation + 15, surfaceIndex = 1, position = new MapPosition(12, 8),
+                        inventories = new { corpse = new { items = new Dictionary<string, long> { ["iron-plate"] = 17 } } } } },
+                    lastDeath = new
                     { incarnation = NativeIncarnation - 1, tick = LastDeathTick, unitNumber = NativeIncarnation + 15,
                         surfaceIndex = 1, position = new MapPosition(12, 8) } },
                 agent = new { alive, controlMode = "ai", stopUnconfirmed = false,

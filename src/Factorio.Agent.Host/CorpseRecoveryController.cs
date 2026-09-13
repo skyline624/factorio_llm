@@ -31,14 +31,8 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             if (!response.Ok) throw new GameRpcException(response.Error!);
             var data = response.Data;
             var actor = data.GetProperty("agent");
-            if (response.Tick < lastTick || data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json) != scope
-                || !actor.GetProperty("alive").GetBoolean() || actor.GetProperty("controlMode").GetString() != "ai"
-                || data.GetProperty("collectedTick").GetInt64() != response.Tick
-                || scope.Incarnation != death.Incarnation + 1
-                || !data.GetProperty("recovery").GetProperty("knownCorpsesComplete").GetBoolean())
-                throw new InvalidDataException("Corpse recovery lost its living actor, native scope or complete provenance observation.");
+            var corpses = ReadObservedCorpses(response, death, scope, lastTick);
             lastTick = response.Tick;
-            var corpses = ReadCorpses(data.GetProperty("recovery").GetProperty("corpses"), death, response.Tick);
             if (step == 0) await journal.AppendAsync("corpse-recovery-start", new
                 { scope, response.Tick, death, actorMainInventory = actor.GetProperty("inventory"), corpseIds = corpses.Select(c => c.Id) }, token);
             var remaining = corpses.SelectMany(c => c.Items).GroupBy(p => p.Key, StringComparer.Ordinal)
@@ -88,6 +82,34 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             collected[selected.Item] = checked(collected.GetValueOrDefault(selected.Item) + moved);
         }
         throw new TimeoutException("Corpse recovery exhausted its transfer budget; partial effects remain journaled.");
+    }
+
+    internal static async Task<CorpseRecoveryResult> DeferAsync(IGameClient game, IControllerJournal journal,
+        NativeDeathTransition death, ActorScope scope, long earliestTick, CancellationToken token)
+    {
+        var response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 32, limit = 200 }), token);
+        var corpses = ReadObservedCorpses(response, death, scope, earliestTick);
+        var remaining = corpses.SelectMany(c => c.Items).GroupBy(p => p.Key, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => checked(g.Sum(p => p.Value)), StringComparer.Ordinal);
+        var result = new CorpseRecoveryResult(response.Tick, "unsafe-corpses-deferred",
+            new Dictionary<string, long>(), remaining, corpses.Select(c => c.Id).ToArray());
+        await journal.AppendAsync("corpse-recovery-result", result, token);
+        return result;
+    }
+
+    private static IReadOnlyList<Corpse> ReadObservedCorpses(GameResponse response, NativeDeathTransition death,
+        ActorScope scope, long earliestTick)
+    {
+        if (!response.Ok) throw new GameRpcException(response.Error!);
+        var data = response.Data;
+        var actor = data.GetProperty("agent");
+        if (response.Tick < earliestTick || data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json) != scope
+            || !actor.GetProperty("alive").GetBoolean() || actor.GetProperty("controlMode").GetString() != "ai"
+            || data.GetProperty("collectedTick").GetInt64() != response.Tick
+            || scope.Incarnation != death.Incarnation + 1
+            || !data.GetProperty("recovery").GetProperty("knownCorpsesComplete").GetBoolean())
+            throw new InvalidDataException("Corpse recovery lost its living actor, native scope or complete provenance observation.");
+        return ReadCorpses(data.GetProperty("recovery").GetProperty("corpses"), death, response.Tick);
     }
 
     private sealed record Corpse(string Id, MapPosition Position, IReadOnlyDictionary<string, long> Items);

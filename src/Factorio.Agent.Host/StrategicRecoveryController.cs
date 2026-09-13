@@ -13,6 +13,12 @@ public sealed class StrategicRecoveryController(IGameClient game, string memoryP
         for (int attempt = 0; attempt < 4; attempt++)
         {
             var memory = await ReadMemoryAsync(token);
+            // Preserve a previously reconciled recovery death across interruption of legacy memory files.
+            if (!memory.RecoveryDeathObserved && LegacyRecoveryDeath(memory))
+            {
+                memory = memory with { RecoveryDeathObserved = true };
+                await LocalJson.WriteAsync(memoryPath, memory, token);
+            }
             var observed = await ObserveAsync(token);
             var scope = observed.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
             if (!observed.Data.GetProperty("agent").GetProperty("alive").GetBoolean() || scope.Incarnation != memory.Scope.Incarnation)
@@ -42,7 +48,9 @@ public sealed class StrategicRecoveryController(IGameClient game, string memoryP
             await journal.AppendAsync("strategic-goal", new { category = "recovery", target = "proven-own-corpses", quantity = 1, unit = "completion" }, token);
             try
             {
-                var result = await (recovery ?? new CorpseRecoveryController(game, journal)).RunAsync(death, scope, token);
+                var result = memory.RecoveryDeathObserved
+                    ? await CorpseRecoveryController.DeferAsync(game, journal, death, scope, memory.Tick, token)
+                    : await (recovery ?? new CorpseRecoveryController(game, journal)).RunAsync(death, scope, token);
                 var after = await ObserveAsync(token);
                 if (RequireIdle(after, scope, memory.Tick) != scope || after.Tick < result.Tick)
                     throw new InvalidDataException("Actor changed before committing the recovery outcome.");
@@ -50,9 +58,10 @@ public sealed class StrategicRecoveryController(IGameClient game, string memoryP
                 {
                     outcome = "death-recovery-observed", observedTick = after.Tick, death,
                     recoveryOutcome = result.Outcome, collectedThisAttempt = result.Collected.Take(24).ToDictionary(p => p.Key, p => p.Value),
+                    recoveryDeathObserved = memory.RecoveryDeathObserved,
                     remaining = result.Remaining.Take(24).ToDictionary(p => p.Key, p => p.Value),
                     collectedItemTypes = result.Collected.Count, remainingItemTypes = result.Remaining.Count,
-                    interpretation = "Only native transfers from existing corpses were made. Deferred or missing items are not recovered stock. Re-observe the factory and resume or rebuild toward the rocket; never replay old actions."
+                    interpretation = "Only verified native transfers count as collected stock. A death during recovery defers further attempts until a new strategy is available; it does not reveal current enemy positions. Re-observe factory outputs and resume production, rebuild or prepare defenses toward the rocket; never replay old actions or count corpse stock as carried."
                 }, Protocol.Json);
                 if (feedback.Length > 4000) throw new InvalidDataException("Recovery feedback exceeds the strategic context budget.");
                 memory = new(1, scope, after.Tick, false, feedback);
@@ -71,6 +80,23 @@ public sealed class StrategicRecoveryController(IGameClient game, string memoryP
             }
         }
         throw new InvalidOperationException("Recovery exhausted four reconciled attempts; its pending journal and native world remain intact.", lastFailure);
+    }
+
+    private static bool LegacyRecoveryDeath(StrategicMemory memory)
+    {
+        if (memory.Recovery is null || memory.PreviousResult is null) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(memory.PreviousResult);
+            var value = document.RootElement;
+            return value.ValueKind == JsonValueKind.Object && value.TryGetProperty("outcome", out var outcome)
+                && outcome.ValueKind == JsonValueKind.String && outcome.GetString() == "actor-death-reconciled"
+                && value.TryGetProperty("goal", out var goal) && goal.ValueKind == JsonValueKind.Object
+                && goal.TryGetProperty("category", out var category) && category.ValueKind == JsonValueKind.String && category.GetString() == "recovery"
+                && value.TryGetProperty("death", out var death)
+                && death.Deserialize<NativeDeathTransition>(Protocol.Json) == memory.Recovery;
+        }
+        catch (JsonException) { return false; }
     }
 
     private async Task WaitForRespawnAsync(StrategicMemory memory, GameResponse observed, CancellationToken token)
