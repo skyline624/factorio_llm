@@ -39,3 +39,11 @@ Les 482 tests hors ligne passent, avec un test cloud optionnel ignoré. Ils couv
 ## Limites
 
 La répartition couvre les recettes déterministes à un ingrédient solide et un produit solide, avec des fours à combustible compatibles. L'extraction foreuse–four et les chaînes électriques ne bénéficient pas encore d'une extension générale en plusieurs sites. Les réservations locales ne remplacent pas une allocation persistante de tous les stocks de l'usine. Les besoins d'amorçage restent susceptibles de nécessiter du minage manuel, qui doit être mesuré séparément. Aucune fusée en campagne normale ni campagne finale n'est qualifiée par ces essais.
+
+## Premier lot stratégique d’acier dans le monde normal de développement
+
+Le 13 septembre 2026, le modèle `glm-5.3-flash:cloud` a demandé 50 plaques d’acier après la recherche de distribution électrique. Le contrôleur a réutilisé les fours 222 et 626, dont les entrées et sorties étaient initialement vides. Il a produit le fer intermédiaire avec les foreuses et fours existants, puis chargé 250 plaques de fer au total dans les deux fours : 100, 100, 40, 5 et 5. Le groupe termine entre les ticks 6029270 et 6113247 avec 50 aciers portés ; le résultat stratégique du stock est confirmé au tick 6113256.
+
+La lecture indépendante au tick 6127686 retrouve les 50 aciers, une file de fabrication vide, 250 points de vie et aucun joueur connecté. Au tick 6131866, les deux fours ont des entrées et sorties vides et aucune cuisson engagée. Le journal du lot ne contient aucune opération de minage manuel. Les stocks de combustible déjà présents dans les fours restent utilisables, y compris un bois dans le four 626 ; le ravitaillement mécanique du charbon est distinct d’un apport artificiel. Aucun four supplémentaire n’a été construit pour ce lot.
+
+Ce résultat utilise le même monde normal de développement, qui conserve les interventions antérieures documentées. Il ne compte parmi aucune des trois campagnes finales. Le modèle a ensuite choisi la recherche militaire, encore en cours à cette observation.
