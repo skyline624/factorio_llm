@@ -3,6 +3,7 @@ local T = require("scripts.targets")
 local Actor = require("scripts.actor")
 local Visibility = require("scripts.visibility")
 local CraftAccounting = require("scripts.craft_accounting")
+local CraftDelivery = require("scripts.craft_delivery")
 local Equipment = require("scripts.equipment")
 local M = {}
 
@@ -30,12 +31,7 @@ function M.measure(record, c)
   if w.product then
     effects.produced = math.max(0, main_inventory(c).get_item_count(w.product) - w.beforeProduct)
   end
-  if w.expected then
-    effects.products = {}
-    for name in pairs(w.expected) do
-      effects.products[name] = math.max(0, main_inventory(c).get_item_count(name) - (w.beforeInventory[name] or 0))
-    end
-  end
+  if w.expected and w.accounting then effects.products = CraftAccounting.products(record, c) end
   if w.beforeRounds then
     effects.roundsConsumed = w.beforeRounds - U.ammo(c.get_inventory(defines.inventory.character_ammo))
   end
@@ -132,6 +128,7 @@ starts.craft = function(r, c, args)
   end
   local accounting, direct_count = CraftAccounting.prepare(c, recipe, requested, r.work.expected)
   r.work.accounting = accounting
+  r.work.delivery, direct_count = CraftDelivery.prepare(c, r.work.expected, direct_count)
   local queued = c.begin_crafting{recipe = name, count = direct_count, silent = true}
   r.work.requested, r.work.queued = requested, queued
   r.receipt.effects.requested, r.receipt.effects.queued = requested, queued
@@ -143,15 +140,12 @@ steps.craft = function(r, c)
   CraftAccounting.update(r, c)
   local w, effects = r.work, r.receipt.effects
   effects.nativeQueueSize, effects.nativeProgress = c.crafting_queue_size, c.crafting_queue_progress
-  local products = {}
-  for name in pairs(w.expected) do
-    products[name] = math.max(0, main_inventory(c).get_item_count(name) - (w.beforeInventory[name] or 0))
-  end
+  local products = CraftAccounting.products(r, c)
   effects.products = products
   if c.crafting_queue_size > 0 then return end
   for name, amount in pairs(w.expected) do
     U.check(products[name] >= amount * w.queued, "craft_output_unconfirmed",
-      "Queue ended but the required output was not observed in the actor inventory")
+      "Queue ended but the required native product quantities were not corroborated")
   end
   return w.queued == w.requested and "completed" or "partial"
 end

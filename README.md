@@ -154,3 +154,5 @@ La défense sait désormais [équiper les armes portées, recharger et sélectio
 Le [repli vers une tourelle chargée observée](docs/retreat.md) est qualifié en headless et avec pilote : le personnage désarmé contourne un obstacle pendant la poursuite. Cette couverture locale ne remplace pas une défense durable de toute l’usine.
 
 Les objectifs `defense` permettent aussi [d'installer et ravitailler des tourelles](docs/defense-deployment.md). C# réutilise les défenses existantes, produit les fournitures et calcule les placements. Deux essais natifs vérifient les réserves, les coûts et le même personnage avec pilote connecté. Les munitions installées sont protégées des collectes de production ; leur entretien continu et la qualification jusqu'à la fusée restent à compléter.
+
+La [livraison des fabrications auto-équipées](docs/craft-delivery.md) préserve les équipements existants et vérifie les coups réels des chargeurs partiels. Les objectifs de stock sont validés par le contenu observé du sac, y compris lorsque le joueur connecté provoque un regroupement natif des piles.

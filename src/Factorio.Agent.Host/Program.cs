@@ -39,6 +39,7 @@ try
           verify-equipment --session FILE
           verify-retreat --session FILE
           verify-defense-deployment --session FILE
+          verify-armed-crafting --session FILE
           assemble --session FILE --item NAME --quantity N
           produce-fluid --session FILE --fluid NAME --quantity N
           connect-fluid --session FILE --source ID --target ID --fluid NAME
@@ -191,6 +192,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new DefenseDeploymentQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-armed-crafting":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new ArmedCraftingQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-furnace-fuel":

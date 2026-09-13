@@ -6,6 +6,14 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class RocketQualificationTests
 {
     [Fact]
+    public async Task ArmedCraftFixtureCannotModifyANormalCampaign()
+    {
+        var session = new RuntimeSession("nonexistent-normal-campaign", "factorio.exe", "config.ini", "mods", "save.zip",
+            0, 1, 2, "test-only", "session", "world", 1, false);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new ArmedCraftingQualification(session).RunAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task PreparedDefenseDeploymentCannotModifyANormalCampaign()
     {
         var session = new RuntimeSession("nonexistent-normal-campaign", "factorio.exe", "config.ini", "mods", "save.zip",
