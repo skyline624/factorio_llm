@@ -3,11 +3,13 @@ local T = require("scripts.targets")
 local Actor = require("scripts.actor")
 local Visibility = require("scripts.visibility")
 local CraftAccounting = require("scripts.craft_accounting")
+local Equipment = require("scripts.equipment")
 local M = {}
 
 M.capabilities = {"move", "mine", "craft", "wait", "build", "insert", "take", "set_recipe",
-  "research", "rotate", "shoot", "launch_rocket"}
+  "research", "rotate", "shoot", "launch_rocket", "equip", "select_weapon"}
 local starts, steps = {}, {}
+starts.equip, starts.select_weapon = Equipment.equip, Equipment.select
 M.account_craft = CraftAccounting.update
 
 local function main_inventory(c) return c.get_main_inventory() end

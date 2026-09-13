@@ -26,3 +26,5 @@ Les rapports privés sont `f8ef307adf32423494e0b52d593f49bd` et `6075f765e539440
 Ces essais utilisent un terrain dégagé et une mort provoquée. Ils ne prouvent ni la récupération sous attaques répétées ni une campagne jusqu'à la fusée. Le rééquipement complet du personnage, la reconstruction de bâtiments détruits et l'évitement d'un site de mort encore dangereux restent à compléter. Les qualités non normales et les transferts entre surfaces ne sont pas pris en charge. Les objets bloqués par la capacité sont signalés au modèle ; ils ne sont pas supprimés du bilan. Une mémoire absente ou une provenance de mort insuffisante interdit de reconstruire un historique supposé.
 
 Les tests hors ligne couvrent notamment la filiation native, les mondes incompatibles, les résultats inconnus, la mort entre objectifs, la persistance avant récupération, une interruption de récupération et une seconde mort. Ils complètent les essais natifs sans les remplacer.
+
+Le [réarmement à partir des armes et munitions portées](equipment.md) est maintenant intégré à la boucle de défense et qualifié séparément. Il ne couvre pas encore les armures, les sites dangereux ni la reconstruction.

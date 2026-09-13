@@ -10,6 +10,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
     private readonly OperationClient operations = new(game);
     private string? uncertainOperation;
     private string? ownedOperation;
+    private OperationSubmission? ownedSubmission;
     private long lastTick = -1;
 
     public async Task<DefenseStep> StepAsync(CancellationToken token = default)
@@ -19,6 +20,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
             // An ambiguous submission/cancellation is reconciled by identity, never retransmitted.
             OperationReceipt reconciled = await operations.QueryAsync(uncertainOperation, token);
             await journal.AppendAsync("reconciled", reconciled, token);
+            if (ownedSubmission?.OperationId == reconciled.OperationId) EquipmentReceipt.Validate(ownedSubmission, reconciled);
             uncertainOperation = null;
             return new("reconciled", reconciled.UpdatedTick, reconciled.OperationId);
         }
@@ -29,15 +31,20 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         if (observation.Operation is { IsTerminal: true } finished && finished.OperationId == ownedOperation)
         {
             await journal.AppendAsync("receipt", finished, token);
+            if (ownedSubmission is not null) EquipmentReceipt.Validate(ownedSubmission, finished);
             ownedOperation = null;
+            ownedSubmission = null;
         }
         VisibleThreat? target = DefensePolicy.SelectTarget(observation);
-        if (target is null) return new("observing", observation.Tick);
+        EquipmentDecision? equipment = target is null ? EquipmentPolicy.Select(observation) : null;
+        if (target is null && equipment is null) return new("observing", observation.Tick);
         if (observation.Operation is { IsTerminal: false } active)
         {
             if (active.OperationId == ownedOperation) return new("defending", observation.Tick, active.OperationId);
-            await journal.AppendAsync("cancel-intent", new { active.OperationId, observation.Tick, target.Id,
-                reason = "Visible enemy in current weapon range preempts existing work." }, token);
+            if (target is null && observation.Enemies.Count == 0) return new("observing", observation.Tick);
+            await journal.AppendAsync("cancel-intent", new { active.OperationId, observation.Tick, targetId = target?.Id,
+                reason = target is not null ? "Visible enemy in current weapon range preempts existing work."
+                    : "A visible enemy requires restoring carried weapons before continuing work." }, token);
             try
             {
                 OperationReceipt stopped = await operations.CancelAsync(active.OperationId, token);
@@ -53,16 +60,19 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
                 throw;
             }
         }
-        var submission = OperationSubmission.Create(observation.Scope, "shoot", new { entityId = target.Id, ticks = 60 },
+        var submission = OperationSubmission.Create(observation.Scope, equipment?.Kind ?? "shoot",
+            equipment?.Arguments ?? new { entityId = target!.Id, ticks = 60 },
             observation.Tick + 180, new { position = observation.Position, positionTolerance = 0.5 });
         await journal.AppendAsync("submission", submission, token);
         ownedOperation = submission.OperationId;
+        ownedSubmission = submission;
         try
         {
             OperationReceipt receipt = await operations.SubmitAsync(submission, token);
             await journal.AppendAsync("receipt", receipt, token);
-            if (receipt.IsTerminal) ownedOperation = null;
-            return new(receipt.IsTerminal ? "resolved" : "defending", receipt.UpdatedTick, receipt.OperationId);
+            EquipmentReceipt.Validate(submission, receipt);
+            if (receipt.IsTerminal) { ownedOperation = null; ownedSubmission = null; }
+            return new(receipt.IsTerminal && equipment is null ? "resolved" : "defending", receipt.UpdatedTick, receipt.OperationId);
         }
         catch (OperationOutcomeUnknownException)
         {

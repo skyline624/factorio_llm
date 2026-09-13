@@ -5,7 +5,7 @@ namespace Factorio.Agent.Core;
 /// <summary>A validated, current projection of engine facts needed by the reflex loop.</summary>
 public sealed record SafetyObservation(long Tick, ActorScope Scope, bool Alive, string ControlMode,
     bool StopUnconfirmed, MapPosition? Position, double Health, WeaponState Weapon,
-    IReadOnlyList<VisibleThreat> Enemies, OperationReceipt? Operation)
+    IReadOnlyList<VisibleThreat> Enemies, OperationReceipt? Operation, EquipmentState? Loadout = null)
 {
     public static SafetyObservation Parse(GameResponse response)
     {
@@ -65,7 +65,9 @@ public sealed record SafetyObservation(long Tick, ActorScope Scope, bool Alive, 
                 if (operation.UpdatedTick > tick) throw new InvalidDataException("Operation is newer than its observation.");
             }
             return new(tick, scope, alive, mode, agent.GetProperty("stopUnconfirmed").GetBoolean(),
-                position, health, weapon, enemies.AsReadOnly(), operation);
+                position, health, weapon, enemies.AsReadOnly(), operation,
+                alive && agent.TryGetProperty("loadout", out var loadout) && loadout.ValueKind != JsonValueKind.Null
+                    ? EquipmentState.Parse(loadout) : null);
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or OverflowException)
         {

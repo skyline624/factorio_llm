@@ -1,7 +1,6 @@
 local M = {}
 
-function M.observe(character)
-  local index = character.selected_gun_index
+function M.slot(character, index)
   local guns = character.get_inventory(defines.inventory.character_guns)
   local ammo = character.get_inventory(defines.inventory.character_ammo)
   local result = {selectedSlot = index, ready = false, rounds = 0}
@@ -25,6 +24,43 @@ function M.observe(character)
   -- their own targeting rules before they can be selected automatically.
   result.ready = compatible and category.name == "bullet" and attack.type == "projectile"
     and attack.min_range == 0 and result.rounds > 0
+  return result
+end
+
+function M.observe(character) return M.slot(character, character.selected_gun_index) end
+
+function M.bullet_gun(prototype)
+  local attack = prototype.attack_parameters
+  if not attack or attack.type ~= "projectile" or attack.min_range ~= 0 then return false end
+  for _, name in ipairs(attack.ammo_categories or {}) do if name == "bullet" then return true end end
+  return false
+end
+
+function M.loadout(character)
+  local guns = character.get_inventory(defines.inventory.character_guns)
+  local ammo = character.get_inventory(defines.inventory.character_ammo)
+  local result = {complete = true, slots = {}, carried = {}}
+  for i = 1, #guns do
+    local gun, magazine, state = guns[i], ammo[i], M.slot(character, i)
+    result.slots[#result.slots + 1] = {index = i, gun = gun.valid_for_read and gun.name or nil,
+      bulletGun = gun.valid_for_read and M.bullet_gun(gun.prototype) or false,
+      range = gun.valid_for_read and gun.prototype.attack_parameters.range or 0,
+      ammo = magazine.valid_for_read and magazine.name or nil, rounds = state.rounds, ready = state.ready}
+  end
+  local main = character.get_main_inventory()
+  for i = 1, #main do
+    local stack = main[i]
+    if stack.valid_for_read and stack.quality.name == "normal" then
+      local prototype = stack.prototype
+      if prototype.type == "gun" or prototype.type == "ammo" then
+        local bullet = prototype.type == "gun" and M.bullet_gun(prototype)
+          or prototype.type == "ammo" and prototype.ammo_category.name == "bullet"
+        result.carried[#result.carried + 1] = {slot = i, name = stack.name, kind = prototype.type,
+          count = stack.count, bullet = bullet, range = prototype.type == "gun" and prototype.attack_parameters.range or 0,
+          rounds = prototype.type == "ammo" and ((stack.count - 1) * prototype.magazine_size + stack.ammo) or 0}
+      end
+    end
+  end
   return result
 end
 

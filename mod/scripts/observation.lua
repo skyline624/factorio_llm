@@ -100,6 +100,7 @@ function M.observe(args)
   result.agent.ammo = U.inventory(c.get_inventory(defines.inventory.character_ammo))
   result.agent.ammoRounds = U.ammo(c.get_inventory(defines.inventory.character_ammo))
   result.agent.weapon = Weapons.observe(c)
+  result.agent.loadout = Weapons.loadout(c)
   result.agent.craftingQueue = c.crafting_queue
   result.agent.craftingQueueSize = c.crafting_queue_size
   result.agent.shooting = c.shooting_state.state ~= defines.shooting.not_shooting
