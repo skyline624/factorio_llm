@@ -59,6 +59,15 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
             var supplied = StoredExtractionStock.From(stock, drill.Id, chest.Id, item);
             if (supplied.Output > 0) continue;
             if (supplied.Insertable == 0) throw new InvalidOperationException("Native storage capacity blocks extraction; reconcile its bar, filters or contents.");
+            if (iteration % 10 == 0 && await new ExtractionRecoveryController(game, journal).TryRecoverAsync(drill.Id, catalog, controller, token))
+            {
+                plan = await PrepareAsync();
+                map = await MapAsync();
+                drill = map.Entities.Single(e => e.Id == plan.ExistingDrillId);
+                chest = map.Entities.Single(e => e.Id == plan.Connection.ReceiverId);
+                await journal.AppendAsync("stored-extraction-connection", new { item, drillId = drill.Id, chestId = chest.Id, plan, map.CollectedTick }, token);
+                continue;
+            }
             if (supplied.StoredFuel == 0 && supplied.BurningJoules == 0) await FuelAsync(state);
             await WorkAsync("wait", new { ticks = 60 });
         }
@@ -66,6 +75,8 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
 
         async Task<ResourceExtractionPlan> PrepareAsync()
         {
+            await new ExtractionRecoveryController(game, journal).RecoverNearbyAsync(
+                planner.Options(catalog, (await ObserveAsync()).Inventory, item).Select(p => p.DrillItem).ToArray(), catalog, controller, token);
             var state = await ObserveAsync();
             ResourceExtractionPlan? selected = null;
             // Registry locations are hints only; native geometry is recaptured at the destination.

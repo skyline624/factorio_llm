@@ -110,6 +110,15 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
                 receiverId = receiver.Id, batches, remaining }, token);
             if (remaining.ReadyOutput > 0) continue;
             bool needsExtraction = remaining.InputToInsert > 0;
+            if (needsExtraction && iteration % 10 == 0
+                && await new ExtractionRecoveryController(game, journal).TryRecoverAsync(drillId, catalog, controller, token))
+            {
+                await new SmeltingPreparationController(game, journal).PrepareAsync(item, token);
+                var continuation = await new AutomatedSmeltingController(game, journal).RunAsync(item, targetStock, token);
+                var result = continuation with { InitialStock = initial.Inventory.GetValueOrDefault(item), StartTick = initial.Tick };
+                await journal.AppendAsync("automated-smelting-result", result, token);
+                return result;
+            }
             if (needsExtraction) await FuelAsync(drillId, drill.Position, fuelPlan.DrillReserve);
             await FuelAsync(receiver.Id, receiver.Position, fuelPlan.FurnaceReserve, needsExtraction);
             await controller.WorkAsync("wait", new { ticks = 60 }, 180, token: token);

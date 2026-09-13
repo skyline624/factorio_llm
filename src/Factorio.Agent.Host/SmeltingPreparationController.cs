@@ -30,6 +30,8 @@ internal sealed class SmeltingPreparationController(IGameClient game, IControlle
         if (equipment.Length > 16) throw new InvalidOperationException("Extraction equipment exceeds the native geometry budget.");
         var spatial = new SpatialClient(game);
         await using var controller = new SpatialController(game, journal);
+        await new ExtractionRecoveryController(game, journal).RecoverNearbyAsync(options.Select(p => p.DrillItem).ToArray(), catalog, controller, token);
+        state = await ObserveAsync();
         await journal.AppendAsync("smelting-preparation-start", new { item, state.Scope, state.Tick, options,
             manualMiningPolicy = "Only equipment bootstrap ingredients; bulk ore must come from the prepared machines." }, token);
 
@@ -40,6 +42,7 @@ internal sealed class SmeltingPreparationController(IGameClient game, IControlle
         foreach (var receiver in known.OrderBy(e => e.Position.DistanceTo(initialMap.Actor.Position)).Take(8))
         {
             await controller.TravelAsync(receiver.Position, 8, catalog, token);
+            await new ExtractionRecoveryController(game, journal).RecoverNearbyAsync(options.Select(p => p.DrillItem).ToArray(), catalog, controller, token);
             var map = await MapAsync();
             state = await ObserveAsync();
             var constructible = options.Select(p => p.DrillItem).ToHashSet(StringComparer.Ordinal);

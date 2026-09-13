@@ -131,6 +131,17 @@ public sealed class ProductionPlanner
                     double yield = recipe.Products.Where(p => p.Name == wanted).Sum(p => p.Amount!.Value);
                     int batches = checked((int)Math.Ceiling(missing / yield));
                     if (!catalog.CanHandCraft(recipe)) batches = FurnaceBatchSizing.Limit(recipe, catalog.Items, batches);
+                    else
+                    {
+                        // Split the work, not the goal: each intermediate stock request must remain executable.
+                        foreach (var ingredient in recipe.Ingredients.GroupBy(p => p.Name))
+                            batches = Math.Min(batches, (int)Math.Min(1000, Math.Floor(1000 / ingredient.Sum(p => p.Amount!.Value))));
+                        if (batches == 0)
+                        {
+                            failed = new("unsupported", wanted, total, Reason: "One recipe cycle exceeds the supported intermediate stock budget.");
+                            continue;
+                        }
+                    }
                     bool impossible = false;
                     foreach (var ingredient in recipe.Ingredients.GroupBy(p => p.Name))
                     {

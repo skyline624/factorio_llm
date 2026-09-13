@@ -6,6 +6,34 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class ProductionPlannerTests
 {
     [Theory]
+    [InlineData(0, 0, "automate", "plate", 1000)]
+    [InlineData(0, 1000, "craft", "gear", 500)]
+    [InlineData(500, 0, "automate", "plate", 1000)]
+    [InlineData(500, 1000, "craft", "gear", 500)]
+    public void LargeCraftGoalUsesExecutableIntermediateLotsWithoutReducingTheFinalTarget(
+        long gears, long plates, string kind, string item, int quantity)
+    {
+        var (map, catalog) = SmeltingPlannerTests.Setup(installed: true);
+        catalog = catalog with { Recipes = [..catalog.Recipes, Recipe("gear", [Item("plate", 2)], [Item("gear", 1)])],
+            HandCategories = new Dictionary<string, bool> { ["crafting"] = true } };
+        var step = new ProductionPlanner().Next("gear", 1000,
+            new Dictionary<string, long> { ["gear"] = gears, ["plate"] = plates }, catalog, map,
+            [new("receiver", "furnace", "smelt-plate"), new("installed", "drill", null)]);
+        Assert.Equal(kind, step.Kind);
+        Assert.Equal(item, step.Item);
+        Assert.Equal(quantity, step.Quantity);
+    }
+
+    [Fact]
+    public void LargeCraftLotSumsDuplicateIngredientsBeforeBoundingTheBatch()
+    {
+        var catalog = Catalog() with { Recipes = [Recipe("part", [Item("iron-plate", 2), Item("iron-plate", 1)], [Item("part", 1)])] };
+        var step = Next("part", 1000, new() { ["iron-plate"] = 999 }, catalog);
+        Assert.Equal("craft", step.Kind);
+        Assert.Equal(333, step.Quantity);
+    }
+
+    [Theory]
     [InlineData(100, 75)]
     [InlineData(10, 10)]
     public void MiningForFurnaceUsesNativeInputStackInsteadOfSixteenItemTrips(int stackSize, int expected)

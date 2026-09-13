@@ -288,7 +288,7 @@ internal sealed record ProductionState(ActorScope Scope, long Tick, string Contr
 internal sealed record ProductionEntity(string Id, string Name, MapPosition Position, string? Recipe, JsonElement Inventories, string? PreviousRecipe = null)
 {
     public KnownProductionMachine AsMachine() => new(Id, Name, Recipe, Items("input"), Items("output"));
-    private IReadOnlyDictionary<string, long> Items(string slot) => Inventories.TryGetProperty(slot, out var inventory)
+    public IReadOnlyDictionary<string, long> Items(string slot) => Inventories.TryGetProperty(slot, out var inventory)
         ? inventory.GetProperty("items").Deserialize<Dictionary<string, long>>(Protocol.Json)!
         : new Dictionary<string, long>();
     public long Count(string slot, string item) => Inventories.TryGetProperty(slot, out var inventory)

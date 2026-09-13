@@ -5,6 +5,37 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class ExtractionPlannerTests
 {
+    [Fact]
+    public void DepletionChecksTheActualDrillAreaRatherThanNearbyDeposits()
+    {
+        var (map, _) = SmeltingPlannerTests.Setup(installed: true);
+        var drill = map.Entities.Single(e => e.Id == "installed");
+        Assert.True(ExtractionPlanner.HasRemainingResources(map, drill));
+        var distant = map.Entities.Single(e => e.Id == "deposit") with
+        { Position = new(4.5, 2.5), Bounds = new(new(4.1, 2.1), new(4.9, 2.9)) };
+        map = map with { Entities = [..map.Entities.Where(e => e.Id != "deposit"), distant] };
+        Assert.False(ExtractionPlanner.HasRemainingResources(map, drill));
+    }
+
+    [Fact]
+    public void DepletionCannotBeProvedFromATruncatedMiningArea()
+    {
+        var (map, _) = SmeltingPlannerTests.Setup(installed: true);
+        var drill = map.Entities.Single(e => e.Id == "installed");
+        map = map with { Bounds = new(new(-1, 1), new(1, 3)) };
+        Assert.Throws<InvalidDataException>(() => ExtractionPlanner.HasRemainingResources(map, drill));
+    }
+
+    [Fact]
+    public void PositiveResourcesPreventRecoveryRegardlessOfFuelOrMachineStatus()
+    {
+        var (map, _) = SmeltingPlannerTests.Setup(installed: true);
+        var drill = map.Entities.Single(e => e.Id == "installed") with { Status = "no_fuel" };
+        Assert.True(ExtractionPlanner.HasRemainingResources(map, drill));
+        map = map with { Entities = map.Entities.Select(e => e.Id == "deposit" ? e with { Amount = 0 } : e).ToArray() };
+        Assert.False(ExtractionPlanner.HasRemainingResources(map, drill));
+    }
+
     [Theory]
     [InlineData(0, 0)]
     [InlineData(5, 4)]

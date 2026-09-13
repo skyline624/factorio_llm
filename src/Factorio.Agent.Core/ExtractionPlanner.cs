@@ -8,6 +8,23 @@ public sealed record InstalledExtraction(string DrillId, ExtractionPlacement Con
 /// <summary>Solves native drill output containment, tile alignment and resource coverage against observed receivers.</summary>
 public sealed class ExtractionPlanner
 {
+    public static bool HasRemainingResources(SpatialSnapshot map, SpatialEntity installed)
+    {
+        EntityGeometry drill = map.Prototypes[installed.Name];
+        if (drill.Type != "mining-drill" || drill.MiningRadius is not > 0 || !double.IsFinite(drill.MiningRadius.Value)
+            || drill.ResourceCategories is null) throw new InvalidDataException("Missing native drill coverage.");
+        double radius = drill.MiningRadius.Value;
+        var area = new WorldBox(new(installed.Position.X - radius, installed.Position.Y - radius),
+            new(installed.Position.X + radius, installed.Position.Y + radius));
+        if (!map.Coverage.Complete || !map.Coverage.Atomic || !map.Bounds.Contains(area))
+            throw new InvalidDataException("The complete mining area must be observed before proving depletion.");
+        return EligibleDeposits(map, drill).Any(e => area.Overlaps(e.Bounds));
+    }
+
+    private static IEnumerable<SpatialEntity> EligibleDeposits(SpatialSnapshot map, EntityGeometry drill) =>
+        map.Entities.Where(e => e.Amount is > 0 && map.Prototypes[e.Name].ResourceCategory is { } category
+            && drill.ResourceCategories!.ContainsKey(category));
+
     public static double WorkEnergy(ExtractionPlacement connection, SpatialSnapshot map, string drillItem,
         ProductionCatalog catalog, string resourceItem, double quantity)
     {
@@ -73,8 +90,7 @@ public sealed class ExtractionPlanner
         if (drill.Type != "mining-drill" || drill.MiningOutput is not { } vector || drill.MiningRadius is not > 0
             || !double.IsFinite(drill.MiningRadius.Value) || !double.IsFinite(vector.X) || !double.IsFinite(vector.Y)
             || drill.ResourceCategories is null) throw new InvalidDataException("Missing native mining geometry.");
-        SpatialEntity[] deposits = field.Map.Entities.Where(e => e.Amount is > 0
-            && field.Map.Prototypes[e.Name].ResourceCategory is { } category && drill.ResourceCategories.ContainsKey(category)).ToArray();
+        SpatialEntity[] deposits = EligibleDeposits(field.Map, drill).ToArray();
         var result = new List<ExtractionPlacement>();
         foreach (SpatialEntity receiver in receivers)
         {
