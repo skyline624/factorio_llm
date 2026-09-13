@@ -82,6 +82,7 @@ public sealed class ProductionPlannerTests
         var step = Next("steel", 30, new() { ["iron-plate"] = 100 }, catalog);
         Assert.Equal("smelt", step.Kind);
         Assert.Equal(20, step.Quantity);
+        Assert.Equal(30, step.StockTarget);
     }
 
     [Fact]

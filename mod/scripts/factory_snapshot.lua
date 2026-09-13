@@ -151,6 +151,7 @@ local function capture(args)
         inputInventoryId = input and ("inventory:" .. id .. ":" .. input.index),
         outputInventoryId = output and ("inventory:" .. id .. ":" .. output.index),
         inProcess = entity.is_crafting(), progress = entity.crafting_progress, productsFinished = entity.products_finished,
+        craftingSpeed = entity.crafting_speed,
         ingredients = recipe and U.copy(recipe.ingredients), products = recipe and U.copy(recipe.products),
         collection = "native-current-process-not-physical-stock"})
     end

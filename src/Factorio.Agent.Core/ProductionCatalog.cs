@@ -48,7 +48,7 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
 }
 
 public sealed record ProductionStep(string Kind, string Item, int Quantity, NativeRecipe? Recipe = null,
-    SpatialEntity? Source = null, string? Reason = null);
+    SpatialEntity? Source = null, string? Reason = null, int? StockTarget = null);
 
 public sealed record KnownProductionMachine(string Id, string Name, string? Recipe,
     IReadOnlyDictionary<string, long>? Input = null, IReadOnlyDictionary<string, long>? Output = null)
@@ -151,7 +151,7 @@ public sealed class ProductionPlanner
                         if (dependency.Kind is "unsupported" or "unavailable") { failed = dependency; impossible = true; break; }
                         if (dependency.Kind != "satisfied") return dependency;
                     }
-                    if (!impossible) return new(catalog.CanHandCraft(recipe) ? "craft" : "smelt", wanted, batches, recipe);
+                    if (!impossible) return new(catalog.CanHandCraft(recipe) ? "craft" : "smelt", wanted, batches, recipe, StockTarget: total);
                 }
                 return failed!;
             }

@@ -7,13 +7,19 @@ public static class FurnaceFuelPlanner
 {
     public static FurnaceFuelPlan Choose(NativeRecipe recipe, NativeFurnace furnace, EntityGeometry geometry, int batches,
         ProductionCatalog catalog, IReadOnlyDictionary<string, long> carried, IReadOnlyDictionary<string, long> available,
+        bool allowManualBootstrap) => ChooseFleet(recipe, furnace, geometry, [batches], catalog, carried, available, allowManualBootstrap);
+
+    public static FurnaceFuelPlan ChooseFleet(NativeRecipe recipe, NativeFurnace furnace, EntityGeometry geometry, IReadOnlyList<int> batches,
+        ProductionCatalog catalog, IReadOnlyDictionary<string, long> carried, IReadOnlyDictionary<string, long> available,
         bool allowManualBootstrap)
     {
-        if (batches < 1 || geometry.Name != furnace.EntityName || !furnace.Categories.ContainsKey(recipe.Category)
+        if (batches.Count is < 1 or > FurnaceFleetPlanner.MaximumMachines || batches.Any(n => n < 1)
+            || geometry.Name != furnace.EntityName || !furnace.Categories.ContainsKey(recipe.Category)
             || carried.Values.Any(n => n < 0) || available.Values.Any(n => n < 0))
             throw new InvalidDataException("Inconsistent native furnace fuel inputs.");
-        double work = batches * Positive(recipe.EnergySeconds) / Positive(furnace.CraftingSpeed) * 60
-            * Positive(geometry.EnergyPerTick) / Positive(geometry.BurnerEffectivity);
+        double[] workByMachine = batches.Select(n => n * Positive(recipe.EnergySeconds) / Positive(furnace.CraftingSpeed) * 60
+            * Positive(geometry.EnergyPerTick) / Positive(geometry.BurnerEffectivity)).ToArray();
+        double work = workByMachine.Sum();
         if (!double.IsFinite(work)) throw new InvalidDataException("Invalid native furnace energy estimate.");
         bool Obtainable(string name) => catalog.Mining.Any(source =>
             (allowManualBootstrap || catalog.MiningSourceTypes?.GetValueOrDefault(source.Key) == "resource")
@@ -24,7 +30,8 @@ public static class FurnaceFuelPlanner
                     || Obtainable(p.Key)))
             .Select(p =>
             {
-                int reserve = checked((int)Math.Clamp(Math.Ceiling(work * 1.25 / p.Value.FuelValue), 1, Math.Min(1000, p.Value.StackSize)));
+                int reserve = checked((int)Math.Min(1000, workByMachine.Sum(w =>
+                    Math.Clamp(Math.Ceiling(w * 1.25 / p.Value.FuelValue), 1, Math.Min(1000, p.Value.StackSize)))));
                 // Existing wood or manufactured fuel may be used, but does not authorize harvesting or fabricating a fresh reserve.
                 if (!Obtainable(p.Key)) reserve = checked((int)Math.Min(reserve,
                     Math.Max(carried.GetValueOrDefault(p.Key), available.GetValueOrDefault(p.Key))));

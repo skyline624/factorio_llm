@@ -63,6 +63,7 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         {
             outcome = "interrupted-goal-reconciled", observedTick = after.Tick, goal = audit.Goal,
             submittedOperations = audit.Submissions.Count, nonCompletedOperations = failures.Length,
+            executionFailure = audit.FailureCode,
             recentOutcomes = failures.TakeLast(3).Select(r => new { r.Kind, r.Status, error = r.Error?.Code, r.UpdatedTick }),
             interpretation = "The previous goal is not certified complete. Partial products remain in the native world. Observe current stocks and research before choosing the next goal; never replay prior mutations."
         }, Protocol.Json);
@@ -72,7 +73,8 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         {
             kind = "read-only-strategic-reconciliation", previousMemory = memory, journalPath,
             journalSha256 = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(contents))),
-            operations = audit.Submissions.Count, queriedReceipts = queried, observation = after.Data, feedback
+            operations = audit.Submissions.Count, queriedReceipts = queried, observation = after.Data,
+            executionDiagnostic = audit.Diagnostic, feedback
         }, token);
         if (await File.ReadAllTextAsync(memoryPath, token) != original
             || (File.Exists(journalPath) ? await File.ReadAllTextAsync(journalPath, token) : "") != contents)
@@ -121,6 +123,14 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
                 selected = true;
             }
             if (!selected) continue;
+            if (type == "strategic-execution-error")
+            {
+                string code = data.GetProperty("failureCode").GetString() ?? throw new InvalidDataException("Missing execution failure category.");
+                if (code.Length is < 1 or > 128 || code.Any(c => !(char.IsAsciiLetterOrDigit(c) || c == '_')))
+                    throw new InvalidDataException("Invalid execution failure category.");
+                audit.FailureCode = code;
+                audit.Diagnostic = data.Clone();
+            }
             if (type == "strategic-goal") audit.Goal = Protocol.ToElement(new
             {
                 category = data.GetProperty("category"), target = data.GetProperty("target"),
@@ -178,5 +188,7 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         public Dictionary<string, OperationSubmission> Submissions { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, OperationReceipt> Receipts { get; } = new(StringComparer.Ordinal);
         public JsonElement? Goal { get; set; }
+        public string? FailureCode { get; set; }
+        public JsonElement? Diagnostic { get; set; }
     }
 }

@@ -82,6 +82,9 @@ public sealed class StrategicReconciliationTests : IDisposable
         var result = await new StrategicCampaignController(game, runner, Memory, nextJournal).RunAsync(2);
         Assert.Equal(2, result.GoalsExecuted);
         Assert.Contains("interrupted-goal-reconciled", runner.Next.Previous);
+        Assert.Contains("execution_precondition_failed", runner.Next.Previous);
+        Assert.DoesNotContain("Synthetic known partial craft failure", runner.Next.Previous);
+        Assert.Contains("Synthetic known partial craft failure", await File.ReadAllTextAsync(nextJournal));
         Assert.False((await ReadMemoryAsync()).Pending);
         Assert.DoesNotContain("submit", game.Calls);
     }

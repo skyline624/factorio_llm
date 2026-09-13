@@ -40,6 +40,8 @@ La commande `verify-furnace-fuel` exige une session explicitement préparée. Le
 
 ## Limites restantes
 
+La [répartition de la fusion entre plusieurs fours](furnace-fleet.md) complète cette priorité : construction calculée en C#, approvisionnements regroupés et prise en compte des cuissons déjà engagées. Les essais acier et briques vérifient les coûts natifs et l'absence de minage manuel sur des lots préparés.
+
 - L'[extraction de ressources vers un coffre](raw-extraction.md) complète le chemin des plaques pour le charbon et la pierre. Le minage manuel reste autorisé pendant l'amorçage des équipements ; la politique ne garantit pas encore zéro minage manuel après le démarrage.
 - La réutilisation d'installations éloignées pendant l'amorçage imbriqué est incomplète. Les réservations ne constituent pas encore une allocation globale du combustible entre tous les consommateurs de l'usine.
 - La préparation automatique décrite ici concerne les machines à combustible. La [récupération d'une foreuse épuisée](extractor-recovery.md) est intégrée avec une première preuve de reprise vers le même four. Les foreuses électriques et les réseaux complets restent incomplets.

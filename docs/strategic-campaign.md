@@ -34,6 +34,8 @@ Le contrôleur sélectionne le contexte de l’objectif en cours et vérifie les
 
 Un rapport local conserve le journal identifié par SHA-256, la mémoire précédente, les reçus interrogés et l’observation native. Il est écrit avant la mise à jour atomique de la mémoire. Le modèle reçoit ensuite un résultat « objectif interrompu réconcilié » ; la réussite de l’objectif n’est pas présumée. Ses exécuteurs observent à nouveau les stocks et recherches avant d’agir.
 
+Une exception du contrôleur conserve désormais sa catégorie, son message borné et sa pile d'appels dans le journal privé, puis dans le rapport de réconciliation. Seule la catégorie bornée est transmise au modèle. Cela permet de diagnostiquer une interruption survenue entre deux opérations natives terminées, sans perdre sa cause ni diffuser les détails locaux dans le contexte LLM.
+
 ### Preuve dans le monde de développement
 
 L’objectif `electric-energy-distribution-1` avait échoué après 119 packs rouges, à cause de l’ancien délai de fabrication. Le 13 septembre 2026, la réconciliation a validé les 1 568 opérations de cet objectif et relu le reçu natif de la fabrication interrompue. Au tick 5030536, le même personnage possède toujours les 119 packs, 250 points de vie et une file vide. Aucun produit ni recherche n’a été injecté pendant cette réconciliation. Les recherches de la foreuse électrique et de l’acier sont également conservées.

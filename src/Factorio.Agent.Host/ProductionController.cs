@@ -69,7 +69,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     state.Inventory.GetValueOrDefault(recipe.Ingredients[0].Name));
                 int batches = FurnaceBatchSizing.Limit(recipe, catalog.Items, Math.Min(supplied,
                     checked((int)Math.Ceiling((targetStock - state.Inventory.GetValueOrDefault(item)) / recipe.Products[0].Amount!.Value))));
-                await SmeltAsync(new("smelt", item, batches, recipe), state, catalog, map, engaged.Id);
+                await SmeltAsync(new("smelt", item, batches, recipe, StockTarget: targetStock), state, catalog, map, engaged.Id);
                 continue;
             }
             ProductionStep step = planner.Next(item, targetStock, state.Inventory, catalog, map,
@@ -147,6 +147,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
         async Task SmeltAsync(ProductionStep step, ProductionState state, ProductionCatalog catalog, SpatialSnapshot map, string? requiredId = null)
         {
             NativeRecipe recipe = step.Recipe!;
+            if (step.StockTarget is { } stockTarget && !SmeltingPreparationController.IsPreparing
+                && !StoredResourceExtractionController.IsPreparing && !FurnaceFleetController.IsRunning
+                && await new FurnaceFleetController(game, journal).TryRunAsync(recipe, step.Item, stockTarget, catalog, deadline.Token)) return;
             if (recipe.Ingredients.Count != 1 || recipe.Products.Count != 1)
                 throw new InvalidOperationException("Automatic furnace selection currently requires one solid ingredient and product.");
             var supported = catalog.Machines.Where(m => m.Value.Categories.ContainsKey(recipe.Category))

@@ -6,6 +6,26 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class FurnaceFuelPlannerTests
 {
     [Fact]
+    public void FleetReserveRoundsFuelForEachColdBurner()
+    {
+        var (recipe, furnace, geometry, catalog) = Setup();
+        var result = FurnaceFuelPlanner.ChooseFleet(recipe, furnace, geometry, Enumerable.Repeat(1, 8).ToArray(),
+            catalog, new Dictionary<string, long>(), new Dictionary<string, long>(), false);
+        Assert.Equal("coal", result.Fuel);
+        Assert.Equal(8, result.Reserve);
+    }
+
+    [Fact]
+    public void FleetCannotTurnOneStoredWoodIntoEightHarvestRequests()
+    {
+        var (recipe, furnace, geometry, catalog) = Setup();
+        var stock = new Dictionary<string, long> { ["wood"] = 1 };
+        var result = FurnaceFuelPlanner.ChooseFleet(recipe, furnace, geometry, [20, 20], catalog, stock, stock, false);
+        Assert.Equal("wood", result.Fuel);
+        Assert.Equal(1, result.Reserve);
+    }
+
+    [Fact]
     public void SteelBatchUsesNativeEnergyAndAnObtainableResourceFuel()
     {
         var (recipe, furnace, geometry, catalog) = Setup();

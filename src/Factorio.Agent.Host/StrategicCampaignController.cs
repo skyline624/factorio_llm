@@ -42,8 +42,24 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 PendingJournal = journalPath is null ? null : Path.GetFullPath(journalPath) }, token);
             StrategicGoalResult result;
             try { result = await runner.RunOnceAsync(token, memory.PreviousResult); }
-            catch (Exception) when (!token.IsCancellationRequested && journalPath is not null)
+            catch (Exception error) when (!token.IsCancellationRequested && journalPath is not null)
             {
+                string failureCode = error switch
+                {
+                    GameRpcException rpc => rpc.Error.Code,
+                    TimeoutException => "controller_budget_exhausted",
+                    InvalidDataException => "observation_inconsistent",
+                    InvalidOperationException => "execution_precondition_failed",
+                    IOException => "transport_or_storage_failed",
+                    _ => "execution_failed"
+                };
+                // Detailed diagnostics stay in the private journal; only the bounded failure category goes to the model.
+                await new ControllerJournal(journalPath).AppendAsync("strategic-execution-error", new
+                {
+                    exceptionType = error.GetType().FullName, failureCode,
+                    message = error.Message[..Math.Min(error.Message.Length, 2000)],
+                    stackTrace = error.StackTrace is { } stack ? stack[..Math.Min(stack.Length, 4000)] : null
+                }, token);
                 await new StrategicReconciliationController(game, memoryPath).ReconcileAsync(journalPath, token);
                 memory = JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(memoryPath, token), Protocol.Json)!;
                 observation = await ObserveAsync(token);
