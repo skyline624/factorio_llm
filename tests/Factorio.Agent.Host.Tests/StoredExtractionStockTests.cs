@@ -5,6 +5,19 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class StoredExtractionStockTests
 {
+    [Fact]
+    public void ElectricExtractionReadsStorageWithoutInventingABurnerInventory()
+    {
+        var snapshot = new FactorySnapshot("snapshot", new("w", "s", "a", 1, 1), 100, 200, Protocol.ToElement(new { }),
+            [new("store", "inventory", "chest", "chest", Protocol.ToElement(new
+            { items = new { ore = 9 }, capacityHints = new { ore = new { insertable = 91 } } }))]);
+        var stock = StoredExtractionStock.From(snapshot, "electric-drill", "chest", "ore", electric: true);
+        Assert.Equal(9, stock.Output);
+        Assert.Equal(91, stock.Insertable);
+        Assert.Equal(0, stock.StoredFuel);
+        Assert.Equal(0, stock.BurningJoules);
+    }
+
     [Theory]
     [InlineData(0, 0, 1000000, 0)]
     [InlineData(0, 0, 0, 50)]

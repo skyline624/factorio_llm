@@ -34,7 +34,7 @@ public sealed class ExtractionPlanner
         double seconds = connection.ResourceIds.Select(id => map.Entities.Single(e => e.Id == id))
             .Select(e => Positive(map.Prototypes[e.Name].MiningTime) / Positive(drill.MiningSpeed)
                 / catalog.Mining[e.Name].Single(p => p.Name == resourceItem && p.DeterministicItem).Amount!.Value).Max();
-        double energy = quantity * seconds * 60 * Positive(drill.EnergyPerTick) / Positive(drill.BurnerEffectivity);
+        double energy = quantity * seconds * 60 * Positive(drill.EnergyPerTick) / (drill.IsElectric ? 1 : Positive(drill.BurnerEffectivity));
         return double.IsFinite(energy) ? energy : throw new InvalidDataException("Native extraction work overflowed.");
         static double Positive(double? value) => value is { } n && n > 0 && double.IsFinite(n) ? n
             : throw new InvalidDataException("Missing native extraction time, speed, energy or efficiency.");

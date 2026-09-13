@@ -3,12 +3,12 @@ namespace Factorio.Agent.Core;
 /// <summary>One native photograph distinguishes empty fuel slots from a still-burning fuel item and checks storage capacity.</summary>
 public sealed record StoredExtractionStock(long Output, long Insertable, long StoredFuel, double BurningJoules)
 {
-    public static StoredExtractionStock From(FactorySnapshot snapshot, string drillId, string chestId, string item)
+    public static StoredExtractionStock From(FactorySnapshot snapshot, string drillId, string chestId, string item, bool electric = false)
     {
         var chest = snapshot.Records.Single(r => r.Kind == "inventory" && r.EntityId == chestId);
         long output = chest.Data.GetProperty("items").TryGetProperty(item, out var amount) ? amount.GetInt64() : 0;
         long capacity = chest.Data.GetProperty("capacityHints").GetProperty(item).GetProperty("insertable").GetInt64();
-        var burner = NativeBurnerStock.From(snapshot, drillId);
+        var burner = electric ? new NativeBurnerStock(0, 0) : NativeBurnerStock.From(snapshot, drillId);
         if (output < 0 || capacity < 0) throw new InvalidDataException("Invalid native extraction stock or capacity.");
         return new(output, capacity, burner.StoredFuel, burner.BurningJoules);
     }

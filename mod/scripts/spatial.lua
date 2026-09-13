@@ -61,6 +61,9 @@ local function prototype(value)
     result.supplyArea = value.get_supply_area_distance("normal")
     result.maxWireDistance = value.get_max_wire_distance("normal")
   end
+  if value.electric_energy_source_prototype then
+    result.energyPerTick = value.get_max_energy_usage("normal")
+  end
   if value.burner_prototype then
     result.fuelCategories = value.burner_prototype.fuel_categories
     result.burnerEffectivity = value.burner_prototype.effectivity

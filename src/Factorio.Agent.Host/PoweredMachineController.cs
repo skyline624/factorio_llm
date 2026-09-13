@@ -105,30 +105,62 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         RequireScope(owned.Scope, catalog);
         ObservedPower power = map.Entities.Single(e => e.Id == machineId).Power
             ?? throw new InvalidDataException("Missing power observation for the consumer.");
-        var generators = map.Entities.Where(e => map.Prototypes[e.Name].Type == "generator" && e.Power?.NetworkId == power.NetworkId).ToArray();
-        SpatialEntity? boiler = map.Entities.FirstOrDefault(e => map.Prototypes[e.Name].Type == "boiler" && owned.Entities.Any(o => o.Id == e.Id)
-            && generators.Any(g => e.FluidConnections?.Any(f => f.TargetEntityId == g.Id) == true || g.FluidConnections?.Any(f => f.TargetEntityId == e.Id) == true));
-        if (boiler is null)
+        SpatialEntity? boiler = FindBoiler(map);
+        bool remote = false;
+        if (boiler is null && (reserve || power.Energy <= 0))
         {
-            if (power.Energy > 0) return;
-            throw new InvalidOperationException("No observed maintainable steam supply for the unpowered consumer.");
+            var generatorNames = catalog.Items.Values.Where(i => i.PlaceEntityType == "generator").Select(i => i.PlaceEntity)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var generator in owned.Entities.Where(e => generatorNames.Contains(e.Name))
+                .OrderBy(e => e.Position.DistanceTo(machine.Position)).Take(16))
+            {
+                await controller.TravelAsync(generator.Position, 8, catalog, token);
+                remote = true;
+                map = await new SpatialClient(game).CaptureAsync(radius: 48, cancellationToken: token);
+                RequireScope(map.Scope, catalog);
+                owned = await production.ObserveAsync(token);
+                RequireScope(owned.Scope, catalog);
+                boiler = FindBoiler(map);
+                if (boiler is not null) break;
+            }
         }
-        if (power.NetworkId is { } networkId && await new FuelReserveController(game, journal)
-            .TryMaintainAsync(boiler.Id, networkId, map, catalog, controller, expectedEnergy, reserve, power.Energy <= 0, token)) return;
-        if (!reserve && power.Energy > 0) return;
-        var categories = map.Prototypes[boiler.Name].FuelCategories;
-        string fuel = catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.FuelCategory is { } category && categories?.ContainsKey(category) == true
-                && catalog.Mining.Values.Any(products => products.Any(m => m.Name == p.Key && m.DeterministicItem)))
-            .OrderByDescending(p => owned.Inventory.GetValueOrDefault(p.Key) > 0).ThenBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key).First();
-        int capacity = Math.Min(100, catalog.Items[fuel].StackSize);
-        int target = (int)Math.Clamp(Math.Ceiling(expectedEnergy * 1.25 / catalog.Items[fuel].FuelValue), Math.Min(2, capacity), capacity);
-        int missing = (int)Math.Max(0, target - owned.Entities.Single(e => e.Id == boiler.Id).Count("fuel", fuel));
-        if (missing == 0) return;
-        await new ProductionGoalExecutor(game, journal).RunAsync(fuel, missing, token);
-        await controller.ApproachEntityAsync(boiler.Id, boiler.Position, catalog, token);
-        var inserted = await controller.WorkAsync("insert", new { entityId = boiler.Id, inventory = "fuel", item = fuel, count = missing }, 600, token: token);
-        Completed(inserted);
-        await journal.AppendAsync("powered-machine-fuel", new { machineId, boilerId = boiler.Id, fuel, count = missing, expectedEnergy }, token);
+        await MaintainSupplyAsync();
+        if (remote) await controller.ApproachEntityAsync(machineId, machine.Position, catalog, token);
+
+        SpatialEntity? FindBoiler(SpatialSnapshot current)
+        {
+            if (power.NetworkId is null) return null;
+            var generators = current.Entities.Where(e => current.Prototypes[e.Name].Type == "generator"
+                && e.Power?.NetworkId == power.NetworkId && owned.Entities.Any(o => o.Id == e.Id)).ToArray();
+            return current.Entities.FirstOrDefault(e => current.Prototypes[e.Name].Type == "boiler" && owned.Entities.Any(o => o.Id == e.Id)
+                && generators.Any(g => e.FluidConnections?.Any(f => f.TargetEntityId == g.Id) == true
+                    || g.FluidConnections?.Any(f => f.TargetEntityId == e.Id) == true));
+        }
+
+        async Task MaintainSupplyAsync()
+        {
+            if (boiler is null)
+            {
+                if (power.Energy > 0) return;
+                throw new InvalidOperationException("No observed maintainable steam supply for the unpowered consumer.");
+            }
+            if (power.NetworkId is { } networkId && await new FuelReserveController(game, journal)
+                .TryMaintainAsync(boiler.Id, networkId, map, catalog, controller, expectedEnergy, reserve, power.Energy <= 0, token)) return;
+            if (!reserve && power.Energy > 0) return;
+            var categories = map.Prototypes[boiler.Name].FuelCategories;
+            string fuel = catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.FuelCategory is { } category && categories?.ContainsKey(category) == true
+                    && catalog.Mining.Values.Any(products => products.Any(m => m.Name == p.Key && m.DeterministicItem)))
+                .OrderByDescending(p => owned.Inventory.GetValueOrDefault(p.Key) > 0).ThenBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key).First();
+            int capacity = Math.Min(100, catalog.Items[fuel].StackSize);
+            int target = (int)Math.Clamp(Math.Ceiling(expectedEnergy * 1.25 / catalog.Items[fuel].FuelValue), Math.Min(2, capacity), capacity);
+            int missing = (int)Math.Max(0, target - owned.Entities.Single(e => e.Id == boiler.Id).Count("fuel", fuel));
+            if (missing == 0) return;
+            await new ProductionGoalExecutor(game, journal).RunAsync(fuel, missing, token);
+            await controller.ApproachEntityAsync(boiler.Id, boiler.Position, catalog, token);
+            var inserted = await controller.WorkAsync("insert", new { entityId = boiler.Id, inventory = "fuel", item = fuel, count = missing }, 600, token: token);
+            Completed(inserted);
+            await journal.AppendAsync("powered-machine-fuel", new { machineId, boilerId = boiler.Id, fuel, count = missing, expectedEnergy }, token);
+        }
     }
 
     private static void RequireScope(ActorScope scope, ProductionCatalog catalog)

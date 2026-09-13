@@ -42,6 +42,12 @@ L’objectif `electric-energy-distribution-1` avait échoué après 119 packs ro
 
 Le modèle a ensuite choisi un objectif de 200 packs verts à partir de stocks observés. Cette décision et le démarrage de sa production sont constatés ; son achèvement n’est pas établi par cette preuve. Le monde reste une partie de développement avec corrections, à vitesse de simulation 4, sans fusée normale ni campagne qualifiée.
 
+### Lot scientifique terminé après reprise
+
+Une reprise ultérieure a réconcilié 1 475 opérations de la tentative interrompue, sans les rejouer. Le même modèle a demandé à nouveau un stock de 200 packs verts. Cette exécution a porté le stock de zéro à 200 entre les ticks 5488632 et 5719656, en réutilisant notamment les 135 circuits conservés et les installations existantes. Son journal contient 1 195 opérations natives et aucune opération de minage manuel. Les dernières fabrications des bras robotisés et des packs sont effectuées par le personnage ; cette preuve ne signifie donc pas une automatisation intégrale de l'assemblage.
+
+La lecture indépendante au tick 5719828 confirme les 200 packs, une file de fabrication vide et 250 points de vie. Le modèle a ensuite choisi la recherche `stone-wall` pour préparer la défense. Cette nouvelle tentative a été interrompue pour sauvegarder le monde et effectuer des essais de développement distincts ; son achèvement n'est pas établi. Les ressources du lot scientifique n'ont pas été injectées, mais le monde conserve son historique d'assistance de développement et ne constitue pas une campagne finale qualifiée.
+
 ### Limites
 
 Le journal est borné à 64 Mio pour cette lecture. Un fichier tronqué n’est pas réparé automatiquement. La réconciliation exige une incarnation inchangée ; elle ne remplace pas la récupération après mort. Un arrêt natif non confirmé ou une opération encore active restent des motifs de blocage. Les tests couvrent les reçus perdus, contradictoires et inconnus, les journaux remplacés ou tronqués, les changements de portée et la poursuite après un échec terminal connu. La preuve native ci-dessus concerne une reprise headless ; elle ne qualifie pas toutes les pannes réseau ni une campagne complète.

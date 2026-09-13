@@ -34,6 +34,7 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
         map = await MapAsync();
         var drill = map.Entities.Single(e => e.Id == plan.ExistingDrillId);
         var chest = map.Entities.Single(e => e.Id == plan.Connection.ReceiverId);
+        await SupplyPowerAsync(reserve: true);
         await journal.AppendAsync("stored-extraction-connection", new { item, drillId = drill.Id, chestId = chest.Id, plan, map.CollectedTick }, token);
 
         for (int iteration = 0; iteration < 1800; iteration++)
@@ -56,7 +57,8 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
             }
             var stock = await new FactorySnapshotClient(game).CaptureAsync([item], cancellationToken: token);
             RequireScope(stock.Scope);
-            var supplied = StoredExtractionStock.From(stock, drill.Id, chest.Id, item);
+            bool electric = map.Prototypes[drill.Name].IsElectric;
+            var supplied = StoredExtractionStock.From(stock, drill.Id, chest.Id, item, electric);
             if (supplied.Output > 0) continue;
             if (supplied.Insertable == 0) throw new InvalidOperationException("Native storage capacity blocks extraction; reconcile its bar, filters or contents.");
             if (iteration % 10 == 0 && await new ExtractionRecoveryController(game, journal).TryRecoverAsync(drill.Id, catalog, controller, token))
@@ -65,13 +67,45 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
                 map = await MapAsync();
                 drill = map.Entities.Single(e => e.Id == plan.ExistingDrillId);
                 chest = map.Entities.Single(e => e.Id == plan.Connection.ReceiverId);
+                await SupplyPowerAsync(reserve: true);
                 await journal.AppendAsync("stored-extraction-connection", new { item, drillId = drill.Id, chestId = chest.Id, plan, map.CollectedTick }, token);
                 continue;
             }
-            if (supplied.StoredFuel == 0 && supplied.BurningJoules == 0) await FuelAsync(state);
+            if (electric)
+            {
+                if (iteration % 10 == 0) await SupplyPowerAsync(reserve: false);
+            }
+            else if (supplied.StoredFuel == 0 && supplied.BurningJoules == 0) await FuelAsync(state);
             await WorkAsync("wait", new { ticks = 60 });
         }
         throw new TimeoutException("Stored extraction exhausted its observation budget; reconcile the preserved installation.");
+
+        async Task SupplyPowerAsync(bool reserve)
+        {
+            if (!map.Prototypes[drill.Name].IsElectric) return;
+            bool previous = Preparing.Value; Preparing.Value = true;
+            try
+            {
+                await new PowerGridController(game, journal).ConnectAsync(drill.Id, catalog, controller, token);
+            }
+            finally { Preparing.Value = previous; }
+            map = await MapAsync();
+            var state = await ObserveAsync();
+            bool selfFuel = catalog.Items[item].FuelValue > 0;
+            double energy = ExtractionPlanner.WorkEnergy(plan.Connection, map, plan.Equipment.DrillItem, catalog, item,
+                Math.Max(1, targetStock - state.Inventory.GetValueOrDefault(item)));
+            // Other resources obtain boiler coal through normal machine-priority production.
+            // A cold coal extractor needs only a starter load, never a recursively ordered full coal reserve.
+            if (selfFuel) Preparing.Value = true;
+            try
+            {
+                await new PoweredMachineController(game, journal).MaintainFuelAsync(drill.Id, selfFuel ? 0 : energy,
+                    catalog, controller, reserve && !selfFuel, token);
+            }
+            finally { Preparing.Value = previous; }
+            await controller.ApproachEntityAsync(drill.Id, drill.Position, catalog, token);
+            map = await MapAsync();
+        }
 
         async Task<ResourceExtractionPlan> PrepareAsync()
         {

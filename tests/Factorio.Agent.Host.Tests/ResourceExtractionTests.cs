@@ -72,6 +72,31 @@ public sealed class ResourceExtractionTests
     }
 
     [Fact]
+    public void ElectricExtractionEnergyUsesNativeTimeAndPowerWithoutABurnerEfficiency()
+    {
+        var (map, catalog) = Setup();
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            { ["drill"] = map.Prototypes["drill"] with { IsElectric = true, FuelCategories = null,
+                MiningSpeed = .5, EnergyPerTick = 1500, BurnerEffectivity = null },
+                ["resource"] = map.Prototypes["resource"] with { MiningTime = 1 } } };
+        var plan = new StoredResourceExtractionPlanner().Find("ore", catalog, map, new Dictionary<string, long>(),
+            new Dictionary<string, KnownProductionMachine>())!;
+        Assert.Equal(9000000, ExtractionPlanner.WorkEnergy(plan.Connection, map, "drill-item", catalog, "ore", 50));
+    }
+
+    [Fact]
+    public void NewSolidExtractionCanChooseAnUnlockedElectricDrill()
+    {
+        var (map, catalog) = Setup();
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            { ["drill"] = map.Prototypes["drill"] with { IsElectric = true, FuelCategories = null } } };
+        var plan = new StoredResourceExtractionPlanner().Find("ore", catalog, map, new Dictionary<string, long>(),
+            new Dictionary<string, KnownProductionMachine>());
+        Assert.NotNull(plan);
+        Assert.Equal("drill-item", plan.Equipment.DrillItem);
+    }
+
+    [Fact]
     public void InstalledConnectionIsReusedWithoutConstructionOrCarriedEquipment()
     {
         var (map, catalog) = Setup();

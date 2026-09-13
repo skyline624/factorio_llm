@@ -27,8 +27,11 @@ public sealed class StoredResourceExtractionPlanner
     {
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Resource extraction observations span different scopes.");
         var options = Options(catalog, inventory, item).Where(o => map.Items.TryGetValue(o.DrillItem, out var drill)
-            && map.Prototypes[drill.EntityName].FuelCategories is { Count: > 0 }
-            && map.Items.ContainsKey(o.ChestItem)).ToArray();
+            && (map.Prototypes[drill.EntityName].FuelCategories is { Count: > 0 }
+                || map.Prototypes[drill.EntityName] is { IsElectric: true, MiningOutput: not null })
+            && map.Items.ContainsKey(o.ChestItem))
+            .OrderByDescending(o => map.Prototypes[map.Items[o.DrillItem].EntityName].IsElectric)
+            .ThenByDescending(o => map.Prototypes[map.Items[o.DrillItem].EntityName].MiningSpeed).ToArray();
         var receivers = map.Entities.Where(e => map.Prototypes[e.Name].Type == "container" && owned.TryGetValue(e.Id, out var known)
             && known.Output is not null && known.Output.All(p => p.Value == 0 || p.Key == item)).ToArray();
         var planner = new ExtractionPlanner();
@@ -41,7 +44,9 @@ public sealed class StoredResourceExtractionPlanner
             if (allowConstruction) candidates.AddRange(planner.Find(new(map), equipment.DrillItem, item, catalog, receivers)
                 .Select(p => new ResourceExtractionPlan(equipment, p)));
         }
-        if (candidates.OrderByDescending(p => p.ExistingDrillId is not null).ThenBy(p => p.Connection.Drill.Score)
+        if (candidates.OrderByDescending(p => p.ExistingDrillId is not null)
+                .ThenByDescending(p => map.Prototypes[map.Items[p.Equipment.DrillItem].EntityName].IsElectric)
+                .ThenBy(p => p.Connection.Drill.Score)
                 .ThenBy(p => p.Connection.ReceiverId, StringComparer.Ordinal).FirstOrDefault() is { } existing) return existing;
         if (!allowConstruction) return null;
         foreach (var equipment in options)
