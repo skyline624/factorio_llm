@@ -9,10 +9,10 @@ public interface IStrategicGoalRunner
 }
 
 public sealed record StrategicCampaignResult(bool RocketLaunched, int GoalsExecuted, long EndTick, string StopReason = "goal-budget");
-public sealed record StrategicMemory(int Version, ActorScope Scope, long Tick, bool Pending, string? PreviousResult);
+public sealed record StrategicMemory(int Version, ActorScope Scope, long Tick, bool Pending, string? PreviousResult, string? PendingJournal = null);
 
 /// <summary>Sequential strategic goals under the caller's actor lease. Unknown outcomes are never retried.</summary>
-public sealed class StrategicCampaignController(IGameClient game, IStrategicGoalRunner runner, string memoryPath)
+public sealed class StrategicCampaignController(IGameClient game, IStrategicGoalRunner runner, string memoryPath, string? journalPath = null)
 {
     public async Task<StrategicCampaignResult> RunAsync(int maxGoals, CancellationToken token = default)
     {
@@ -23,6 +23,12 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 ?? throw new InvalidDataException("Empty strategic memory.")
             : new(1, observation.Scope, observation.Tick, false, null);
         Validate(memory, observation);
+        if (memory.Pending && memory.PendingJournal is { } pendingJournal)
+        {
+            await new StrategicReconciliationController(game, memoryPath).ReconcileAsync(pendingJournal, token);
+            memory = JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(memoryPath, token), Protocol.Json)!;
+            observation = await ObserveAsync(token);
+        }
         if (memory.Pending) throw new InvalidDataException("An earlier strategic execution has no verified terminal outcome. Reconcile its journal and native effects before resuming.");
         string? lastGoal = null;
         int repeated = 0;
@@ -32,8 +38,17 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             Validate(memory, observation);
             if (observation.Rockets > 0) return new(true, index, observation.Tick, "rocket-observed");
             // Persist uncertainty before any goal can dispatch native actions. Exceptions leave this marker intact.
-            await LocalJson.WriteAsync(memoryPath, memory with { Scope = observation.Scope, Tick = observation.Tick, Pending = true }, token);
-            StrategicGoalResult result = await runner.RunOnceAsync(token, memory.PreviousResult);
+            await LocalJson.WriteAsync(memoryPath, memory with { Scope = observation.Scope, Tick = observation.Tick, Pending = true,
+                PendingJournal = journalPath is null ? null : Path.GetFullPath(journalPath) }, token);
+            StrategicGoalResult result;
+            try { result = await runner.RunOnceAsync(token, memory.PreviousResult); }
+            catch (Exception) when (!token.IsCancellationRequested && journalPath is not null)
+            {
+                await new StrategicReconciliationController(game, memoryPath).ReconcileAsync(journalPath, token);
+                memory = JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(memoryPath, token), Protocol.Json)!;
+                observation = await ObserveAsync(token);
+                continue;
+            }
             var after = await ObserveAsync(token);
             Validate(memory with { Tick = observation.Tick }, after);
             if (after.Scope != observation.Scope) throw new InvalidDataException("Actor scope changed during strategic execution; reconcile partial effects.");
@@ -73,7 +88,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             throw new InvalidDataException("The strategic actor is unavailable or under manual control; reconcile before continuing.");
         if (data.TryGetProperty("operation", out var operation) && operation.ValueKind == JsonValueKind.Object
             && operation.TryGetProperty("status", out var status)
-            && status.GetString() is not ("completed" or "failed" or "cancelled" or "rejected"))
+            && status.GetString() is not ("completed" or "partial" or "failed" or "cancelled" or "rejected"))
             throw new InvalidDataException("A native operation is still active or unknown; reconcile before starting another strategic goal.");
         return new(data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)
             ?? throw new InvalidDataException("Missing strategic actor scope."), response.Tick,

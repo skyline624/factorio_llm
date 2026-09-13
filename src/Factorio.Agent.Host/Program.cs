@@ -22,6 +22,8 @@ try
           produce --session FILE --item NAME --quantity N
           automate-smelting --session FILE --item NAME --quantity N
           run-goal --session FILE
+          run-campaign --session FILE [--max-goals N]
+          reconcile-campaign --session FILE --journal FILE
           steam-power --session FILE [--plan FILE]
           research-plan --session FILE --technology NAME
           prepare-research --session FILE --technology NAME
@@ -260,6 +262,15 @@ try
             Print(new { result, journalPath });
             break;
         }
+        case "reconcile-campaign":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            Print(await new StrategicReconciliationController(game, Path.Combine(session.Directory, "strategic-memory.json"))
+                .ReconcileAsync(Required("journal"), shutdown.Token));
+            break;
+        }
         case "run-goal":
         case "run-campaign":
         {
@@ -274,7 +285,7 @@ try
             {
                 string memoryPath = Path.Combine(session.Directory, "strategic-memory.json");
                 int maxGoals = int.Parse(Option("max-goals") ?? "10", CultureInfo.InvariantCulture);
-                var result = await new StrategicCampaignController(game, controller, memoryPath)
+                var result = await new StrategicCampaignController(game, controller, memoryPath, journalPath)
                     .RunAsync(maxGoals, shutdown.Token);
                 Print(new { result, journalPath, memoryPath });
             }

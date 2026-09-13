@@ -101,6 +101,8 @@ function M.observe(args)
   result.agent.ammoRounds = U.ammo(c.get_inventory(defines.inventory.character_ammo))
   result.agent.weapon = Weapons.observe(c)
   result.agent.craftingQueue = c.crafting_queue
+  result.agent.craftingQueueSize = c.crafting_queue_size
+  result.agent.shooting = c.shooting_state.state ~= defines.shooting.not_shooting
   result.agent.craftingProgress, result.agent.miningProgress = c.crafting_queue_progress, c.character_mining_progress
   result.agent.walking, result.agent.mining = c.walking_state.walking, c.mining_state.mining
   result.agent.reachDistance, result.agent.buildDistance = c.reach_distance, c.build_distance
