@@ -7,8 +7,15 @@ namespace Factorio.Agent.Host;
 /// <summary>Early solid production from observed resources and native recipes, with no injected stock.</summary>
 public sealed class ProductionController(IGameClient game, IControllerJournal journal)
 {
-    public async Task<ProductionResult> ProduceAsync(string item, int targetStock, CancellationToken token = default,
-        IReadOnlySet<string>? reservedEntityIds = null)
+    public Task<ProductionResult> ProduceAsync(string item, int targetStock, CancellationToken token = default,
+        IReadOnlySet<string>? reservedEntityIds = null) => RunAsync(item, targetStock, token, reservedEntityIds, existingStockOnly: false);
+
+    /// <summary>Collects existing outputs only; FinalStock may be below the target if a source was depleted.</summary>
+    public Task<ProductionResult> CollectAvailableAsync(string item, int targetStock, CancellationToken token = default,
+        IReadOnlySet<string>? reservedEntityIds = null) => RunAsync(item, targetStock, token, reservedEntityIds, existingStockOnly: true);
+
+    private async Task<ProductionResult> RunAsync(string item, int targetStock, CancellationToken token,
+        IReadOnlySet<string>? reservedEntityIds, bool existingStockOnly)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(item);
         if (targetStock is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(targetStock));
@@ -26,11 +33,12 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             ProductionState state = await ObserveAsync(deadline.Token);
             if (state.Scope != initial.Scope) throw new InvalidOperationException("Production scope changed; reconcile death or pilot transition before resuming.");
             if (state.ControlMode != "ai") throw new InvalidOperationException("The pilot has manual control.");
-            if (state.Inventory.GetValueOrDefault(item) >= targetStock)
+            ProductionEntity? ready = state.AvailableOutput(item, reservedEntityIds);
+            if (state.Inventory.GetValueOrDefault(item) >= targetStock || (existingStockOnly && ready is null))
             {
                 var result = new ProductionResult(item, targetStock, initial.Tick, state.Tick,
                     initial.Inventory.GetValueOrDefault(item), state.Inventory.GetValueOrDefault(item), stepNumber, receipts.AsReadOnly());
-                await journal.AppendAsync("production-result", result, deadline.Token);
+                await journal.AppendAsync(existingStockOnly ? "stock-collection-result" : "production-result", result, deadline.Token);
                 return result;
             }
             ProductionCatalog catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), deadline.Token));
@@ -39,7 +47,6 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             if (drillItems.Length > 16) throw new InvalidOperationException("Mining drill geometry exceeds the snapshot budget.");
             SpatialSnapshot map = await spatial.CaptureAsync(drillItems, radius: 48, cancellationToken: deadline.Token);
             if (catalog.Scope != state.Scope || map.Scope != state.Scope) throw new InvalidDataException("Production observations span different actor scopes.");
-            ProductionEntity? ready = state.AvailableOutput(item, reservedEntityIds);
             if (ready is not null)
             {
                 await TravelAsync(ready.Position, 3, catalog);

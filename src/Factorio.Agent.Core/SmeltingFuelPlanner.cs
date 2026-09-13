@@ -1,7 +1,7 @@
 namespace Factorio.Agent.Core;
 
 public sealed record SmeltingFuelPlan(string Fuel, int DrillReserve, int FurnaceReserve,
-    double DrillWorkJoules, double FurnaceWorkJoules, double ReserveMargin)
+    double DrillWorkJoules, double FurnaceWorkJoules, double ReserveMargin, bool CanProduce = true)
 {
     public int ProcurementTarget(bool refuellingDrill, long carried, long drillStock, long furnaceStock, bool includeDrillReserve = true)
     {
@@ -16,7 +16,8 @@ public sealed record SmeltingFuelPlan(string Fuel, int DrillReserve, int Furnace
 public sealed class SmeltingFuelPlanner
 {
     public SmeltingFuelPlan Choose(SmeltingPlan plan, SpatialSnapshot map, ProductionCatalog catalog, int missingOutput,
-        IReadOnlyDictionary<string, long> carried, IReadOnlyDictionary<string, long> available)
+        IReadOnlyDictionary<string, long> carried, IReadOnlyDictionary<string, long> available,
+        bool allowManualBootstrap = false, bool includeDrillReserve = true)
     {
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Smelting fuel observations span different scopes.");
         if (missingOutput < 1) throw new ArgumentOutOfRangeException(nameof(missingOutput));
@@ -31,10 +32,12 @@ public sealed class SmeltingFuelPlanner
         if (!double.IsFinite(drillEnergy + furnaceEnergy)) throw new InvalidDataException("Invalid native smelting fuel estimate.");
         const double margin = 1.25;
         return catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.StackSize > 0 && p.Value.FuelCategory is { } category
-                && (drill.IsElectric || drill.FuelCategories?.ContainsKey(category) == true) && nativeFurnace.FuelCategories.ContainsKey(category)
-                && catalog.Mining.Values.Any(products => products.Any(m => m.Name == p.Key && m.DeterministicItem)))
-            .Select(p => new SmeltingFuelPlan(p.Key, drill.IsElectric ? 0 : Reserve(drillEnergy, p.Value),
-                Reserve(furnaceEnergy, p.Value), drillEnergy, furnaceEnergy, margin))
+                && (drill.IsElectric || drill.FuelCategories?.ContainsKey(category) == true) && nativeFurnace.FuelCategories.ContainsKey(category))
+            .Select(p => new SmeltingFuelPlan(p.Key, drill.IsElectric || !includeDrillReserve ? 0 : Reserve(drillEnergy, p.Value),
+                Reserve(furnaceEnergy, p.Value), drillEnergy, furnaceEnergy, margin,
+                SolidFuelSources.CanExtract(catalog, p.Key, allowManualBootstrap)))
+            .Where(p => p.CanProduce || Math.Max(carried.GetValueOrDefault(p.Fuel), available.GetValueOrDefault(p.Fuel))
+                >= p.DrillReserve + p.FurnaceReserve)
             .OrderByDescending(p => available.GetValueOrDefault(p.Fuel) >= p.DrillReserve + p.FurnaceReserve)
             .ThenByDescending(p => available.GetValueOrDefault(p.Fuel) > 0)
             .ThenByDescending(p => carried.GetValueOrDefault(p.Fuel) > 0)

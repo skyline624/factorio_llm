@@ -51,3 +51,9 @@ La lecture indépendante au tick 5719828 confirme les 200 packs, une file de fab
 ### Limites
 
 Le journal est borné à 64 Mio pour cette lecture. Un fichier tronqué n’est pas réparé automatiquement. La réconciliation exige une incarnation inchangée ; elle ne remplace pas la récupération après mort. Un arrêt natif non confirmé ou une opération encore active restent des motifs de blocage. Les tests couvrent les reçus perdus, contradictoires et inconnus, les journaux remplacés ou tronqués, les changements de portée et la poursuite après un échec terminal connu. La preuve native ci-dessus concerne une reprise headless ; elle ne qualifie pas toutes les pannes réseau ni une campagne complète.
+
+## Distribution électrique terminée dans le monde normal de développement
+
+Le 13 septembre 2026, la reprise a réconcilié 902 opérations de la tentative interrompue, puis le modèle `glm-5.3-flash:cloud` a choisi de terminer `electric-energy-distribution-1`. Le laboratoire 647 a consommé 83 packs rouges et 83 packs verts entre les ticks 5851821 et 5999483 ; 1 170 observations le constatent alimenté. Le reçu stratégique confirme la recherche au tick 5999511. Aucune opération de minage manuel n’est enregistrée pendant cette reprise scientifique. Les packs déjà consommés avant interruption et les stocks restants ont été conservés dans le même monde.
+
+Le modèle a ensuite demandé 50 plaques d’acier. Cet objectif a été interrompu et sauvegardé pour changer d’environnement de test ; il n’est pas déclaré terminé. Le monde reste une partie de développement ayant connu les interventions documentées, avec zéro fusée et zéro campagne finale qualifiée.

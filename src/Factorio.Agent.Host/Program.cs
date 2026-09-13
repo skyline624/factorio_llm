@@ -33,6 +33,7 @@ try
           verify-furnace-fuel --session FILE
           verify-furnace-fleet --session FILE [--item steel-plate|stone-brick]
           verify-electric-extraction --session FILE [--item iron-ore|iron-plate]
+          verify-smelting-fuel --session FILE
           assemble --session FILE --item NAME --quantity N
           produce-fluid --session FILE --fluid NAME --quantity N
           connect-fluid --session FILE --source ID --target ID --fluid NAME
@@ -145,6 +146,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new ElectricExtractionQualification(session, Option("item") ?? "iron-ore").RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-smelting-fuel":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new SmeltingFuelQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-furnace-fuel":

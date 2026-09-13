@@ -179,3 +179,7 @@ Les observations et reçus natifs confirment les stocks, les déposes, les capac
 ## Foreuse électrique alimentant directement un four
 
 Le 13 septembre 2026, la variante préparée produit 50 plaques en headless puis 50 avec le même avatar et un pilote connecté, sans minage manuel. Chaque essai construit treize liaisons électriques et ravitaille la chaudière distante. Les bilans natifs ferment exactement les minerais extraits, consommés, chargés et portés, après un diagnostic explicite de vidage du tampon interne non observable. Les [preuves de fonte électrique](electric-extraction.md) distinguent cette préparation, les échecs antérieurs et les deux réussites. Les 499 tests hors ligne passent, avec un test cloud optionnel ignoré ; aucune campagne finale n’est qualifiée.
+
+## Combustible mécanique malgré un stock de bois insuffisant
+
+Le 13 septembre 2026, le chemin direct foreuse–four passe un scénario préparé avec un bois porté et un charbon stocké. En headless puis avec le même personnage et un pilote connecté, il produit 50 plaques, extrait 21 charbons et en consomme 13 ; neuf restent dans les stocks. Le bois demeure intact et les journaux contiennent zéro minage manuel. Une collecte limitée aux stocks retourne un bois sur cinq demandés, sans fabriquer ou récolter le manque. Les [preuves et limites](mining-priority.md) décrivent les préparations et les coûts. Les 507 tests hors ligne passent, avec un test cloud optionnel ignoré.

@@ -6,6 +6,62 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class SmeltingFuelPlannerTests
 {
     [Fact]
+    public void PartialWoodStockDoesNotAuthorizeHarvestingTheRestOfTheReserve()
+    {
+        var (map, catalog, plan) = Setup();
+        var wood = new Dictionary<string, long> { ["wood"] = 1 };
+        var fuel = new SmeltingFuelPlanner().Choose(plan, map, catalog, 25, wood, wood);
+        Assert.Equal("coal", fuel.Fuel);
+    }
+
+    [Fact]
+    public void TreesAloneAreNotAnOrdinaryFuelSupply()
+    {
+        var (map, catalog, plan) = Setup();
+        catalog = catalog with { Mining = catalog.Mining.Where(p => p.Key != "coal-ore")
+            .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal) };
+        Assert.Throws<InvalidOperationException>(() => new SmeltingFuelPlanner().Choose(plan, map, catalog, 25,
+            new Dictionary<string, long>(), new Dictionary<string, long>()));
+        Assert.True(new SmeltingFuelPlanner().Choose(plan, map, catalog, 25,
+            new Dictionary<string, long>(), new Dictionary<string, long>(), allowManualBootstrap: true).CanProduce);
+    }
+
+    [Fact]
+    public void LoadedOreAllowsStoredWoodToSupplyOnlyTheFurnace()
+    {
+        var (map, catalog, plan) = Setup();
+        var wood = new Dictionary<string, long> { ["wood"] = 5 };
+        var fuel = new SmeltingFuelPlanner().Choose(plan, map, catalog, 25, wood, wood, includeDrillReserve: false);
+        Assert.Equal("wood", fuel.Fuel);
+        Assert.False(fuel.CanProduce);
+        Assert.Equal(0, fuel.DrillReserve);
+        Assert.Equal(5, fuel.FurnaceReserve);
+    }
+
+    [Fact]
+    public void DepletedWoodIsReplacedWithMechanicalFuelOnReassessment()
+    {
+        var (map, catalog, plan) = Setup();
+        var planner = new SmeltingFuelPlanner();
+        var wood = new Dictionary<string, long> { ["wood"] = 30 };
+        Assert.False(planner.Choose(plan, map, catalog, 25, wood, wood).CanProduce);
+        var next = planner.Choose(plan, map, catalog, 15, new Dictionary<string, long>(), new Dictionary<string, long>());
+        Assert.Equal("coal", next.Fuel);
+        Assert.True(next.CanProduce);
+    }
+
+    [Fact]
+    public void StoredManufacturedFuelDoesNotNeedAnInventedMiningSource()
+    {
+        var (map, catalog, plan) = Setup();
+        catalog = catalog with { Items = new Dictionary<string, NativeItem>(catalog.Items)
+            { ["solid-fuel"] = new(12000000, 50, "chemical") } };
+        var stored = new Dictionary<string, long> { ["solid-fuel"] = 20 };
+        var fuel = new SmeltingFuelPlanner().Choose(plan, map, catalog, 25, stored, stored);
+        Assert.Equal("solid-fuel", fuel.Fuel);
+    }
+
+    [Fact]
     public void SufficientLoadedOreExcludesTheDrillFromFuelProcurement()
     {
         var plan = new SmeltingFuelPlan("wood", 10, 5, 15000000, 7200000, 1.25);
@@ -85,7 +141,8 @@ public sealed class SmeltingFuelPlannerTests
         catalog = catalog with { Items = new Dictionary<string, NativeItem>(catalog.Items)
                 { ["wood"] = new(2000000, 100, "chemical"), ["coal"] = new(4000000, 50, "chemical") },
             Mining = new Dictionary<string, NativeMaterial[]>(catalog.Mining)
-                { ["tree"] = [new("wood", "item", 4)], ["coal-ore"] = [new("coal", "item", 1)] } };
+                { ["tree"] = [new("wood", "item", 4)], ["coal-ore"] = [new("coal", "item", 1)] },
+            MiningSourceTypes = new Dictionary<string, string> { ["tree"] = "tree", ["coal-ore"] = "resource" } };
         var plan = new SmeltingPlanner().Find("plate", catalog, map, new Dictionary<string, long>(),
             new Dictionary<string, KnownProductionMachine> { ["receiver"] = new("receiver", "furnace", null), ["installed"] = new("installed", "drill", null) })!;
         return (map, catalog, plan);

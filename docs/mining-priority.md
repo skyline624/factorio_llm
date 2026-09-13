@@ -38,6 +38,18 @@ Le chemin général des fours utilise désormais le même approvisionnement que 
 
 La commande `verify-furnace-fuel` exige une session explicitement préparée. Le test headless du 13 septembre 2026 utilise un four froid, une foreuse, un coffre contenant un charbon et 25 plaques de fer. Entre les ticks 146518 et 152464, le moteur constate cinq plaques d'acier produites, 25 plaques de fer consommées, dix charbons extraits et trois consommés. Le stock final de charbon est huit : `1 + 10 - 3`. Le journal ne contient aucune opération de minage manuel. Ces objets préparés qualifient ce chemin de production, sans constituer une progression de campagne.
 
+## Réévaluation du combustible et collecte des stocks existants
+
+Le chemin direct foreuse–four réévalue maintenant son combustible lorsque l'un des brûleurs est vide, à partir du stock actuel et du travail restant. Un petit stock de bois ne déclenche plus la récolte du complément : hors amorçage explicite, un combustible nouvellement extrait doit provenir d'un gisement solide identifié par le catalogue natif. Le bois ou un combustible fabriqué déjà stocké reste utilisable s'il couvre la réserve prévue. Si les minerais chargés suffisent au lot, seule la réserve du four est considérée.
+
+La collecte d'un combustible uniquement disponible en stock possède un chemin distinct qui peut retourner une quantité inférieure à la demande. Elle ne récolte ni ne fabrique le manque si la source a été vidée entre l'observation et l'arrivée. Le ravitaillement suivant reprend le choix depuis les stocks réellement observés. La même classification des sources solides est partagée avec le calcul des réserves des fours ordinaires.
+
+`verify-smelting-fuel --session FILE` prépare explicitement deux connexions foreuse–coffre/four, un charbon stocké, un bois porté et un arbre accessible. Le contrôleur doit produire 50 plaques, obtenir son charbon par extraction mécanique et constater les coûts natifs sans minage manuel. La commande refuse une session normale avant toute modification.
+
+L'essai headless du 13 septembre 2026 passe entre les ticks 876325 et 889717 : 50 plaques, 51 minerais consommés dont un engagé, 21 charbons extraits et 13 consommés. Les neuf charbons restants ferment le bilan `1 + 21 - 13 = 9`. Le bois porté reste intact ; aucune opération de minage manuel n'est enregistrée. Une demande préalable de collecte de cinq bois s'arrête honnêtement à l'unique bois existant, sans opération de fabrication ou de récolte. Les 507 tests hors ligne passent, avec un test cloud optionnel ignoré.
+
+Le scénario passe également avec un joueur connecté entre les ticks 909701 et 923364 : mêmes quantités, même absence de minage manuel et même personnage natif 17. La capture native inspectée montre le coffre de charbon, les deux foreuses et le four en fonctionnement. Le client unique a été lancé réduit, puis fermé avant la sauvegarde et l'arrêt de la fixture. Ces preuves qualifient le composant sur des équipements préparés ; elles ne constituent pas une campagne finale.
+
 ## Limites restantes
 
 La [répartition de la fusion entre plusieurs fours](furnace-fleet.md) complète cette priorité : construction calculée en C#, approvisionnements regroupés et prise en compte des cuissons déjà engagées. Les essais acier et briques vérifient les coûts natifs et l'absence de minage manuel sur des lots préparés.

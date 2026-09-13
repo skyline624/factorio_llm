@@ -69,12 +69,7 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             receiver.Bounds,
             status = "geometry-verified-awaiting-production"
         }, token);
-        var availableFuel = new Dictionary<string, long>(initial.Inventory, StringComparer.Ordinal);
-        foreach (string fuel in catalog.Items.Where(p => p.Value.FuelValue > 0).Select(p => p.Key))
-            availableFuel[fuel] = checked(availableFuel.GetValueOrDefault(fuel) + initial.Entities
-                .Where(e => !ProductionReservations.Current.Contains(e.Id)).Sum(e => e.Count("output", fuel)));
-        var fuelPlan = new SmeltingFuelPlanner().Choose(plan, map, catalog,
-            checked((int)(targetStock - initial.Inventory.GetValueOrDefault(item))), initial.Inventory, availableFuel);
+        var fuelPlan = ChooseFuel(initial, includeDrillReserve: true);
         await journal.AppendAsync("smelting-fuel-plan", new { fuelPlan, map.CollectedTick,
             interpretation = "Conservative work estimate and stack-bounded reserve; completion still requires native output." }, token);
         bool electric = map.Prototypes[drill.Name].IsElectric;
@@ -129,8 +124,8 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             }
             if (needsExtraction && electric && iteration % 10 == 0)
                 await EnsurePowerAsync(0, reserve: false);
-            else if (needsExtraction && !electric) await FuelAsync(drillId, drill.Position, fuelPlan.DrillReserve);
-            await FuelAsync(receiver.Id, receiver.Position, fuelPlan.FurnaceReserve, needsExtraction);
+            else if (needsExtraction && !electric) await FuelAsync(drillId, drill.Position);
+            await FuelAsync(receiver.Id, receiver.Position, needsExtraction);
             await WorkAsync("wait", new { ticks = 60 });
         }
         throw new TimeoutException("Automated smelting exhausted its observation budget; inspect the installed machines.");
@@ -160,7 +155,18 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             return receipt;
         }
 
-        async Task FuelAsync(string entityId, MapPosition position, int reserve, bool includeDrillReserve = true)
+        SmeltingFuelPlan ChooseFuel(ProductionState state, bool includeDrillReserve)
+        {
+            var available = new Dictionary<string, long>(state.Inventory, StringComparer.Ordinal);
+            foreach (string fuel in catalog.Items.Where(p => p.Value.FuelValue > 0).Select(p => p.Key))
+                available[fuel] = checked(available.GetValueOrDefault(fuel) + state.Entities
+                    .Where(e => !ProductionReservations.Current.Contains(e.Id)).Sum(e => e.Count("output", fuel)));
+            return new SmeltingFuelPlanner().Choose(plan, map, catalog,
+                checked((int)Math.Max(1, targetStock - state.Inventory.GetValueOrDefault(item))), state.Inventory, available,
+                SmeltingPreparationController.IsPreparing || StoredResourceExtractionController.IsPreparing, includeDrillReserve);
+        }
+
+        async Task FuelAsync(string entityId, MapPosition position, bool includeDrillReserve = true)
         {
             ProductionState state = await production.ObserveAsync(token);
             RequireScope(state.Scope);
@@ -168,12 +174,19 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             var burning = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
             RequireScope(burning.Scope);
             if (!NativeBurnerStock.From(burning, entityId).Empty) return;
+            fuelPlan = ChooseFuel(state, includeDrillReserve);
+            int reserve = entityId == drillId ? fuelPlan.DrillReserve : fuelPlan.FurnaceReserve;
+            await journal.AppendAsync("smelting-fuel-reassessment", new { entityId, state.Tick, fuelPlan, includeDrillReserve }, token);
             string fuel = fuelPlan.Fuel;
             int procurement = fuelPlan.ProcurementTarget(entityId == drillId, state.Inventory.GetValueOrDefault(fuel),
                 state.Entities.Single(e => e.Id == drillId).Count("fuel", fuel),
                 state.Entities.Single(e => e.Id == receiver.Id).Count("fuel", fuel), includeDrillReserve);
             if (procurement > 0)
-                await production.ProduceAsync(fuel, procurement, token, new HashSet<string>(StringComparer.Ordinal) { drillId, receiver.Id });
+            {
+                var reserved = new HashSet<string>(StringComparer.Ordinal) { drillId, receiver.Id };
+                if (fuelPlan.CanProduce) await production.ProduceAsync(fuel, procurement, token, reserved);
+                else await production.CollectAvailableAsync(fuel, procurement, token, reserved);
+            }
             await controller.TravelAsync(position, 3, catalog, token);
             var stock = await new FactorySnapshotClient(game).CaptureAsync([fuel], cancellationToken: token);
             RequireScope(stock.Scope);

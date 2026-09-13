@@ -21,9 +21,7 @@ public static class FurnaceFuelPlanner
             * Positive(geometry.EnergyPerTick) / Positive(geometry.BurnerEffectivity)).ToArray();
         double work = workByMachine.Sum();
         if (!double.IsFinite(work)) throw new InvalidDataException("Invalid native furnace energy estimate.");
-        bool Obtainable(string name) => catalog.Mining.Any(source =>
-            (allowManualBootstrap || catalog.MiningSourceTypes?.GetValueOrDefault(source.Key) == "resource")
-            && source.Value.Any(product => product.Name == name && product.DeterministicItem));
+        bool Obtainable(string name) => SolidFuelSources.CanExtract(catalog, name, allowManualBootstrap);
         return catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.StackSize > 0 && p.Value.FuelCategory is { } category
                 && furnace.FuelCategories.ContainsKey(category)
                 && (carried.GetValueOrDefault(p.Key) > 0 || available.GetValueOrDefault(p.Key) > 0
