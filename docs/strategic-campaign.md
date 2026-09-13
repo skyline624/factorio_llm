@@ -4,11 +4,11 @@ La commande `run-campaign --session FILE --max-goals 10` enchaîne des objectifs
 
 Chaque itération observe le moteur, lit le catalogue natif et transmet au modèle le résultat vérifié précédent comme donnée historique. Les stocks, recettes, positions et préconditions sont relus par les exécuteurs C# avant leurs actions. Le texte libre du modèle ne constitue aucune preuve d'exécution. Les résultats de recherche et de production restent distincts.
 
-Le fichier local ignoré `strategic-memory.json` est remplacé atomiquement dans le dossier de session. Il contient l'identité du monde et de l'acteur, le tick, un indicateur d'exécution en cours et le dernier résultat borné à 4000 caractères. Le dernier résultat survit au redémarrage du processus et au changement de session serveur. Un monde différent, une incarnation différente, une horloge antérieure ou un changement de portée pendant une exécution provoquent un arrêt explicite.
+Le fichier local ignoré `strategic-memory.json` est remplacé atomiquement dans le dossier de session. Il contient l'identité du monde et de l'acteur, le tick, un indicateur d'exécution en cours et le dernier résultat borné à 4000 caractères. Le dernier résultat survit au redémarrage du processus et au changement de session serveur. Un monde différent, une incarnation inexpliquée ou une horloge antérieure provoquent un arrêt explicite. Une mort prouvée par le moteur déclenche la récupération décrite ci-dessous.
 
 L'indicateur en cours est écrit avant l'appel au contrôleur d'objectif et effacé seulement après son retour et une observation finale cohérente. Une exception, une annulation ou une issue inconnue laisse cet indicateur actif : une nouvelle commande ne répète pas aveuglément l'exécution. Les nouvelles tentatives enregistrent aussi le chemin de leur journal. Avant une reprise, le contrôleur réconcilie ce journal avec le moteur ; il conserve le blocage si la preuve reste insuffisante. Effacer ce fichier sans cette vérification ferait perdre l'information d'incertitude.
 
-Les propositions refusées par la validation sémantique reviennent comme résultats `unsupportedReason` au modèle. Trois propositions successives de même catégorie, cible, quantité et unité arrêtent la boucle avec `repeated-goal`. Après une erreur d’exécution, une réconciliation réussie permet une nouvelle décision sur les stocks observés, dans le budget d’objectifs restant. Une annulation demandée, une opération inconnue ou active, un arrêt non confirmé, un journal incohérent ou un changement d’avatar maintiennent l’incertitude et arrêtent la boucle.
+Les propositions refusées par la validation sémantique reviennent comme résultats `unsupportedReason` au modèle. Trois propositions successives de même catégorie, cible, quantité et unité arrêtent la boucle avec `repeated-goal`. Après une erreur d’exécution, une réconciliation réussie permet une nouvelle décision sur les stocks observés, dans le budget d’objectifs restant. Une annulation demandée, une opération inconnue ou active, un arrêt non confirmé, un journal incohérent ou un changement d’avatar inexpliqué maintiennent l’incertitude et arrêtent la boucle.
 
 La boucle signale `rocket-observed` uniquement lorsque le compteur natif de fusées est strictement positif. Cela constate un lancement dans le monde ; cela ne qualifie pas à lui seul l'historique, la graine, l'absence d'assistance ou les trois campagnes finales.
 
@@ -50,7 +50,7 @@ La lecture indépendante au tick 5719828 confirme les 200 packs, une file de fab
 
 ### Limites
 
-Le journal est borné à 64 Mio pour cette lecture. Un fichier tronqué n’est pas réparé automatiquement. La réconciliation exige une incarnation inchangée ; elle ne remplace pas la récupération après mort. Un arrêt natif non confirmé ou une opération encore active restent des motifs de blocage. Les tests couvrent les reçus perdus, contradictoires et inconnus, les journaux remplacés ou tronqués, les changements de portée et la poursuite après un échec terminal connu. La preuve native ci-dessus concerne une reprise headless ; elle ne qualifie pas toutes les pannes réseau ni une campagne complète.
+Le journal est borné à 64 Mio pour cette lecture. Un fichier tronqué n’est pas réparé automatiquement. La réconciliation ordinaire exige une incarnation inchangée. Le chemin de récupération exige en plus la preuve native de la mort précédente et de la réapparition suivante dans le même monde. Un arrêt natif non confirmé ou une opération encore active restent des motifs de blocage. Les tests couvrent les reçus perdus, contradictoires et inconnus, les journaux remplacés ou tronqués, les changements de portée et la poursuite après un échec terminal connu. La preuve native ci-dessus concerne une reprise headless ; elle ne qualifie pas toutes les pannes réseau ni une campagne complète.
 
 ## Distribution électrique terminée dans le monde normal de développement
 
@@ -59,3 +59,13 @@ Le 13 septembre 2026, la reprise a réconcilié 902 opérations de la tentative 
 Le modèle a ensuite demandé 50 plaques d’acier. Cet objectif a été interrompu et sauvegardé pour changer d’environnement de test ; il n’est pas déclaré terminé. Le monde reste une partie de développement ayant connu les interventions documentées, avec zéro fusée et zéro campagne finale qualifiée.
 
 Le lot d’acier a ensuite été terminé après reprise et réconciliation des 18 opérations de sa courte tentative interrompue. Les deux fours existants ont reçu 250 plaques de fer et le personnage possède 50 aciers au tick 6127686, avec 250 points de vie et une file vide. Aucun minage manuel n’est enregistré sur le lot. Les [preuves des fours en économie normale](furnace-fleet.md) détaillent les stocks et les lectures indépendantes. Le modèle poursuit ensuite `military` ; aucune fusée n’est constatée.
+
+## Récupération après mort
+
+La boucle intègre désormais une [récupération durable des corps propres](death-recovery.md), avant toute nouvelle décision stratégique. Le scénario préparé a été vérifié en headless et avec un joueur connecté : mort pendant une opération, réapparition normale, récupération des objets et fabrication suivante avec coûts natifs exacts. Les limites sous attaques et de reconstruction restent explicites.
+
+## Progression militaire dans la partie de développement
+
+Le même enchaînement stratégique a terminé `military` au tick 6171837 avec 10 packs rouges consommés, `military-2` au tick 6249043 avec 20 rouges et 20 verts, puis `military-science-pack` au tick 6337149 avec 30 rouges et 30 verts. Les journaux de laboratoire comptent respectivement 86, 172 et 253 relevés alimentés. Une lecture native indépendante après sauvegarde et reprise, au tick 6422318, confirme ces trois recherches, les 50 aciers portés, 250 points de vie et une file vide. `automation-2` reste alors inachevée.
+
+Le journal couvrant le lot d’acier et ces recherches contient une seule opération native `mine` : la récupération de la foreuse thermique 684 après épuisement complet de son gisement. Son reçu restitue une foreuse, sans extraction manuelle de minerai, charbon ou pierre. Ce monde conserve son historique d’assistance de développement : aucune fusée normale ni campagne finale qualifiée n’est établie.

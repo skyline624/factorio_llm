@@ -13,6 +13,138 @@ public sealed class StrategicReconciliationTests : IDisposable
     private string Journal => Path.Combine(directory, "journal.jsonl");
     public StrategicReconciliationTests() => Directory.CreateDirectory(directory);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeathBetweenGoalsNeedsNoOldJournalButRejectsUnownedLaterWork(bool unownedOperation)
+    {
+        var game = await PrepareAsync(false);
+        game.AfterDeath = true;
+        game.UpdatedTick = unownedOperation ? 37500 : 36100;
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize(
+            new StrategicMemory(1, Scope, 36100, false, "completed previous goal"), Protocol.Json));
+        File.Delete(Journal);
+        string original = await File.ReadAllTextAsync(Memory);
+        var recovery = new RecoveryStub((_, _) => Task.CompletedTask);
+        var campaign = new StrategicCampaignController(game, new NextGoal(), Memory, Journal, recovery);
+        if (unownedOperation)
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => campaign.RunAsync(1));
+            Assert.Equal(original, await File.ReadAllTextAsync(Memory));
+            Assert.Equal(0, recovery.Calls);
+        }
+        else
+        {
+            await campaign.RunAsync(1);
+            Assert.Equal(1, recovery.Calls);
+            Assert.False((await ReadMemoryAsync()).Pending);
+            Assert.Null((await ReadMemoryAsync()).Recovery);
+        }
+        Assert.DoesNotContain("submit", game.Calls);
+        Assert.DoesNotContain("operation", game.Calls);
+    }
+
+    [Fact]
+    public async Task CampaignRecoversBeforeAskingForAnotherGoalAfterNativeRespawn()
+    {
+        var game = await PrepareAsync(false);
+        game.AfterDeath = true;
+        game.DeadObservations = 2;
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize((await ReadMemoryAsync()) with { PendingJournal = Journal }, Protocol.Json));
+        var recovery = new RecoveryStub(async (death, scope) =>
+        {
+            var pending = await ReadMemoryAsync();
+            Assert.True(pending.Pending);
+            Assert.Equal(death, pending.Recovery);
+            Assert.Equal(scope, pending.Scope);
+        });
+        var next = new NextGoal();
+        await new StrategicCampaignController(game, next, Memory, Path.Combine(directory, "recovery.jsonl"), recovery).RunAsync(1);
+        Assert.Equal(1, recovery.Calls);
+        Assert.Contains("death-recovery-observed", next.Previous);
+        Assert.False((await ReadMemoryAsync()).Pending);
+        Assert.Null((await ReadMemoryAsync()).Recovery);
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InterruptedRecoveryReconcilesItsOwnJournalBeforeASecondAttempt(bool secondDeath)
+    {
+        var game = await PrepareAsync(false);
+        game.AfterDeath = true;
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize((await ReadMemoryAsync()) with { PendingJournal = Journal }, Protocol.Json));
+        string recoveryJournal = Path.Combine(directory, "recovery.jsonl");
+        int attempts = 0;
+        var recovery = new RecoveryStub(async (_, scope) =>
+        {
+            if (++attempts != 1) return;
+            var submission = OperationSubmission.Create(scope, "craft", new { recipe = "automation-science-pack", count = 1 }, 50000);
+            game.OperationId = submission.OperationId;
+            game.AcceptedTick = game.UpdatedTick = 40000 + game.Calls.Count;
+            await new ControllerJournal(recoveryJournal).AppendAsync("submission", submission, default);
+            if (secondDeath)
+            {
+                game.NativeIncarnation = 3;
+                game.LastDeathTick = game.UpdatedTick = 40001 + game.Calls.Count;
+            }
+            throw new IOException("Synthetic lost recovery receipt");
+        });
+        await new StrategicCampaignController(game, new NextGoal(), Memory, recoveryJournal, recovery).RunAsync(1);
+        Assert.Equal(2, recovery.Calls);
+        Assert.Equal(2, game.Calls.Count(c => c == "operation"));
+        Assert.Single(await File.ReadAllLinesAsync(recoveryJournal), line =>
+        {
+            using var row = JsonDocument.Parse(line);
+            return row.RootElement.GetProperty("type").GetString() == "submission";
+        });
+        Assert.Null((await ReadMemoryAsync()).Recovery);
+        Assert.Equal(secondDeath ? 3 : 2, (await ReadMemoryAsync()).Scope.Incarnation);
+    }
+
+    private sealed class RecoveryStub(Func<NativeDeathTransition, ActorScope, Task> action) : ICorpseRecovery
+    {
+        public int Calls;
+        public async Task<CorpseRecoveryResult> RunAsync(NativeDeathTransition death, ActorScope scope, CancellationToken token)
+        {
+            Calls++;
+            await action(death, scope);
+            return new(40000, "collected", new Dictionary<string, long>(), new Dictionary<string, long>(), []);
+        }
+    }
+
+    [Fact]
+    public async Task ProvedDeathResolvesOldReceiptsAndPersistsRecoveryBeforeNewActions()
+    {
+        var game = await PrepareAsync(false);
+        game.AfterDeath = true;
+        await new StrategicReconciliationController(game, Memory).ReconcileAsync(Journal, afterDeath: true);
+        var memory = await ReadMemoryAsync();
+        Assert.False(memory.Pending);
+        Assert.Equal(2, memory.Scope.Incarnation);
+        Assert.NotNull(memory.Recovery);
+        Assert.Equal(1, memory.Recovery.Incarnation);
+        Assert.Equal(17, memory.Recovery.ActorUnitNumber);
+        Assert.Contains("actor-death-reconciled", memory.PreviousResult);
+        Assert.Equal(["observe", "operation", "observe"], game.Calls);
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("running")]
+    [InlineData("world")]
+    public async Task DeathCannotClearAnUnknownOperationOrChangedWorld(string failure)
+    {
+        var game = await PrepareAsync(false);
+        game.AfterDeath = true;
+        game.Failure = failure;
+        string original = await File.ReadAllTextAsync(Memory);
+        await Assert.ThrowsAnyAsync<Exception>(() => new StrategicReconciliationController(game, Memory).ReconcileAsync(Journal, afterDeath: true));
+        Assert.Equal(original, await File.ReadAllTextAsync(Memory));
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
     [Fact]
     public async Task TerminalPartialCraftPreservesStockAndProvidesFailureFeedbackWithoutMutation()
     {
@@ -182,6 +314,9 @@ public sealed class StrategicReconciliationTests : IDisposable
         public string OperationId = initialOperationId;
         public long AcceptedTick = 110, UpdatedTick = 36100;
         public string? Failure;
+        public bool AfterDeath;
+        public int DeadObservations;
+        public long NativeIncarnation = 2, LastDeathTick = 37000;
         public List<string> Calls { get; } = [];
         public JsonElement Receipt() => Protocol.ToElement(new
         {
@@ -201,13 +336,19 @@ public sealed class StrategicReconciliationTests : IDisposable
                     ? new GameResponse(1, request.RequestId, false, 40000, default, new("operation_unknown", "Absent receipt"))
                     : new GameResponse(1, request.RequestId, true, 40000, Receipt()));
             }
-            var current = Scope with { SessionId = "new-session", Generation = 4 };
+            bool alive = !AfterDeath || DeadObservations-- <= 0;
+            var current = Scope with { SessionId = "new-session", Generation = AfterDeath ? 4 + NativeIncarnation - 2 : 4,
+                Incarnation = AfterDeath && alive ? NativeIncarnation : 1 };
             if (Failure == "world") current = current with { WorldId = "other" };
             if (Failure == "incarnation") current = current with { Incarnation = 2 };
             if (Failure == "scope-during-read" && Calls.Count > 1) current = current with { Generation = 5 };
             return Task.FromResult(new GameResponse(1, request.RequestId, true, 40000 + Calls.Count, Protocol.ToElement(new
             {
-                scope = current, agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false,
+                scope = current, collectedTick = 40000 + Calls.Count,
+                recovery = new { knownCorpsesComplete = true, lastDeath = new
+                    { incarnation = NativeIncarnation - 1, tick = LastDeathTick, unitNumber = NativeIncarnation + 15,
+                        surfaceIndex = 1, position = new MapPosition(12, 8) } },
+                agent = new { alive, controlMode = "ai", stopUnconfirmed = false,
                     walking = Failure == "moving", mining = false, shooting = false, craftingQueueSize = Failure == "queue" ? 1 : 0,
                     inventory = new Dictionary<string, int> { ["automation-science-pack"] = 119 } },
                 operation = Receipt(), goal = new { rocketsLaunched = 0 }

@@ -11,22 +11,23 @@ public sealed record StrategicReconciliationResult(string ReportPath, int Operat
 /// <summary>Read-only native reconciliation under the caller's actor lease; never resubmits an operation.</summary>
 public sealed class StrategicReconciliationController(IGameClient game, string memoryPath)
 {
-    public async Task<StrategicReconciliationResult> ReconcileAsync(string journalPath, CancellationToken token = default)
+    public async Task<StrategicReconciliationResult> ReconcileAsync(string journalPath, CancellationToken token = default, bool afterDeath = false)
     {
         string original = await File.ReadAllTextAsync(memoryPath, token);
         var memory = JsonSerializer.Deserialize<StrategicMemory>(original, Protocol.Json)
             ?? throw new InvalidDataException("Missing strategic memory.");
-        if (!memory.Pending || memory.Version != 1 || memory.Tick < 0 || memory.Scope is null)
+        if ((!memory.Pending && !afterDeath) || memory.Version != 1 || memory.Tick < 0 || memory.Scope is null)
             throw new InvalidDataException("A valid pending strategic attempt is required.");
         journalPath = Path.GetFullPath(journalPath);
         if (memory.PendingJournal is { } expected && Path.GetFullPath(expected) != journalPath)
             throw new InvalidDataException("This journal does not belong to the pending strategic attempt.");
-        string contents = File.Exists(journalPath)
+        string contents = !memory.Pending ? "" : File.Exists(journalPath)
             ? new FileInfo(journalPath).Length <= 64 * 1024 * 1024 ? await File.ReadAllTextAsync(journalPath, token)
                 : throw new InvalidDataException("Strategic journal exceeds the 64 MiB reconciliation budget.")
             : memory.PendingJournal is not null ? "" : throw new FileNotFoundException("The legacy attempt requires its existing journal.");
-        var audit = ReadJournal(contents, memory);
-        GameResponse before = await ObserveAsync(memory, token);
+        var audit = memory.Pending ? ReadJournal(contents, memory) : new JournalAudit();
+        GameResponse before = await ObserveAsync(memory, token, afterDeath);
+        var death = afterDeath ? NativeDeathTransition.Read(before, memory.Scope, memory.Tick) : null;
         var beforeScope = before.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
         var operations = new OperationClient(game);
         var queried = new List<OperationReceipt>();
@@ -36,7 +37,8 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         {
             string id = last.GetProperty("operationId").GetString()!;
             if (audit.Submissions.ContainsKey(id)) unresolved.Add(id);
-            else if (audit.Submissions.Count > 0 || last.GetProperty("updatedTick").GetInt64() >= memory.Tick)
+            else if (audit.Submissions.Count > 0 || last.GetProperty("updatedTick").GetInt64() > memory.Tick
+                || memory.Pending && last.GetProperty("updatedTick").GetInt64() == memory.Tick)
                 throw new InvalidDataException("The last native operation is outside the pending journal.");
         }
         else if (audit.Submissions.Count > 0) throw new InvalidDataException("The native last operation is missing.");
@@ -52,16 +54,17 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         }
         if (audit.Submissions.Keys.Any(id => !audit.Receipts.TryGetValue(id, out var r) || !r.IsTerminal))
             throw new InvalidDataException("Not every submitted operation has a terminal outcome.");
-        GameResponse after = await ObserveAsync(memory, token);
+        GameResponse after = await ObserveAsync(memory, token, afterDeath);
         var scope = after.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
         if (scope != beforeScope || after.Tick < before.Tick
             || audit.Receipts.Values.Any(r => r.UpdatedTick > after.Tick)
-            || !SameLastOperation(before, after))
+            || !SameLastOperation(before, after)
+            || afterDeath && NativeDeathTransition.Read(after, memory.Scope, memory.Tick) != death)
             throw new InvalidDataException("Native state changed during reconciliation.");
         var failures = audit.Receipts.Values.Where(r => r.Status != "completed").ToArray();
         string feedback = JsonSerializer.Serialize(new
         {
-            outcome = "interrupted-goal-reconciled", observedTick = after.Tick, goal = audit.Goal,
+            outcome = afterDeath ? "actor-death-reconciled" : "interrupted-goal-reconciled", observedTick = after.Tick, goal = audit.Goal, death,
             submittedOperations = audit.Submissions.Count, nonCompletedOperations = failures.Length,
             executionFailure = audit.FailureCode,
             recentOutcomes = failures.TakeLast(3).Select(r => new { r.Kind, r.Status, error = r.Error?.Code, r.UpdatedTick }),
@@ -74,23 +77,25 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
             kind = "read-only-strategic-reconciliation", previousMemory = memory, journalPath,
             journalSha256 = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(contents))),
             operations = audit.Submissions.Count, queriedReceipts = queried, observation = after.Data,
-            executionDiagnostic = audit.Diagnostic, feedback
+            executionDiagnostic = audit.Diagnostic, death, feedback
         }, token);
         if (await File.ReadAllTextAsync(memoryPath, token) != original
-            || (File.Exists(journalPath) ? await File.ReadAllTextAsync(journalPath, token) : "") != contents)
+            || memory.Pending && (File.Exists(journalPath) ? await File.ReadAllTextAsync(journalPath, token) : "") != contents)
             throw new InvalidDataException("Strategic memory or journal changed during reconciliation.");
-        await LocalJson.WriteAsync(memoryPath, new StrategicMemory(1, scope, after.Tick, false, feedback), token);
+        await LocalJson.WriteAsync(memoryPath, new StrategicMemory(1, scope, after.Tick, false, feedback,
+            Recovery: death ?? memory.Recovery), token);
         return new(reportPath, audit.Submissions.Count, after.Tick);
     }
 
-    private async Task<GameResponse> ObserveAsync(StrategicMemory memory, CancellationToken token)
+    private async Task<GameResponse> ObserveAsync(StrategicMemory memory, CancellationToken token, bool afterDeath)
     {
         var response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 1, limit = 1 }), token);
         if (!response.Ok) throw new GameRpcException(response.Error!);
         var scope = response.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
         var actor = response.Data.GetProperty("agent");
+        if (afterDeath) NativeDeathTransition.Read(response, memory.Scope, memory.Tick);
         if (scope.WorldId != memory.Scope.WorldId || scope.ActorId != memory.Scope.ActorId
-            || scope.Incarnation != memory.Scope.Incarnation || scope.Generation < memory.Scope.Generation
+            || !afterDeath && scope.Incarnation != memory.Scope.Incarnation || scope.Generation < memory.Scope.Generation
             || response.Tick < memory.Tick || !actor.GetProperty("alive").GetBoolean()
             || actor.GetProperty("controlMode").GetString() != "ai" || actor.GetProperty("stopUnconfirmed").GetBoolean()
             || actor.GetProperty("walking").GetBoolean() || actor.GetProperty("mining").GetBoolean()

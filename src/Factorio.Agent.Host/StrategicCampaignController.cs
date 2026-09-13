@@ -9,24 +9,33 @@ public interface IStrategicGoalRunner
 }
 
 public sealed record StrategicCampaignResult(bool RocketLaunched, int GoalsExecuted, long EndTick, string StopReason = "goal-budget");
-public sealed record StrategicMemory(int Version, ActorScope Scope, long Tick, bool Pending, string? PreviousResult, string? PendingJournal = null);
+public sealed record StrategicMemory(int Version, ActorScope Scope, long Tick, bool Pending, string? PreviousResult,
+    string? PendingJournal = null, NativeDeathTransition? Recovery = null);
 
 /// <summary>Sequential strategic goals under the caller's actor lease. Unknown outcomes are never retried.</summary>
-public sealed class StrategicCampaignController(IGameClient game, IStrategicGoalRunner runner, string memoryPath, string? journalPath = null)
+public sealed class StrategicCampaignController(IGameClient game, IStrategicGoalRunner runner, string memoryPath,
+    string? journalPath = null, ICorpseRecovery? recovery = null)
 {
     public async Task<StrategicCampaignResult> RunAsync(int maxGoals, CancellationToken token = default)
     {
         if (maxGoals is < 1 or > 10000) throw new ArgumentOutOfRangeException(nameof(maxGoals));
-        var observation = await ObserveAsync(token);
+        var observation = await ObserveAsync(token, allowDead: true);
         StrategicMemory memory = File.Exists(memoryPath)
             ? JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(memoryPath, token), Protocol.Json)
                 ?? throw new InvalidDataException("Empty strategic memory.")
             : new(1, observation.Scope, observation.Tick, false, null);
+        if (memory.Version != 1 || memory.Scope is null || memory.Tick < 0 || memory.PreviousResult?.Length > 4000)
+            throw new InvalidDataException("Malformed strategic memory.");
+        if ((!observation.Alive || memory.Scope.Incarnation != observation.Scope.Incarnation || memory.Recovery is not null)
+            && journalPath is not null)
+        {
+            memory = await new StrategicRecoveryController(game, memoryPath, journalPath, recovery).ResumeAsync(token);
+            observation = await ObserveAsync(token);
+        }
         Validate(memory, observation);
         if (memory.Pending && memory.PendingJournal is { } pendingJournal)
         {
-            await new StrategicReconciliationController(game, memoryPath).ReconcileAsync(pendingJournal, token);
-            memory = JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(memoryPath, token), Protocol.Json)!;
+            memory = await new StrategicRecoveryController(game, memoryPath, journalPath ?? pendingJournal, recovery).ResumeAsync(token);
             observation = await ObserveAsync(token);
         }
         if (memory.Pending) throw new InvalidDataException("An earlier strategic execution has no verified terminal outcome. Reconcile its journal and native effects before resuming.");
@@ -41,7 +50,14 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             await LocalJson.WriteAsync(memoryPath, memory with { Scope = observation.Scope, Tick = observation.Tick, Pending = true,
                 PendingJournal = journalPath is null ? null : Path.GetFullPath(journalPath) }, token);
             StrategicGoalResult result;
-            try { result = await runner.RunOnceAsync(token, memory.PreviousResult); }
+            CampaignObservation after;
+            try
+            {
+                result = await runner.RunOnceAsync(token, memory.PreviousResult);
+                after = await ObserveAsync(token);
+                Validate(memory with { Tick = observation.Tick }, after);
+                if (after.Scope != observation.Scope) throw new InvalidDataException("Actor scope changed during strategic execution; reconcile partial effects.");
+            }
             catch (Exception error) when (!token.IsCancellationRequested && journalPath is not null)
             {
                 string failureCode = error switch
@@ -60,14 +76,10 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                     message = error.Message[..Math.Min(error.Message.Length, 2000)],
                     stackTrace = error.StackTrace is { } stack ? stack[..Math.Min(stack.Length, 4000)] : null
                 }, token);
-                await new StrategicReconciliationController(game, memoryPath).ReconcileAsync(journalPath, token);
-                memory = JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(memoryPath, token), Protocol.Json)!;
+                memory = await new StrategicRecoveryController(game, memoryPath, journalPath, recovery).ResumeAsync(token);
                 observation = await ObserveAsync(token);
                 continue;
             }
-            var after = await ObserveAsync(token);
-            Validate(memory with { Tick = observation.Tick }, after);
-            if (after.Scope != observation.Scope) throw new InvalidDataException("Actor scope changed during strategic execution; reconcile partial effects.");
             string feedback = JsonSerializer.Serialize(new
             {
                 observedTick = after.Tick,
@@ -94,13 +106,13 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
         return new(observation.Rockets > 0, maxGoals, observation.Tick);
     }
 
-    private async Task<CampaignObservation> ObserveAsync(CancellationToken token)
+    private async Task<CampaignObservation> ObserveAsync(CancellationToken token, bool allowDead = false)
     {
         var response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 1, limit = 1 }), token);
         if (!response.Ok) throw new GameRpcException(response.Error!);
         var data = response.Data;
         var agent = data.GetProperty("agent");
-        if (!agent.GetProperty("alive").GetBoolean() || agent.GetProperty("controlMode").GetString() != "ai")
+        if ((!allowDead && !agent.GetProperty("alive").GetBoolean()) || agent.GetProperty("controlMode").GetString() != "ai")
             throw new InvalidDataException("The strategic actor is unavailable or under manual control; reconcile before continuing.");
         if (data.TryGetProperty("operation", out var operation) && operation.ValueKind == JsonValueKind.Object
             && operation.TryGetProperty("status", out var status)
@@ -108,16 +120,16 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             throw new InvalidDataException("A native operation is still active or unknown; reconcile before starting another strategic goal.");
         return new(data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)
             ?? throw new InvalidDataException("Missing strategic actor scope."), response.Tick,
-            data.GetProperty("goal").GetProperty("rocketsLaunched").GetInt32());
+            data.GetProperty("goal").GetProperty("rocketsLaunched").GetInt32(), agent.GetProperty("alive").GetBoolean());
     }
 
     private static void Validate(StrategicMemory memory, CampaignObservation observation)
     {
-        if (memory.Version != 1 || memory.Scope is null || memory.Scope.WorldId != observation.Scope.WorldId
+        if (!observation.Alive || memory.Version != 1 || memory.Scope is null || memory.Scope.WorldId != observation.Scope.WorldId
             || memory.Scope.ActorId != observation.Scope.ActorId || memory.Scope.Incarnation != observation.Scope.Incarnation
             || memory.Tick < 0 || observation.Tick < memory.Tick || observation.Rockets < 0
             || memory.PreviousResult?.Length > 4000)
             throw new InvalidDataException("Strategic memory belongs to another world, actor, incarnation or future state, or is malformed.");
     }
-    private sealed record CampaignObservation(ActorScope Scope, long Tick, int Rockets);
+    private sealed record CampaignObservation(ActorScope Scope, long Tick, int Rockets, bool Alive);
 }

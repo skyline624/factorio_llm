@@ -71,6 +71,10 @@ local function capture(args)
       position = U.copy(entity.position), direction = entity.direction, force = entity.force.name,
       inventories = {}, transportLines = {}, fluidStores = {}}
     local fuel = entity.get_fuel_inventory()
+    if entity.type == "character" then
+      local main = entity.get_main_inventory()
+      metadata.mainInventoryId = "inventory:" .. id .. ":" .. main.index
+    end
     if entity.burner then metadata.burnerRemainingJoules = entity.burner.remaining_burning_fuel end
     if fuel and fuel.valid then
       local owner = fuel.entity_owner
