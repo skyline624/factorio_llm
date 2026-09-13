@@ -62,6 +62,7 @@ public sealed class SpatialCollisionField
     public bool SteeringRegionClear(MapPosition from, MapPosition to, double clearance = 0.18)
     {
         if (!double.IsFinite(clearance) || clearance < 0) throw new ArgumentOutOfRangeException(nameof(clearance));
+        if (!ThreatsClear(from, to, steering: true)) return false;
         var body = Character.CollisionBox;
         var region = new WorldBox(new(Math.Min(from.X, to.X) + body.Min.X - clearance, Math.Min(from.Y, to.Y) + body.Min.Y - clearance),
             new(Math.Max(from.X, to.X) + body.Max.X + clearance, Math.Max(from.Y, to.Y) + body.Max.Y + clearance));
@@ -72,6 +73,7 @@ public sealed class SpatialCollisionField
     public bool SegmentClear(MapPosition from, MapPosition to, double clearance = 0.18)
     {
         if (!double.IsFinite(clearance) || clearance < 0) throw new ArgumentOutOfRangeException(nameof(clearance));
+        if (!ThreatsClear(from, to, steering: false)) return false;
         WorldBox body = Character.CollisionBox;
         var swept = new WorldBox(new(Math.Min(from.X, to.X) + body.Min.X - clearance, Math.Min(from.Y, to.Y) + body.Min.Y - clearance),
             new(Math.Max(from.X, to.X) + body.Max.X + clearance, Math.Max(from.Y, to.Y) + body.Max.Y + clearance));
@@ -81,6 +83,33 @@ public sealed class SpatialCollisionField
             if (obstacle.Id == Map.Actor.Id || !Character.Mask.CollidesWith(obstacle.Mask, obstacle.Tile)) continue;
             WorldBox footprint = obstacle.Tile && Character.Mask.TileTransitions ? new(new(0, 0), new(0, 0)) : body;
             if (obstacle.Shape.IntersectsSweep(from, to, footprint, clearance)) return false;
+        }
+        return true;
+    }
+
+    private bool ThreatsClear(MapPosition from, MapPosition to, bool steering)
+    {
+        foreach (var threat in Map.StationaryThreats ?? [])
+        {
+            // Two tiles allow for steering and time between observations. This is a planning
+            // margin, not an engine range or a guarantee against moving enemies/projectiles.
+            double radius = threat.Range + 2;
+            double minimum = Math.Min(radius, Math.Max(Map.Actor.Position.DistanceTo(threat.Position), from.DistanceTo(threat.Position)));
+            MapPosition closest;
+            if (steering)
+                closest = new(Math.Clamp(threat.Position.X, Math.Min(from.X, to.X), Math.Max(from.X, to.X)),
+                    Math.Clamp(threat.Position.Y, Math.Min(from.Y, to.Y), Math.Max(from.Y, to.Y)));
+            else
+            {
+                double dx = to.X - from.X, dy = to.Y - from.Y;
+                double length = dx * dx + dy * dy;
+                double ratio = length == 0 ? 0 : Math.Clamp(((threat.Position.X - from.X) * dx
+                    + (threat.Position.Y - from.Y) * dy) / length, 0, 1);
+                closest = new(from.X + dx * ratio, from.Y + dy * ratio);
+            }
+            // If already exposed, permit escape without decreasing separation, including
+            // the initial point used to seed A*. Never use that exception to enter a zone.
+            if (closest.DistanceTo(threat.Position) < minimum - 1e-9) return false;
         }
         return true;
     }

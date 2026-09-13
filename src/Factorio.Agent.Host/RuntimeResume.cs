@@ -104,7 +104,11 @@ public static partial class FactorioRuntime
         try
         {
             using Process process = Process.GetProcessById(id);
-            return !process.HasExited && string.Equals(process.MainModule?.FileName, executable, StringComparison.OrdinalIgnoreCase)
+            // A retired Factorio PID may now belong to a protected system process. Reject its
+            // inexpensive name first; never inspect privileged modules for an unrelated process.
+            return !process.HasExited
+                && string.Equals(process.ProcessName, Path.GetFileNameWithoutExtension(executable), StringComparison.OrdinalIgnoreCase)
+                && string.Equals(process.MainModule?.FileName, executable, StringComparison.OrdinalIgnoreCase)
                 && (started is null || process.StartTime.ToUniversalTime() == started);
         }
         catch (ArgumentException) { return false; } // The recorded PID no longer exists.

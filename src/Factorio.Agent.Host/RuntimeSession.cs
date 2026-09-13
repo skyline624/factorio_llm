@@ -126,6 +126,7 @@ public static partial class FactorioRuntime
         {
             string processFile = Path.Combine(profile, "process-id.txt");
             if (File.Exists(processFile) && int.TryParse(await File.ReadAllTextAsync(processFile, token), out int id)
+                && id != session.ServerProcessId // An old client PID can now identify this session's headless server.
                 && IsManagedProcessAlive(id, session.Executable, null))
                 throw new IOException("A managed client is still running; inspect it before opening another.");
         }
@@ -150,7 +151,9 @@ public static partial class FactorioRuntime
         using var lease = ActorControlLease.Acquire(session.Directory);
         await RequireCurrentManifestAsync(session, token);
         using Process process = Process.GetProcessById(session.ServerProcessId);
-        if (process.HasExited || !string.Equals(process.MainModule?.FileName, session.Executable, StringComparison.OrdinalIgnoreCase)
+        if (process.HasExited
+            || !string.Equals(process.ProcessName, Path.GetFileNameWithoutExtension(session.Executable), StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(process.MainModule?.FileName, session.Executable, StringComparison.OrdinalIgnoreCase)
             || (session.ServerStartTimeUtc is { } expected && process.StartTime.ToUniversalTime() != expected))
             throw new InvalidOperationException("The saved process identity does not match the running Factorio server.");
         await using var client = session.CreateClient(lease);

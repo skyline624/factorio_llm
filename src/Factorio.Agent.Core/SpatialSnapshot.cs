@@ -82,12 +82,14 @@ public sealed record ObservedFluidConnection(int BoxIndex, int PortIndex, MapPos
 public sealed record ObservedPower(double Energy, long? NetworkId = null, double? GeneratedLastTick = null);
 public sealed record PlaceableItem(string EntityName, int StackSize);
 public sealed record SpatialCoverage(bool Atomic, bool Complete, string Visibility, int Radius);
+public sealed record StationaryThreat(string Id, MapPosition Position, double Range, long CollectedTick);
 public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int SurfaceIndex, WorldBox Bounds, SpatialActor Actor,
     IReadOnlyDictionary<string, EntityGeometry> Prototypes, IReadOnlyDictionary<string, CollisionMask> TilePrototypes,
     [property: JsonConverter(typeof(NativeArrayConverter<TileRun>))] IReadOnlyList<TileRun> Rows,
     [property: JsonConverter(typeof(NativeArrayConverter<SpatialEntity>))] IReadOnlyList<SpatialEntity> Entities,
     IReadOnlyDictionary<string, PlaceableItem> Items, SpatialCoverage Coverage,
-    IReadOnlyDictionary<string, string>? TileFluids = null)
+    IReadOnlyDictionary<string, string>? TileFluids = null,
+    [property: JsonConverter(typeof(NativeArrayConverter<StationaryThreat>))] IReadOnlyList<StationaryThreat>? StationaryThreats = null)
 {
     public static SpatialSnapshot Parse(GameResponse response)
     {
@@ -111,6 +113,12 @@ public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int S
             if (map.Entities.Select(e => e.Id).Distinct(StringComparer.Ordinal).Count() != map.Entities.Count
                 || map.Entities.Any(e => !ValidBox(e.Bounds) || !map.Prototypes.ContainsKey(e.Name)))
                 throw new InvalidDataException("Invalid spatial entity identity or shape.");
+            if (map.StationaryThreats is { } threats
+                && (threats.Count > 1000 || threats.Select(t => t.Id).Distinct(StringComparer.Ordinal).Count() != threats.Count
+                    || threats.Any(t => string.IsNullOrWhiteSpace(t.Id) || t.Position is null
+                        || !double.IsFinite(t.Position.X) || !double.IsFinite(t.Position.Y)
+                        || !double.IsFinite(t.Range) || t.Range is <= 0 or > 64 || t.CollectedTick != map.CollectedTick)))
+                throw new InvalidDataException("Invalid or stale stationary attack envelope.");
             return map;
         }
         catch (Exception error) when (error is JsonException or ArgumentException or InvalidOperationException or KeyNotFoundException)

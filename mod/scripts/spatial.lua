@@ -91,7 +91,7 @@ function M.observe(args)
     actor = {id = U.entity_id(c), name = c.name, position = U.copy(c.position),
       buildDistance = c.build_distance, reachDistance = c.reach_distance,
       resourceReachDistance = c.resource_reach_distance, controlMode = Actor.state().controlMode},
-    prototypes = {[c.name] = prototype(c.prototype)}, tilePrototypes = {}, tileFluids = {}, rows = {}, entities = {}, items = {},
+    prototypes = {[c.name] = prototype(c.prototype)}, tilePrototypes = {}, tileFluids = {}, rows = {}, entities = {}, items = {}, stationaryThreats = {},
     coverage = {atomic = true, complete = true, visibility = "current-character-local-area", radius = radius}}
   U.check(args.items == nil or type(args.items) == "table", "invalid_arguments", "items must be an array")
   for index, name in pairs(args.items or {}) do
@@ -174,6 +174,21 @@ function M.observe(args)
     end
   end
   table.sort(result.entities, function(a, b) return a.id < b.id end)
+  -- Base worms are stationary native turrets. Include visible centers outside the terrain
+  -- window when their attack envelope can reach it; visibility is never inferred from a corpse.
+  local threats = c.surface.find_entities_filtered{type = 'turret',
+    area = {{x0 - 64, y0 - 64}, {x1 + 64, y1 + 64}}, limit = 1001}
+  U.check(#threats <= 1000, 'spatial_snapshot_too_large', 'Stationary threat budget exceeded')
+  for _, entity in ipairs(threats) do
+    if entity.force ~= c.force and not c.force.get_friend(entity.force) and Visibility.is_visible(c, entity) then
+      local attack = entity.prototype.attack_parameters
+      U.check(attack and attack.range > 0 and attack.range <= 64 and attack.range_mode == 'center-to-center',
+        'unsupported_attack_envelope', 'Stationary attack range requires a supported native center distance')
+      result.stationaryThreats[#result.stationaryThreats + 1] = {id = U.entity_id(entity),
+        position = U.copy(entity.position), range = attack.range, collectedTick = game.tick}
+    end
+  end
+  table.sort(result.stationaryThreats, function(a, b) return a.id < b.id end)
   return result
 end
 

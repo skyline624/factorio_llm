@@ -6,7 +6,7 @@ using Factorio.Agent.Ollama;
 namespace Factorio.Agent.Host;
 
 /// <summary>Prepared native death during an operation, automatic corpse recovery and subsequent real production.</summary>
-public sealed class DeathRecoveryQualification(RuntimeSession session)
+public sealed class DeathRecoveryQualification(RuntimeSession session, bool stationaryThreat = false)
 {
     public async Task<string> RunAsync(CancellationToken token)
     {
@@ -29,13 +29,13 @@ public sealed class DeathRecoveryQualification(RuntimeSession session)
             { reason = "Prepared stock and foreign corpse; native death during work, normal respawn and recovery. Not a campaign." }), token);
             if (!mark.Ok) throw new GameRpcException(mark.Error!);
             const string prepare = """
-                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); for _,p in pairs(game.connected_players) do assert(p.character==c) end; game.speed=4; for _,e in pairs(s.find_entities_filtered{force=f}) do if e~=c then e.destroy() end end; for _,e in pairs(s.find_entities_filtered{type='character-corpse'}) do e.destroy() end; for _,e in pairs(s.find_entities_filtered{area={{-32,-32},{32,32}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-32,32 do for y=-32,32 do tiles[#tiles+1]={name='grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({12,8})); c.get_main_inventory().clear(); assert(c.insert{name='iron-plate',count=40}==40); assert(c.insert{name='coal',count=6}==6); local other=s.create_entity{name='character',position={15,8},force=game.forces.player}; assert(other and other.insert{name='iron-plate',count=3}==3); other.die(game.forces.enemy); rcon.print(helpers.table_to_json{tick=game.tick,characterId=tostring(c.unit_number),players=#game.connected_players})
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); for _,p in pairs(game.connected_players) do assert(p.character==c) end; game.speed=4; for _,e in pairs(s.find_entities_filtered{force=f}) do if e~=c then e.destroy() end end; for _,e in pairs(s.find_entities_filtered{type='character-corpse'}) do e.destroy() end; for _,e in pairs(s.find_entities_filtered{area={{-64,-64},{64,64}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-64,64 do for y=-64,64 do tiles[#tiles+1]={name='grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({12,8})); c.get_main_inventory().clear(); assert(c.insert{name='iron-plate',count=40}==40); assert(c.insert{name='coal',count=6}==6); local other=s.create_entity{name='character',position={15,8},force=game.forces.player}; assert(other and other.insert{name='iron-plate',count=3}==3); other.die(game.forces.enemy); rcon.print(helpers.table_to_json{tick=game.tick,characterId=tostring(c.unit_number),players=#game.connected_players})
                 """;
             using var setup = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(prepare, token));
             evidence.Add(new { check = "explicit-preparation", native = setup.RootElement.Clone() });
             JsonElement before = await ReadAsync();
             var journal = new ControllerJournal(journalPath);
-            var runner = new Runner(session, game, journal);
+            var runner = new Runner(session, game, journal, stationaryThreat);
             var result = await new StrategicCampaignController(game, runner, memoryPath, journalPath).RunAsync(2, token);
             JsonElement after = await ReadAsync();
             var memory = JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(memoryPath, token), Protocol.Json)!;
@@ -66,13 +66,24 @@ public sealed class DeathRecoveryQualification(RuntimeSession session)
                 && deaths == 1 && recoveryTakes > 0 && emptyRespawns == 1, "Strategic recovery did not complete before the subsequent goal.");
             Require(after.GetProperty("players").GetInt32() == before.GetProperty("players").GetInt32()
                 && after.GetProperty("pilotAttached").GetBoolean(), "The connected pilot did not follow the same native actor.");
+            if (stationaryThreat)
+            {
+                var map = await new SpatialClient(game).CaptureAsync(cancellationToken: token);
+                var threat = map.StationaryThreats!.Single(t => t.Id == runner.ThreatId);
+                var observed = await game.ExecuteAsync(GameRequest.Create("observe"), token);
+                Require(observed.Ok && observed.Data.GetProperty("agent").GetProperty("health").GetDouble() == 250
+                    && map.Actor.Position.DistanceTo(threat.Position) >= threat.Range + 2,
+                    "Recovery entered the prepared worm envelope or lost health.");
+                evidence.Add(new { check = "stationary-threat-avoided", threat, map.Actor.Position, map.CollectedTick,
+                    health = observed.Data.GetProperty("agent").GetProperty("health").GetDouble() });
+            }
             passed = true;
             return report;
         }
         finally
         {
             await LocalJson.WriteAsync(report, new { kind = "prepared-death-recovery-qualification", passed,
-                isAutonomousCampaign = false, journalPath, memoryPath, evidence }, CancellationToken.None);
+                isAutonomousCampaign = false, stationaryThreat, journalPath, memoryPath, evidence }, CancellationToken.None);
         }
 
         async Task<JsonElement> ReadAsync()
@@ -85,10 +96,11 @@ public sealed class DeathRecoveryQualification(RuntimeSession session)
         }
     }
 
-    private sealed class Runner(RuntimeSession session, IGameClient game, ControllerJournal journal) : IStrategicGoalRunner
+    private sealed class Runner(RuntimeSession session, IGameClient game, ControllerJournal journal, bool stationaryThreat) : IStrategicGoalRunner
     {
         private bool killed;
         public bool RecoveryFeedbackObserved { get; private set; }
+        public string? ThreatId { get; private set; }
         public async Task<StrategicGoalResult> RunOnceAsync(CancellationToken token = default, string? previousResult = null)
         {
             var observed = await game.ExecuteAsync(GameRequest.Create("observe"), token);
@@ -123,8 +135,13 @@ public sealed class DeathRecoveryQualification(RuntimeSession session)
                         await Task.Delay(10, movementDeadline.Token);
                     }
                     Require(movingId is not null, "Prepared death requires an observed active C# navigation operation.");
-                    const string kill = "/silent-command local c=game.surfaces.nauvis.find_entities_filtered{type='character',force=game.forces.factorio_agent}[1]; assert(c); c.die(game.forces.enemy); rcon.print('native-death-fixture')";
-                    Require((await session.CreateRcon().ExecuteAsync(kill, token)).Trim() == "native-death-fixture", "Prepared native death not acknowledged.");
+                    string kill = "/silent-command local c=game.surfaces.nauvis.find_entities_filtered{type='character',force=game.forces.factorio_agent}[1]; assert(c); local position=c.position; local surface=c.surface; c.die(game.forces.enemy); ";
+                    kill += stationaryThreat
+                        ? "game.speed=1; local worm=surface.create_entity{name='medium-worm-turret',position={position.x+24,position.y},force=game.forces.enemy}; assert(worm); rcon.print(helpers.table_to_json{dead=true,threatId=tostring(worm.unit_number)})"
+                        : "rcon.print(helpers.table_to_json{dead=true})";
+                    using var killedResponse = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(kill, token));
+                    Require(killedResponse.RootElement.GetProperty("dead").GetBoolean(), "Prepared native death not acknowledged.");
+                    ThreatId = killedResponse.RootElement.TryGetProperty("threatId", out var threatId) ? threatId.GetString() : null;
                     await journal.AppendAsync("fixture-native-death", new { scope, operationId = movingId }, token);
                     bool invalidated = false;
                     try { await navigating; }

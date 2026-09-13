@@ -91,7 +91,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (!reusable && route.Status == RouteStatus.Found)
                 route = route with { Waypoints = Subdivide(map.Actor.Position, route.Waypoints) };
             plans++;
-            await journal.AppendAsync("route-plan", new { map.Scope, map.CollectedTick, destination, arrivalDistance, reused = reusable, route }, deadline.Token);
+            await journal.AppendAsync("route-plan", new { map.Scope, map.CollectedTick, destination, arrivalDistance,
+                map.StationaryThreats, reused = reusable, route }, deadline.Token);
             if (route.Status == RouteStatus.NoRouteOnKnownGrid && clearedTrees < 16)
             {
                 ProductionCatalog catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), deadline.Token));

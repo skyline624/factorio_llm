@@ -35,7 +35,7 @@ try
           verify-furnace-fleet --session FILE [--item steel-plate|stone-brick]
           verify-electric-extraction --session FILE [--item iron-ore|iron-plate]
           verify-smelting-fuel --session FILE
-          verify-death-recovery --session FILE
+          verify-death-recovery --session FILE [--stationary-threat]
           verify-equipment --session FILE
           verify-retreat --session FILE
           verify-defense-deployment --session FILE
@@ -173,7 +173,7 @@ try
         case "verify-death-recovery":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
-            Print(new { report = await new DeathRecoveryQualification(session).RunAsync(shutdown.Token) });
+            Print(new { report = await new DeathRecoveryQualification(session, Option("stationary-threat") is not null).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-equipment":
@@ -475,7 +475,7 @@ static Dictionary<string, string> Parse(string[] values)
         string value = values[index];
         if (!value.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException($"Expected option, got {value}.");
         string name = value[2..];
-        string contents = name == "fixture" ? "true" : ++index < values.Length ? values[index] : throw new ArgumentException($"Missing value for {value}.");
+        string contents = name is "fixture" or "stationary-threat" ? "true" : ++index < values.Length ? values[index] : throw new ArgumentException($"Missing value for {value}.");
         if (!options.TryAdd(name, contents)) throw new ArgumentException($"Duplicate option {value}.");
     }
     return options;

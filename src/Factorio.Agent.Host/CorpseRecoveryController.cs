@@ -60,7 +60,9 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             if (selected.Item.Contains('@')) { unavailable.Add((selected.Corpse.Id, selected.Item)); continue; }
             catalog ??= ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
             if (catalog.Scope != scope) throw new InvalidDataException("The recovery production catalog belongs to another actor scope.");
-            await controller.TravelAsync(selected.Corpse.Position, 1, catalog, token);
+            double reach = actor.GetProperty("reachDistance").GetDouble();
+            if (!double.IsFinite(reach) || reach < 1) throw new InvalidDataException("Invalid native corpse interaction reach.");
+            await controller.TravelAsync(selected.Corpse.Position, Math.Min(10, reach - .5), catalog, token);
             var stock = await new FactorySnapshotClient(game).CaptureAsync([selected.Item], cancellationToken: token);
             if (stock.Scope != scope || stock.CollectedTick < lastTick) throw new InvalidDataException("Actor or tick changed while checking corpse recovery capacity.");
             lastTick = stock.CollectedTick;
