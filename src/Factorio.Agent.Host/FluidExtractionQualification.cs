@@ -1,10 +1,11 @@
 using System.Text.Json;
 using Factorio.Agent.Core;
+using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
 /// <summary>Prepared distant oil deposit; grid extension and research use native power and extraction.</summary>
-public sealed class FluidExtractionQualification(RuntimeSession session, bool reuse = false)
+public sealed class FluidExtractionQualification(RuntimeSession session, bool reuse = false, bool stationaryThreat = false)
 {
     public async Task<string> RunAsync(CancellationToken token)
     {
@@ -34,19 +35,39 @@ public sealed class FluidExtractionQualification(RuntimeSession session, bool re
             using var beforeDocument = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(beforeCommand, token));
             var before = beforeDocument.RootElement.Clone();
             Require(!before.GetProperty("researched").GetBoolean(), "The resource trigger was already researched before extraction.");
+            if (stationaryThreat)
+            {
+                // Observe the distant deposit normally before returning to the prepared blocked site.
+                // Its history may guide exploration, but it cannot prove current local buildability.
+                var remembered = await new SpatialClient(game).CaptureAsync(["pumpjack"], 48, token);
+                Require(remembered.Entities.Any(e => e.Name == "crude-oil" && e.Position.DistanceTo(new(70, 0)) < 1),
+                    "The safe deposit was not observed before the search.");
+                const string danger = """
+                    /silent-command local s=game.surfaces.nauvis;local f=game.forces.factorio_agent;local c=s.find_entities_filtered{type='character',force=f}[1];assert(c.teleport({0,0}));assert(s.create_entity{name='crude-oil',position={0,25},amount=100000});local w=s.create_entity{name='small-worm-turret',position={0,35},force=game.forces.enemy};assert(w);rcon.print(helpers.table_to_json{tick=game.tick,worm=tostring(w.unit_number)})
+                    """;
+                using var dangerDocument = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(danger, token));
+                var start = await new SpatialClient(game).CaptureAsync(["pumpjack"], 48, token);
+                Require(start.Entities.Count(e => e.Name == "crude-oil") == 1
+                    && start.StationaryThreats!.Any(t => t.Id == dangerDocument.RootElement.GetProperty("worm").GetString())
+                    && new ResourceExtractionPlanner().FindSite(start, "crude-oil", "pumpjack", new HashSet<string>()) is null,
+                    "The prepared search did not start with only an observed enemy-protected deposit.");
+                evidence.Add(new { check = "protected-local-deposit-and-historical-safe-site", native = dangerDocument.RootElement.Clone(),
+                    start.Actor.Position, start.CollectedTick, start.StationaryThreats });
+            }
             var result = await new ResourceResearchController(game, journal).RunAsync("oil-processing", token);
             const string afterCommand = """
                 /silent-command local s=game.surfaces.nauvis;local f=game.forces.factorio_agent;local c=s.find_entities_filtered{type='character',force=f}[1];local ds=s.find_entities_filtered{name='pumpjack',force=f};assert(#ds==1);local d=ds[1];rcon.print(helpers.table_to_json{tick=game.tick,researched=f.technologies['oil-processing'].researched,produced=f.get_fluid_production_statistics(s).get_input_count('crude-oil'),pumpjack=tostring(d.unit_number),carried=c.get_item_count('pumpjack'),network=d.electric_network_id,energy=d.energy,character=c.unit_number,players=#game.connected_players})
                 """;
             using var afterDocument = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(afterCommand, token));
             var after = afterDocument.RootElement.Clone();
-            int links = 0, mines = 0, refills = 0, pumpBuilds = 0;
+            int links = 0, mines = 0, refills = 0, pumpBuilds = 0, deferredSearches = 0;
             foreach (string line in await File.ReadAllLinesAsync(journalPath, token))
             {
                 using var row = JsonDocument.Parse(line);
                 string? type = row.RootElement.GetProperty("type").GetString();
                 var data = row.RootElement.GetProperty("data");
                 if (type == "power-grid-link") links++;
+                if (type == "resource-research-search" && data.GetProperty("deferredObservedResources").GetArrayLength() > 0) deferredSearches++;
                 if (type != "submission") continue;
                 string? kind = data.GetProperty("kind").GetString();
                 var args = data.GetProperty("args");
@@ -54,7 +75,15 @@ public sealed class FluidExtractionQualification(RuntimeSession session, bool re
                 if (kind == "build" && args.GetProperty("item").GetString() == "pumpjack") pumpBuilds++;
                 if (kind == "insert" && args.GetProperty("entityId").GetString() == power.Entities["boiler"]) refills++;
             }
-            evidence.Add(new { check = "native-distant-extraction", before, result, after, links, mines, refills, pumpBuilds });
+            evidence.Add(new { check = "native-distant-extraction", before, result, after, links, mines, refills, pumpBuilds, deferredSearches });
+            if (stationaryThreat)
+            {
+                var final = await new SpatialClient(game).CaptureAsync(cancellationToken: token);
+                var observed = await game.ExecuteAsync(GameRequest.Create("observe"), token);
+                Require(deferredSearches > 0 && final.Entities.Single(e => e.Id == result.MachineId).Position.DistanceTo(new(70, 0)) < 1
+                    && observed.Ok && observed.Data.GetProperty("agent").GetProperty("health").GetDouble() == 250,
+                    "The protected deposit was not deferred before safe extraction without injury.");
+            }
             Require(after.GetProperty("researched").GetBoolean() && result.ConnectedFluidStock > 0 && result.PoweredSamples > 0
                 && after.GetProperty("produced").GetDouble() > before.GetProperty("produced").GetDouble(),
                 "Native oil production and research have not both been proven.");
@@ -72,7 +101,7 @@ public sealed class FluidExtractionQualification(RuntimeSession session, bool re
         finally
         {
             await LocalJson.WriteAsync(path, new { kind = "prepared-fluid-extraction-qualification", passed,
-                isAutonomousCampaign = false, reuse, journalPath, evidence }, CancellationToken.None);
+                isAutonomousCampaign = false, reuse, stationaryThreat, journalPath, evidence }, CancellationToken.None);
         }
     }
 

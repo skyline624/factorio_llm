@@ -28,7 +28,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         var entity = map.Entities.Single(e => e.Id == entityId);
         MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map), entity)
             ?? throw new InvalidOperationException("No reachable interaction position for the observed entity.");
-        await NavigateAsync(approach, .2, token);
+        // Interaction geometry is observed over 48 tiles; navigation uses smaller local snapshots.
+        await TravelAsync(approach, .2, catalog, token);
     }
 
     public async Task TravelAsync(MapPosition destination, double arrivalDistance, ProductionCatalog catalog,

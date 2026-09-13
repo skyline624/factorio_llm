@@ -37,60 +37,48 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
         var exploration = new ExplorationPlanner();
         await using var controller = new SpatialController(game, journal);
         SpatialSnapshot map = await MapAsync();
+        var deferred = new HashSet<string>(StringComparer.Ordinal);
+        ExtractionSelection? selected = null;
         // Historical resource positions only guide travel. Current geometry and amount are always read again.
-        for (int search = 0; !map.Entities.Any(IsTarget); search++)
+        for (int search = 0; search < 64; search++)
         {
-            if (search >= 64) throw new InvalidOperationException("Resource discovery exhausted its local exploration budget.");
+            selected = await SelectAsync();
+            if (selected is not null) break;
+            string[] unsuitable = map.Entities.Where(IsTarget).Select(e => e.Id).ToArray();
+            foreach (string id in unsuitable) deferred.Add(id);
             ResourceMemorySnapshot? memory = game is IResourceMemoryReader reader ? await reader.ReadResourceMemoryAsync(map, token) : null;
-            var historical = memory?.Resources.Where(r => r.Name == resourceName)
+            var historical = memory?.Resources.Where(r => r.Name == resourceName && !deferred.Contains(r.EntityId))
                 .OrderBy(r => r.Position.DistanceTo(map.Actor.Position)).FirstOrDefault();
             var frontier = await controller.FindExplorationWaypointAsync(exploration, catalog, "", historical?.Position, token);
-            await journal.AppendAsync("resource-research-search", new { resourceName, historical, frontier }, token);
+            await journal.AppendAsync("resource-research-search", new { resourceName, historical, frontier,
+                deferredObservedResources = unsuitable }, token);
             await controller.NavigateAsync(frontier.Position, cancellationToken: token);
             map = await MapAsync();
         }
-        ProductionState factory = await production.ObserveAsync(token);
-        RequireScope(factory.Scope);
-        bool CanObtain(string item) => factory.Inventory.GetValueOrDefault(item) > 0
-            || catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == item && p.DeterministicItem));
-        var poleItems = items.Where(i => CanObtain(i) && map.Prototypes[map.Items[i].EntityName].Type == "electric-pole").ToArray();
-        var machines = items.Where(i => CanObtain(i) && map.Prototypes[map.Items[i].EntityName] is { Type: "mining-drill", IsElectric: true } p
-            && p.FluidBoxes?.Any(b => b.ProductionType == "output") == true).ToArray();
-        var ownedIds = factory.Entities.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
-        var planner = new ResourceExtractionPlanner();
-        var selected = (from item in machines
-                        from pole in poleItems
-                        let candidate = planner.Find(map, resourceName, item, pole, ownedIds)
-                        where candidate is not null
-                        select (Item: item, Pole: pole, Plan: candidate)).FirstOrDefault();
-        var sites = machines.Select(item => (Item: item, Site: planner.FindSite(map, resourceName, item, ownedIds)))
-            .Where(candidate => candidate.Site is not null).ToArray();
-        var existing = sites.FirstOrDefault(candidate => candidate.Site!.ExistingMachineId is not null);
+        if (selected is null) throw new InvalidOperationException("Resource discovery exhausted its local exploration budget without a usable site.");
         string machineId;
-        if (existing.Site is not null || selected.Plan is null)
+        if (selected.Site is { } site)
         {
-            var remote = existing.Site is not null ? existing : sites.FirstOrDefault();
-            var site = remote.Site ?? throw new InvalidOperationException("No clear compatible observed fluid extraction site.");
             await journal.AppendAsync("resource-research-grid-placement", new
-                { technology, resourceName, remote.Item, site, map.Scope, map.CollectedTick }, token);
+                { technology, resourceName, selected.Item, site, map.Scope, map.CollectedTick }, token);
             if (site.ExistingMachineId is { } installed) machineId = installed;
             else
             {
-                await executor.RunAsync(remote.Item, 1, token);
-                machineId = await power.BuildAtAsync(remote.Item, site.Machine, catalog, controller, token);
+                await executor.RunAsync(selected.Item, 1, token);
+                machineId = await power.BuildAtAsync(selected.Item, site.Machine, catalog, controller, token);
             }
             await new PowerGridController(game, journal).ConnectAsync(machineId, catalog, controller, token);
         }
         else
         {
-            ResourceExtractionPlacement plan = selected.Plan;
+            ResourceExtractionPlacement plan = selected.Local!;
             await journal.AppendAsync("resource-research-placement", new { technology, resourceName, selected.Item, selected.Pole, plan, map.Scope, map.CollectedTick }, token);
             await executor.RunAsync(selected.Item, 1, token);
-            if (plan.AdditionalPole is not null) await executor.RunAsync(selected.Pole, 1, token);
+            if (plan.AdditionalPole is not null) await executor.RunAsync(selected.Pole!, 1, token);
             string sourceId = plan.PoleId;
             if (plan.AdditionalPole is not null)
             {
-                string addedId = await power.BuildAtAsync(selected.Pole, plan.AdditionalPole, catalog, controller, token);
+                string addedId = await power.BuildAtAsync(selected.Pole!, plan.AdditionalPole, catalog, controller, token);
                 map = await MapAsync();
                 if (Network(map, addedId) is not { } network || network != Network(map, sourceId))
                     throw new InvalidDataException("The extraction pole did not connect to the planned source network.");
@@ -139,6 +127,28 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
         }
         throw new InvalidOperationException("Powered extraction did not establish the native research and fluid evidence within its budget.");
 
+        async Task<ExtractionSelection?> SelectAsync()
+        {
+            ProductionState factory = await production.ObserveAsync(token);
+            RequireScope(factory.Scope);
+            bool CanObtain(string item) => factory.Inventory.GetValueOrDefault(item) > 0
+                || catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == item && p.DeterministicItem));
+            var poles = items.Where(i => CanObtain(i) && map.Prototypes[map.Items[i].EntityName].Type == "electric-pole").ToArray();
+            var machines = items.Where(i => CanObtain(i) && map.Prototypes[map.Items[i].EntityName] is { Type: "mining-drill", IsElectric: true } p
+                && p.FluidBoxes?.Any(b => b.ProductionType == "output") == true).ToArray();
+            if (machines.Length == 0) throw new InvalidOperationException("No obtainable compatible fluid extractor is available.");
+            var owned = factory.Entities.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+            var planner = new ResourceExtractionPlanner();
+            var sites = machines.Select(item => new ExtractionSelection(item, Site: planner.FindSite(map, resourceName, item, owned)))
+                .Where(candidate => candidate.Site is not null).ToArray();
+            var existing = sites.FirstOrDefault(candidate => candidate.Site!.ExistingMachineId is not null);
+            if (existing is not null) return existing;
+            foreach (string item in machines)
+                foreach (string pole in poles)
+                    if (planner.Find(map, resourceName, item, pole, owned) is { } plan) return new(item, pole, plan);
+            return sites.FirstOrDefault();
+        }
+
         bool IsTarget(SpatialEntity entity) => entity.Name == resourceName && entity.Amount > 0 && map.Prototypes[entity.Name].Type == "resource";
         void RequireScope(ActorScope scope)
         {
@@ -151,6 +161,8 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
             return value;
         }
     }
+    private sealed record ExtractionSelection(string Item, string? Pole = null, ResourceExtractionPlacement? Local = null,
+        ResourceExtractionSite? Site = null);
     private static long? Network(SpatialSnapshot map, string id) => map.Entities.Single(e => e.Id == id).Power?.NetworkId;
     private static bool ContainsMachine(FactoryRecord record, string id) => record.EntityId == id
         || (record.Data.TryGetProperty("sourceBoxes", out var boxes) && boxes.ValueKind == JsonValueKind.Array

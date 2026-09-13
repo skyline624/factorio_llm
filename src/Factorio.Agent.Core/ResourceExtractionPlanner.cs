@@ -74,7 +74,9 @@ public sealed class ResourceExtractionPlanner
 
     private static IEnumerable<SpatialEntity> CompatibleResources(SpatialSnapshot map, string resourceName, EntityGeometry machine)
         => map.Entities.Where(e => e.Name == resourceName && e.Amount > 0 && map.Prototypes[e.Name].Type == "resource"
-            && map.Prototypes[e.Name].ResourceCategory is { } category && machine.ResourceCategories?.GetValueOrDefault(category) == true)
+            && map.Prototypes[e.Name].ResourceCategory is { } category && machine.ResourceCategories?.GetValueOrDefault(category) == true
+            && (map.StationaryThreats ?? []).All(threat => e.Position.DistanceTo(threat.Position)
+                > threat.Range + SpatialCollisionField.StationaryThreatMargin))
             .OrderBy(e => e.Position.DistanceTo(map.Actor.Position));
 
     private static bool Supplies(MapPosition position, EntityGeometry pole, WorldBox machine)

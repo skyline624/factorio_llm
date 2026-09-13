@@ -3,6 +3,7 @@ namespace Factorio.Agent.Core;
 /// <summary>Native masks and boxes indexed by tile. Unknown space is never assumed clear.</summary>
 public sealed class SpatialCollisionField
 {
+    public const double StationaryThreatMargin = 2;
     private sealed record Obstacle(string Id, OrientedCollisionBox Shape, CollisionMask Mask, bool Tile)
     {
         public WorldBox Bounds => Shape.EnclosingBox;
@@ -93,7 +94,7 @@ public sealed class SpatialCollisionField
         {
             // Two tiles allow for steering and time between observations. This is a planning
             // margin, not an engine range or a guarantee against moving enemies/projectiles.
-            double radius = threat.Range + 2;
+            double radius = threat.Range + StationaryThreatMargin;
             double minimum = Math.Min(radius, Math.Max(Map.Actor.Position.DistanceTo(threat.Position), from.DistanceTo(threat.Position)));
             MapPosition closest;
             if (steering)

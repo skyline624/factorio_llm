@@ -26,9 +26,23 @@ L'option `--reuse` prépare un chevalet déjà posé, sans autre chevalet porté
 
 Les 603 tests hors ligne passent, dont les cas de gisement sans réseau local, de réemploi propre et de refus d'un extracteur étranger ou incompatible. Ces essais prouvent ce raccordement et ce déclencheur dans des fixtures préparées ; ils ne qualifient pas une campagne autonome jusqu'à la fusée.
 
+## Gisements protégés et poursuite de l'exploration
+
+Dans la partie normale, les trois gisements de pétrole observés étaient dans la portée d'un ver visible. Le choix de placement les acceptait, alors que le déplacement refusait ensuite leur approche. Plusieurs objectifs ont donc échoué sur le même site après la fabrication du chevalet ; celui-ci est resté porté et aucun pétrole n'a été extrait pendant ces tentatives.
+
+Le choix des gisements exclut désormais les centres dans la portée des menaces stationnaires actuellement visibles, avec la même marge de deux cases que la navigation. L'exploration continue tant qu'aucun site utilisable n'est trouvé. Les ressources localement refusées sont écartées des destinations historiques pendant cette tentative ; chaque observation locale réévalue les sites. L'historique guide seulement le déplacement, sans prouver un stock actuel, un ennemi caché ou un emplacement constructible. La recherche reste bornée à 64 étapes et au délai du contrôleur.
+
+`verify-fluid-extraction --session FILE --stationary-threat` prépare un gisement proche protégé par un petit ver et un gisement sûr distant, observé auparavant puis absent de la première carte locale. Le 13 septembre 2026, l'essai headless a écarté le premier site, construit le chevalet 711 sur le second, prolongé le réseau 33 par 13 poteaux et ravitaillé la chaudière une fois. Entre les ticks 343252 et 352835, le moteur a débloqué `oil-processing` et constaté environ 73,31 unités de pétrole. Un chevalet a été consommé, aucun minage manuel n'a été soumis et le personnage a conservé ses 250 points de vie.
+
+La variante avec pilote et `--reuse` a révélé un défaut distinct : l'approche calculée sur une carte de rayon 48 pouvait sortir de la carte plus petite de navigation. L'approche des entités utilise maintenant le déplacement par étapes avant l'arrivée finale. La première tentative concernée est conservée comme échec de qualification.
+
+Après correction, la variante connectée réussit entre les ticks 384478 et 395150 : le chevalet 756 est conservé, 13 poteaux le raccordent au réseau 48 et la chaudière est ravitaillée une fois. Le moteur mesure environ 83,28 unités de pétrole supplémentaires et le déclencheur scientifique terminé. Le journal contient une reprise de recherche après refus du site protégé, zéro chevalet construit et zéro minage manuel. Le pilote reste connecté au même personnage 391, qui conserve 250 points de vie. Les 606 tests hors ligne passent, avec un test cloud optionnel ignoré. Ces deux scénarios préparés ne constituent pas une campagne finale.
+
 ## Limites actuelles
 
 L'extension électrique reste limitée à 128 liaisons par tentative et à un terrain accessible dans les observations successives. Un chevalet propre déjà posé peut être réutilisé ; les poteaux construits avant une interruption restent dans le monde. Cela ne garantit ni une route pour tout terrain, ni la récupération de toutes les constructions partielles. Les ressources solides nécessitant un fluide et les déclencheurs de recherche par extraction solide restent hors de ce contrôleur. Le transport du pétrole vers une raffinerie distante constitue une étape séparée.
+
+Le filtrage des gisements ne prouve pas l'absence de tout danger : il porte sur les menaces stationnaires visibles et leur portée observée. Un obstacle de terrain, une menace mobile ou un changement ultérieur peut encore interrompre l'exécution ; aucune impossibilité globale n'est déduite d'un refus local.
 
 L'exécution exige un fluide présent dans le circuit observé et le déblocage natif ; elle n'est pas une mesure générale de débit et ne qualifie pas encore un circuit continuellement vidé par une raffinerie. Un premier [raffinage avec tuyaux et stockage de sortie](fluid-production.md) est désormais qualifié en fixture ; chimie complète et production industrielle restent à implémenter. Les budgets scientifiques actuels et le laboratoire unique ne suffisent pas aux grandes recherches finales.
 

@@ -4,6 +4,31 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class ResourceExtractionPlannerTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ProtectedOilDoesNotRemainAConstructionTarget(bool localPower)
+    {
+        var map = Map() with { Actor = Map().Actor with { Position = new(-10, -10) },
+            StationaryThreats = [new("worm", new(5.5, 5.5), 15, 100)] };
+        var planner = new ResourceExtractionPlanner();
+        if (localPower) Assert.Null(planner.Find(map, "oil", "pumpjack", "pole", new HashSet<string> { "power" }));
+        else Assert.Null(planner.FindSite(map, "oil", "pumpjack", new HashSet<string>()));
+    }
+
+    [Fact]
+    public void AnObservedSafeDepositReplacesTheEnemyProtectedSite()
+    {
+        var map = Map();
+        var position = new MapPosition(-8.5, -8.5);
+        map = map with { Actor = map.Actor with { Position = new(0, 0) },
+            StationaryThreats = [new("worm", new(5.5, 5.5), 15, 100)],
+            Entities = [..map.Entities, new("safe-oil", "oil", position, map.Prototypes["oil"].CollisionBox.Translate(position), 0, "neutral", 10000)] };
+        var site = new ResourceExtractionPlanner().FindSite(map, "oil", "pumpjack", new HashSet<string>());
+        Assert.NotNull(site);
+        Assert.Equal("safe-oil", site.ResourceId);
+    }
+
     [Fact]
     public void DistantDepositCanBeSelectedBeforeItsGridIsExtended()
     {
