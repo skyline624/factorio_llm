@@ -293,7 +293,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
         return value.EnumerateArray().Select(e => new ProductionEntity(e.GetProperty("id").GetString()!,
             e.GetProperty("name").GetString()!, e.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!,
             e.TryGetProperty("recipe", out var recipe) ? recipe.GetString() : null, e.GetProperty("inventories").Clone(),
-            e.TryGetProperty("previousRecipe", out var previous) ? previous.GetString() : null)).ToArray();
+            e.TryGetProperty("previousRecipe", out var previous) ? previous.GetString() : null,
+            e.TryGetProperty("type", out var type) ? type.GetString() : null)).ToArray();
     }
 }
 
@@ -305,14 +306,15 @@ internal sealed record ProductionState(ActorScope Scope, long Tick, string Contr
     public ProductionEntity? AvailableOutput(string item, IReadOnlySet<string>? reservedEntityIds = null) =>
         Entities.FirstOrDefault(e => !ProductionReservations.Current.Contains(e.Id) && reservedEntityIds?.Contains(e.Id) != true && e.Count("output", item) > 0);
 }
-internal sealed record ProductionEntity(string Id, string Name, MapPosition Position, string? Recipe, JsonElement Inventories, string? PreviousRecipe = null)
+internal sealed record ProductionEntity(string Id, string Name, MapPosition Position, string? Recipe, JsonElement Inventories, string? PreviousRecipe = null, string? Type = null)
 {
     public KnownProductionMachine AsMachine() => new(Id, Name, Recipe, Items("input"), Items("output"));
-    public IReadOnlyDictionary<string, long> Items(string slot) => Inventories.TryGetProperty(slot, out var inventory)
+    public IReadOnlyDictionary<string, long> Items(string slot) => !ProtectedOutput(slot) && Inventories.TryGetProperty(slot, out var inventory)
         ? inventory.GetProperty("items").Deserialize<Dictionary<string, long>>(Protocol.Json)!
         : new Dictionary<string, long>();
-    public long Count(string slot, string item) => Inventories.TryGetProperty(slot, out var inventory)
+    public long Count(string slot, string item) => !ProtectedOutput(slot) && Inventories.TryGetProperty(slot, out var inventory)
         && inventory.GetProperty("items").TryGetProperty(item, out var amount) ? amount.GetInt64() : 0;
-    public long InventoryTotal(string slot) => Inventories.TryGetProperty(slot, out var inventory)
+    public long InventoryTotal(string slot) => !ProtectedOutput(slot) && Inventories.TryGetProperty(slot, out var inventory)
         ? inventory.GetProperty("items").EnumerateObject().Sum(i => i.Value.GetInt64()) : 0;
+    private bool ProtectedOutput(string slot) => slot == "output" && Type == "ammo-turret";
 }

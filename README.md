@@ -37,7 +37,7 @@ Le [profil exemple](config/appsettings.example.json) décrit les paramètres de 
 Copy-Item config/appsettings.example.json config/appsettings.local.json
 ```
 
-L'adaptateur a réussi un appel réel avec l'effort `low` sur un contexte synthétique, puis a été relié à une première boucle de production dans le jeu. La présence de JSON ou d'arguments d'outils ne garantit jamais leur validité : syntaxe, schéma et corrélation sont contrôlés. La traduction actuelle accepte des objectifs de stock d’objets solides, de fluides et de recherche identifiée dans le catalogue natif, sous les limites documentées des exécuteurs. C# résout les prérequis scientifiques, fabrique les packs solides pris en charge et vérifie chaque déblocage dans le moteur. Les autres objectifs restent des propositions non exécutables. Le profil ne contient aucun secret et son chargement par une commande de campagne complète reste à développer.
+L'adaptateur a réussi un appel réel avec l'effort `low` sur un contexte synthétique, puis a été relié à une première boucle de production dans le jeu. La présence de JSON ou d'arguments d'outils ne garantit jamais leur validité : syntaxe, schéma et corrélation sont contrôlés. La traduction actuelle accepte des objectifs de stock d’objets solides, de fluides, de recherche, de lancement et de déploiement de tourelles identifiés dans le catalogue natif, sous les limites documentées des exécuteurs. C# résout les prérequis scientifiques, fabrique les packs solides pris en charge et vérifie chaque déblocage dans le moteur. Les autres objectifs restent des propositions non exécutables. Le profil ne contient aucun secret et son chargement par une commande de campagne complète reste à développer.
 
 ## Essais avec Factorio
 
@@ -149,6 +149,8 @@ Le [raffinage et le routage des tuyaux](docs/fluid-production.md) sont accessibl
 
 `fuel-feeder --session FILE --boiler ID --reserve 50 --ticks 3600` construit et vérifie un ravitaillement par coffre et bras. Un [essai dans l’économie normale](docs/fuel-feeder.md) confirme les transferts natifs et une alimentation sous faible charge pendant plus d’une minute. La maintenance de production renouvelle désormais un coffre reconnu, en conservant son combustible et en excluant ce coffre des sources de collecte. Elle ne garantit pas une alimentation continue pendant les longs trajets.
 
-La défense sait désormais [équiper les armes portées, recharger et sélectionner une arme chargée](docs/equipment.md), avec conservation native des cartouches. Les essais préparés headless et avec pilote connecté couvrent trois attaques successives ; la fuite et le réapprovisionnement stratégique restent à compléter.
+La défense sait désormais [équiper les armes portées, recharger et sélectionner une arme chargée](docs/equipment.md), avec conservation native des cartouches. Les essais préparés headless et avec pilote connecté couvrent trois attaques successives.
 
 Le [repli vers une tourelle chargée observée](docs/retreat.md) est qualifié en headless et avec pilote : le personnage désarmé contourne un obstacle pendant la poursuite. Cette couverture locale ne remplace pas une défense durable de toute l’usine.
+
+Les objectifs `defense` permettent aussi [d'installer et ravitailler des tourelles](docs/defense-deployment.md). C# réutilise les défenses existantes, produit les fournitures et calcule les placements. Deux essais natifs vérifient les réserves, les coûts et le même personnage avec pilote connecté. Les munitions installées sont protégées des collectes de production ; leur entretien continu et la qualification jusqu'à la fusée restent à compléter.

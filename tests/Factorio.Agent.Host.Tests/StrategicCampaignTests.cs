@@ -12,6 +12,23 @@ public sealed class StrategicCampaignTests : IDisposable
     private string Memory => Path.Combine(directory, "strategy.json");
 
     [Fact]
+    public async Task InstalledDefenseEvidenceSurvivesIntoTheNextStrategicGoal()
+    {
+        var defense = new DefenseDeploymentResult("gun-turret", 2, 2, 1, 2, 10, 20, 1, 4, 1, ["existing", "new"], ["exposed"]);
+        var completed = Completed() with { Goal = Completed().Goal with { Category = GoalCategory.Defense, Target = "gun-turret", Quantity = 2, Unit = GoalUnit.Items },
+            Research = null, Defense = defense };
+        var runner = new Runner(() => completed);
+        await new StrategicCampaignController(new Game(), runner, Memory).RunAsync(2);
+        using var feedback = JsonDocument.Parse(runner.History[1]!);
+        var measured = feedback.RootElement.GetProperty("defense").Deserialize<DefenseDeploymentResult>(Protocol.Json)!;
+        Assert.Equal(defense.ReadyCount, measured.ReadyCount);
+        Assert.Equal(defense.EndTick, measured.EndTick);
+        Assert.Equal(defense.ReadyIds, measured.ReadyIds);
+        Assert.Equal(defense.ExposedIds, measured.ExposedIds);
+        Assert.True(runner.History[1]!.Length <= 4000);
+    }
+
+    [Fact]
     public async Task CarriesVerifiedPreviousOutcomeAcrossIterationsAndStopsOnNativeRocket()
     {
         var game = new Game();

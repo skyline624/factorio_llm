@@ -5,6 +5,18 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class ProductionSupplyTests
 {
+    [Fact]
+    public void NativeOutputAliasCannotMakeLoadedTurretAProductionSource()
+    {
+        var turret = new ProductionEntity("defense", "gun-turret", new(0, 0), null,
+            Protocol.ToElement(new { output = new { items = new Dictionary<string, long> { ["firearm-magazine"] = 10 } } }),
+            Type: "ammo-turret");
+        var state = new ProductionState(new("world", "session", "actor", 1, 1), 100, "ai", new Dictionary<string, long>(), [turret]);
+        Assert.Null(state.AvailableOutput("firearm-magazine"));
+        Assert.Equal(0, turret.Count("output", "firearm-magazine"));
+        Assert.Empty(turret.Items("output"));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

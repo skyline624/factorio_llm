@@ -66,7 +66,7 @@ end
 function M.production()
   local c = Actor.get()
   U.check(c ~= nil, "actor_dead", "Production catalog requires a living character")
-  local result = {scope = Actor.scope(), collectedTick = game.tick, recipes = {}, items = {}, mining = {}, miningSourceTypes = {}, machines = {}, assemblers = {},
+  local result = {scope = Actor.scope(), collectedTick = game.tick, recipes = {}, items = {}, mining = {}, miningSourceTypes = {}, machines = {}, assemblers = {}, turrets = {},
     handCategories = c.prototype.crafting_categories}
   for name, recipe in pairs(c.force.recipes) do
     if not recipe.hidden then
@@ -80,7 +80,19 @@ function M.production()
     result.items[name] = {fuelValue = item.fuel_value, fuelCategory = item.fuel_category,
       placeEntity = item.place_result and item.place_result.name, placeEntityType = item.place_result and item.place_result.type,
       stackSize = item.stack_size}
+    if item.type == "ammo" then
+      result.items[name].ammoCategory, result.items[name].magazineSize = item.ammo_category.name, item.magazine_size
+    end
     local entity = item.place_result
+    if entity and entity.type == "ammo-turret" and not entity.electric_energy_source_prototype then
+      local attack = entity.attack_parameters
+      if attack and attack.type == "projectile" and attack.min_range == 0 then
+        for _, category in ipairs(attack.ammo_categories or {}) do
+          if category == "bullet" then result.turrets[name] = {entityName = entity.name, range = attack.range,
+            ammoCategories = U.copy(attack.ammo_categories)}; break end
+        end
+      end
+    end
     if entity and entity.type == "furnace" and entity.burner_prototype then
       result.machines[name] = {entityName = entity.name, categories = entity.crafting_categories,
         fuelCategories = entity.burner_prototype.fuel_categories, craftingSpeed = entity.get_crafting_speed("normal")}

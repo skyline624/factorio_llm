@@ -5,7 +5,7 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
-public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null, FluidProductionResult? Fluid = null, RocketLaunchResult? Rocket = null);
+public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null, FluidProductionResult? Fluid = null, RocketLaunchResult? Rocket = null, DefenseDeploymentResult? Defense = null);
 
 /// <summary>Grounds semantic production or research goals into verified native execution.</summary>
 public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal) : IStrategicGoalRunner
@@ -19,6 +19,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         FactorySnapshot factory = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         ActorScope scope = observation.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
         if (catalog.Scope != scope || science.Scope != scope || factory.Scope != scope) throw new InvalidDataException("Strategic observations span different actor scopes.");
+        var defenses = catalog.Turrets is { Count: > 0 } ? DefenseFactoryState.Read(factory, catalog) : null;
         JsonElement agent = observation.Data.GetProperty("agent");
         string observationId = $"{observation.Data.GetProperty("snapshotId").GetInt64()}:{observation.Tick}";
         // Whitelist factual fields: no session credentials, player names or coordinates leave the machine.
@@ -41,6 +42,17 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 .Select(r => r.Name).ToArray(),
             knownFactory = new { factory.CollectedTick, factory.Coverage, physicalStocks = factory.SummarizeStocks(),
                 interpretation = "Inventory totals INCLUDE the actor and known corpses; do not add them to agent.inventory. Physical stock is not a promise of immediate availability. Transit and fluids are separate." },
+            knownDefenses = defenses is null ? null : new
+            {
+                factory.CollectedTick, defenses.SurfaceIndex,
+                turrets = defenses.Turrets.GroupBy(t => t.Name).OrderBy(g => g.Key, StringComparer.Ordinal)
+                    .Select(g => new { name = g.Key, installed = g.Count(), active = g.Count(t => t.Active),
+                        readyWithReserve = g.Count(DefenseDeploymentPlanner.Ready), rounds = g.Sum(t => t.Rounds) }).ToArray(),
+                requiredReserveRounds = DefenseDeploymentPlanner.ReserveRounds,
+                coveredIndustrialAnchors = defenses.Anchors.Count(a => DefenseDeploymentPlanner.Coverage(a, defenses.Turrets) > 0),
+                exposedIndustrialAnchors = defenses.Anchors.Count(a => DefenseDeploymentPlanner.Coverage(a, defenses.Turrets) == 0),
+                interpretation = "Known own industry on the current surface only; coverage uses native effective firing range of active loaded turrets. Turret ammunition is reserved, not available to ordinary production."
+            },
             nativeFluidIdentifiers = catalog.Recipes.SelectMany(r => r.Ingredients.Concat(r.Products)).Where(m => m.Type == "fluid")
                 .Select(m => m.Name).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             availableFluidConversions = catalog.Recipes.Where(r => r.Enabled && r.Ingredients.Count == 1 && r.Products.Count == 1
@@ -56,8 +68,10 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 "Research goals use category research, unit completion, quantity 1 and an exact native technology identifier. C# resolves native prerequisites, supported craft-item triggers and laboratory research, including science production and power maintenance. It can also satisfy fluid resource mining triggers using a compatible electric extractor on an observed deposit near an existing network, with at most one new pole. Remote fluid-extraction outposts and solid-resource mining triggers remain unsupported. " +
                 "Fluid production goals use category production, unit fluid_units and an exact native fluid identifier, up to 100000 units in the known factory. C# supports native refinery configuration and ordinary pipe routes in the observed construction area. Compatible chemical recipes may combine deterministic solid and fluid inputs, including sulfuric acid output, with finite fluid preparation and native pipe connections. Observed solid producer outputs can supply assemblers through calculated belts and inserters. Long-distance fluid networks, temperature-constrained chemistry, complete factory logistics and automatic relocation after resource depletion remain incomplete. " +
                 "Launch goals use category launch, unit completion, quantity 1 and an exact native rocket-silo item identifier. Research the silo and rocket-part recipes first. C# reuses or installs a silo, supplies bounded batches from native requirements and verifies the engine launch counter. Local powered placement and existing production capabilities still bound execution. " +
+                "Defense goals use category defense, unit items, quantity 1 to 32 and a native supported turret item. Completion means at least that many active installed turrets on the actor's surface, each with at least 100 observed rounds. C# services existing turrets first, produces supplies, calculates placements near exposed known industry and reports measured coverage. This is a finite deployment and replenishment goal, not a guarantee of continuous perimeter coverage. " +
                 "Choose an unmet useful goal toward the rocket. Other meaningful goals remain permissible proposals with explicit unsupported results.",
             nativeSiloItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "rocket-silo").Select(p => p.Key).ToArray(),
+            nativeDefenseItems = catalog.Turrets?.Keys.Order(StringComparer.Ordinal).ToArray() ?? [],
             scope = "Local observed resources; known own buildings; exact actor inventory at observedTick. Hidden areas and enemies are unknown."
         }, Protocol.Json);
         var context = new StrategicContext(observationId, facts,
@@ -98,6 +112,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             return new(goal, Research: await new ResearchGoalExecutor(game, journal).RunAsync(goal.Target, token));
         if (goal.Category == GoalCategory.Launch)
             return new(goal, Rocket: await new RocketLaunchController(game, journal).RunAsync(goal.Target, token));
+        if (goal.Category == GoalCategory.Defense)
+            return new(goal, Defense: await new DefenseDeploymentController(game, journal).RunAsync(goal.Target, (int)goal.Quantity, token));
         return new(goal, Production: await new ProductionGoalExecutor(game, journal).RunAsync(goal.Target, (int)goal.Quantity, token));
     }
 
@@ -105,6 +121,14 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         IReadOnlyDictionary<string, NativeTechnology>? technologies = null)
     {
         if (goal.ObservationId != observationId) return "The proposal references a different observation.";
+        if (goal.Category == GoalCategory.Defense)
+        {
+            if (goal.Unit != GoalUnit.Items || goal.Quantity is < 1 or > 32 || decimal.Truncate(goal.Quantity) != goal.Quantity)
+                return "Defense requires 1 to 32 whole installed ammunition turrets, unit items.";
+            return catalog.Items.TryGetValue(goal.Target, out var turret) && turret.PlaceEntityType == "ammo-turret"
+                && catalog.Turrets?.TryGetValue(goal.Target, out var supported) == true && supported.EntityName == turret.PlaceEntity
+                ? null : "Defense requires an exact supported native ammunition-turret item identifier.";
+        }
         if (goal.Category == GoalCategory.Launch)
         {
             if (goal.Unit != GoalUnit.Completion || goal.Quantity != 1) return "Launch requires a completion goal with quantity 1.";

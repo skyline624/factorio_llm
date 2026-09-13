@@ -8,6 +8,22 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class StrategicGroundingTests
 {
     [Fact]
+    public void DefenseMeansInstalledNativeTurretsRatherThanCarriedItemStock()
+    {
+        var catalog = Catalog() with { Items = new Dictionary<string, NativeItem>(Catalog().Items)
+            { ["gun-turret"] = new(0, 50, PlaceEntity: "gun-turret", PlaceEntityType: "ammo-turret") } };
+        var goal = Goal() with { Category = GoalCategory.Defense, Target = "gun-turret", Quantity = 8 };
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog));
+        catalog = catalog with { Turrets = new Dictionary<string, NativeTurret> { ["gun-turret"] = new("gun-turret", 18, ["bullet"]) } };
+        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", catalog));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "iron-plate" }, "observation", catalog));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 0 }, "observation", catalog));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 33 }, "observation", catalog));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 1.5m }, "observation", catalog));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Unit = GoalUnit.Completion }, "observation", catalog));
+    }
+
+    [Fact]
     public void LaunchRequiresNativeSiloAndSingleCompletion()
     {
         var catalog = Catalog() with { Items = new Dictionary<string, NativeItem>(Catalog().Items)

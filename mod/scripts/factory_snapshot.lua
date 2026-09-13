@@ -1,6 +1,7 @@
 local U = require("scripts.util")
 local Actor = require("scripts.actor")
 local Recovery = require("scripts.recovery")
+local Weapons = require("scripts.weapons")
 local M = {}
 local maximum_entities, maximum_records, lifetime = 20000, 150000, 3600
 local belt_types = {["transport-belt"] = true, ["underground-belt"] = true, splitter = true,
@@ -74,6 +75,14 @@ local function capture(args)
     if entity.type == "character" then
       local main = entity.get_main_inventory()
       metadata.mainInventoryId = "inventory:" .. id .. ":" .. main.index
+    end
+    if entity.type == "ammo-turret" then
+      local ammunition = entity.get_inventory(defines.inventory.turret_ammo)
+      local defense = Weapons.defense(entity)
+      metadata.active, metadata.quality = entity.active, entity.quality.name
+      metadata.ammoInventoryId = "inventory:" .. id .. ":" .. ammunition.index
+      metadata.ammoRounds, metadata.defenseReady = U.ammo(ammunition), defense ~= nil
+      metadata.defenseRange = defense and defense.range
     end
     if entity.burner then metadata.burnerRemainingJoules = entity.burner.remaining_burning_fuel end
     if fuel and fuel.valid then

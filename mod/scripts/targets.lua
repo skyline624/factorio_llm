@@ -51,7 +51,12 @@ function M.id(entity) return Recovery.id(entity) or U.entity_id(entity) end
 
 function M.inventory(entity, slot)
   if slot == "fuel" then return entity.get_fuel_inventory() end
-  if slot == "output" then return entity.get_output_inventory() end
+  if slot == "output" then
+    -- The engine aliases turret ammunition as an output inventory. It is a
+    -- defensive reserve, not an ordinary production source.
+    if entity.type == "ammo-turret" then return nil end
+    return entity.get_output_inventory()
+  end
   local types = {chest = {container = true, ["logistic-container"] = true}, lab = {lab = true},
     ammo = {["ammo-turret"] = true}, rocket = {["rocket-silo"] = true},
     corpse = {["character-corpse"] = true}}

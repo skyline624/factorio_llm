@@ -29,6 +29,7 @@ try
           prepare-research --session FILE --technology NAME
           research --session FILE --technology NAME
           launch-rocket --session FILE --item NAME
+          deploy-defense --session FILE --item NAME --quantity N
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
           verify-furnace-fleet --session FILE [--item steel-plate|stone-brick]
@@ -37,6 +38,7 @@ try
           verify-death-recovery --session FILE
           verify-equipment --session FILE
           verify-retreat --session FILE
+          verify-defense-deployment --session FILE
           assemble --session FILE --item NAME --quantity N
           produce-fluid --session FILE --fluid NAME --quantity N
           connect-fluid --session FILE --source ID --target ID --fluid NAME
@@ -55,6 +57,16 @@ try
     string Required(string name) => Option(name) ?? throw new ArgumentException($"Missing --{name}.");
     switch (args[0])
     {
+        case "deploy-defense":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            string journalPath = Path.Combine(session.Directory, $"defense-deployment-{Guid.NewGuid():N}.jsonl");
+            var controller = new DefenseDeploymentController(game, new ControllerJournal(journalPath));
+            Print(new { result = await controller.RunAsync(Required("item"), int.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token), journalPath });
+            break;
+        }
         case "transport":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
@@ -173,6 +185,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new RetreatQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-defense-deployment":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new DefenseDeploymentQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-furnace-fuel":

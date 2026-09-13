@@ -88,6 +88,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 result.Production,
                 result.Fluid,
                 result.Rocket,
+                result.Defense,
                 research = result.Research is { } research ? new { research.Target, research.Researched, research.StartTick,
                     research.EndTick, completedCount = research.CompletedTechnologies.Count,
                     recentCompleted = research.CompletedTechnologies.TakeLast(16).ToArray() } : null,

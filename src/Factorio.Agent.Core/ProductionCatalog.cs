@@ -18,7 +18,10 @@ public sealed record NativeRecipe(string Name, bool Enabled, string Category, do
     [property: JsonConverter(typeof(NativeArrayConverter<NativeMaterial>))] IReadOnlyList<NativeMaterial> Ingredients,
     [property: JsonConverter(typeof(NativeArrayConverter<NativeMaterial>))] IReadOnlyList<NativeMaterial> Products,
     bool HandCraftingDisabled);
-public sealed record NativeItem(double FuelValue, int StackSize, string? FuelCategory = null, string? PlaceEntity = null, string? PlaceEntityType = null);
+public sealed record NativeItem(double FuelValue, int StackSize, string? FuelCategory = null, string? PlaceEntity = null, string? PlaceEntityType = null,
+    string? AmmoCategory = null, int? MagazineSize = null);
+public sealed record NativeTurret(string EntityName, double Range,
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> AmmoCategories);
 public sealed record NativeFurnace(string EntityName, IReadOnlyDictionary<string, bool> Categories,
     IReadOnlyDictionary<string, bool> FuelCategories, double CraftingSpeed);
 public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
@@ -26,7 +29,7 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
     IReadOnlyDictionary<string, NativeItem> Items, IReadOnlyDictionary<string, NativeMaterial[]> Mining,
     IReadOnlyDictionary<string, NativeFurnace> Machines, IReadOnlyDictionary<string, bool> HandCategories,
     IReadOnlyDictionary<string, NativeAssembler>? Assemblers = null,
-    IReadOnlyDictionary<string, string>? MiningSourceTypes = null)
+    IReadOnlyDictionary<string, string>? MiningSourceTypes = null, IReadOnlyDictionary<string, NativeTurret>? Turrets = null)
 {
     public bool CanHandCraft(NativeRecipe recipe) => !recipe.HandCraftingDisabled && HandCategories.ContainsKey(recipe.Category);
 
@@ -38,7 +41,9 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
         if (catalog.CollectedTick != response.Tick || catalog.Recipes.Count > 10000
             || catalog.Recipes.Select(r => r.Name).Distinct(StringComparer.Ordinal).Count() != catalog.Recipes.Count
             || catalog.Recipes.Any(r => !double.IsFinite(r.EnergySeconds) || r.EnergySeconds <= 0)
-            || catalog.Items.Values.Any(i => !double.IsFinite(i.FuelValue) || i.FuelValue < 0 || i.StackSize < 1)
+            || catalog.Items.Values.Any(i => !double.IsFinite(i.FuelValue) || i.FuelValue < 0 || i.StackSize < 1
+                || i.MagazineSize is <= 0 || (i.AmmoCategory is null) != (i.MagazineSize is null))
+            || catalog.Turrets?.Values.Any(t => !double.IsFinite(t.Range) || t.Range <= 0 || t.AmmoCategories.Count == 0) == true
             || catalog.Machines.Values.Any(m => !double.IsFinite(m.CraftingSpeed) || m.CraftingSpeed <= 0)
             || catalog.Assemblers?.Values.Any(m => !double.IsFinite(m.CraftingSpeed) || m.CraftingSpeed <= 0
                 || !double.IsFinite(m.EnergyPerTick) || m.EnergyPerTick <= 0) == true)
