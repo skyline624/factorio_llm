@@ -374,12 +374,18 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         finally { await defense.StopOwnedActionAsync(stopDeadline.Token); }
     }
 
+    // Transport failures are retried until the caller's deadline; a receipt that stays malformed is not transient.
     private async Task<OperationReceipt> QueryKnownAsync(string operationId, CancellationToken token)
     {
+        int malformed = 0;
         while (true)
         {
             try { return await operations.QueryAsync(operationId, token); }
-            catch (Exception error) when (error is SocketException or TimeoutException or InvalidDataException
+            catch (InvalidDataException) when (++malformed < 3)
+            {
+                await Task.Delay(150, token);
+            }
+            catch (Exception error) when (error is SocketException or TimeoutException
                 || error is IOException and not SessionDivergenceException)
             {
                 await Task.Delay(150, token);

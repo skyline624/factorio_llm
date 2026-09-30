@@ -75,6 +75,20 @@ public sealed class OllamaConfigurationTests : IDisposable
     }
 
     [Fact]
+    public async Task DefaultProfileIsFoundFromTheRepositoryRootRatherThanTheWorkingDirectory()
+    {
+        Directory.CreateDirectory(Path.Combine(directory, "config"));
+        string nested = Path.Combine(directory, "src", "Host", "bin", "Release");
+        Directory.CreateDirectory(nested);
+        await File.WriteAllTextAsync(Path.Combine(directory, "Factorio.Agent.sln"), "");
+        await File.WriteAllTextAsync(Path.Combine(directory, "config", "appsettings.local.json"),
+            """{"Ollama":{"BaseUrl":"https://ollama.com/","ApiKey":"synthetic-file-key"}}""");
+        Assert.Equal(Path.Combine(directory, "config", "appsettings.local.json"), OllamaConfiguration.ResolveDefaultPath(nested));
+        var options = await OllamaConfiguration.LoadAsync(null, false, null, searchFrom: nested);
+        Assert.True(options.IsDirectCloud);
+    }
+
+    [Fact]
     public async Task ExplicitMissingFileDoesNotSilentlySelectTheGateway()
     {
         await Assert.ThrowsAsync<FileNotFoundException>(() => OllamaConfiguration.LoadAsync(

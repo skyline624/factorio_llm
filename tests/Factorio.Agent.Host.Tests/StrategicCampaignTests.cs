@@ -106,6 +106,59 @@ public sealed class StrategicCampaignTests : IDisposable
         await Assert.ThrowsAsync<InvalidDataException>(() => new StrategicCampaignController(game, runner, Memory).RunAsync(1));
     }
 
+    [Fact]
+    public async Task SuccessfulGoalWithLargeEvidenceStillCommitsBoundedFeedback()
+    {
+        string[] ids = Enumerable.Range(0, 400).Select(i => $"gun-turret:{i}").ToArray();
+        var defense = new DefenseDeploymentResult("gun-turret", 400, 400, 0, 400, 10, 20, 1, 4, 1, ids, ids);
+        var completed = Completed() with { Goal = Completed().Goal with { Category = GoalCategory.Defense, Target = "gun-turret", Quantity = 400, Unit = GoalUnit.Items },
+            Research = null, Defense = defense };
+        var runner = new Runner(() => completed);
+        var result = await new StrategicCampaignController(new Game(), runner, Memory).RunAsync(2);
+        Assert.Equal(2, result.GoalsExecuted);
+        Assert.True(runner.History[1]!.Length <= 4000);
+        Assert.Contains("gun-turret", runner.History[1]);
+        Assert.False(JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(Memory), Protocol.Json)!.Pending);
+    }
+
+    [Fact]
+    public async Task NavigationFailureReachesTheModelAsASpecificCategory()
+    {
+        var game = new Game { OperationStatus = null };
+        var runner = new JournaledRunner(game, Journal, attempt => attempt == 0
+            ? throw new NavigationPlanningException(RouteStatus.NoRouteOnKnownGrid, "NoRouteOnKnownGrid: trapped")
+            : Completed());
+        var result = await new StrategicCampaignController(game, runner, Memory, Journal).RunAsync(2);
+        Assert.Equal(2, result.GoalsExecuted);
+        Assert.Contains("navigation_blocked", runner.History[1]);
+        Assert.Contains("\"consecutiveFailures\":1", runner.History[1]);
+    }
+
+    [Fact]
+    public async Task ConsecutiveFailuresStopTheCampaignInsteadOfLoopingOnTheModel()
+    {
+        var game = new Game { OperationStatus = null };
+        var runner = new JournaledRunner(game, Journal,
+            _ => throw new NavigationPlanningException(RouteStatus.NoRouteOnKnownGrid, "NoRouteOnKnownGrid: trapped"));
+        var result = await new StrategicCampaignController(game, runner, Memory, Journal).RunAsync(100);
+        Assert.Equal("repeated-failure", result.StopReason);
+        Assert.Equal(StrategicCampaignController.MaxConsecutiveFailures, runner.History.Count);
+        Assert.False(JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(Memory), Protocol.Json)!.Pending);
+    }
+
+    [Fact]
+    public async Task SuccessResetsTheConsecutiveFailureCount()
+    {
+        var game = new Game { OperationStatus = null };
+        var runner = new JournaledRunner(game, Journal, attempt => attempt % 2 == 0
+            ? throw new NavigationPlanningException(RouteStatus.NoRouteOnKnownGrid, "NoRouteOnKnownGrid: trapped")
+            : Completed() with { Goal = Completed().Goal with { Target = $"goal-{attempt}" } });
+        var result = await new StrategicCampaignController(game, runner, Memory, Journal).RunAsync(12);
+        Assert.Equal("goal-budget", result.StopReason);
+        Assert.Equal(12, runner.History.Count);
+    }
+
+    private string Journal => Path.Combine(directory, "journal.jsonl");
     private static StrategicGoalResult Completed() => new(new("o", "Research automation", GoalCategory.Research,
         "automation", 1, GoalUnit.Completion, GoalPriority.Normal, new(TimeSpan.Zero, 1, null, null, null)),
         Research: new("automation", true, 1, 2, ["automation"]));
@@ -115,20 +168,37 @@ public sealed class StrategicCampaignTests : IDisposable
         public Task<StrategicGoalResult> RunOnceAsync(CancellationToken token = default, string? previousResult = null)
         { History.Add(previousResult); return Task.FromResult(action()); }
     }
+    /// <summary>Records the strategic context like the production runner before its synthetic outcome.</summary>
+    private sealed class JournaledRunner(Game game, string journal, Func<int, StrategicGoalResult> action) : IStrategicGoalRunner
+    {
+        public List<string?> History { get; } = [];
+        public async Task<StrategicGoalResult> RunOnceAsync(CancellationToken token = default, string? previousResult = null)
+        {
+            History.Add(previousResult);
+            var writer = new ControllerJournal(journal);
+            await writer.AppendAsync("strategic-context", new { observationId = $"o:{game.Tick}",
+                facts = JsonSerializer.Serialize(new { observedTick = game.Tick }) }, token);
+            await writer.AppendAsync("strategic-goal", new { category = 1, target = "steam-power", quantity = 1, unit = 4 }, token);
+            return action(History.Count - 1);
+        }
+    }
     private sealed class Game : IGameClient
     {
         public int Goals, Rockets;
         public long Tick = 100;
-        public string World = "world", Session = "session", OperationStatus = "completed";
+        public string World = "world", Session = "session";
+        public string? OperationStatus = "completed";
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
             Assert.Equal("observe", request.Action);
-            return Task.FromResult(new GameResponse(1, request.RequestId, true, ++Tick, Protocol.ToElement(new
-            {
-                scope = new ActorScope(World, Session, "actor", 1, 1),
-                agent = new { alive = true, controlMode = "ai" }, goal = new { rocketsLaunched = Rockets },
-                operation = new { status = OperationStatus }
-            })));
+            ++Tick;
+            var agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, walking = false, mining = false,
+                shooting = false, craftingQueueSize = 0 };
+            var scope = new ActorScope(World, Session, "actor", 1, 1);
+            var goal = new { rocketsLaunched = Rockets };
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, Tick, OperationStatus is null
+                ? Protocol.ToElement(new { scope, collectedTick = Tick, agent, goal })
+                : Protocol.ToElement(new { scope, collectedTick = Tick, agent, goal, operation = new { status = OperationStatus } })));
         }
     }
     public void Dispose() => Directory.Delete(directory, true);

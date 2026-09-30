@@ -59,7 +59,7 @@ try
           verify-pilot --session FILE --phase manual|ai|standalone
           stop --session FILE
         """);
-    var options = Parse(args[1..]);
+    var options = CommandLineOptions.Parse(args[1..]);
     string? Option(string name) => options.GetValueOrDefault(name);
     string Required(string name) => Option(name) ?? throw new ArgumentException($"Missing --{name}.");
     switch (args[0])
@@ -391,6 +391,7 @@ try
                 Environment.GetEnvironmentVariable("OLLAMA_API_KEY"), shutdown.Token);
             using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
             var planner = new OllamaStrategicPlanner(http, plannerOptions);
+            var transport = new { kind = plannerOptions.IsDirectCloud ? "ollama-cloud-direct" : "ollama-gateway", model = plannerOptions.RequestModel };
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
             await using var game = session.CreateClient(lease);
@@ -406,17 +407,17 @@ try
                 {
                     var result = await new StrategicCampaignController(game, controller, memoryPath, journalPath, campaignJournal: campaignJournal)
                         .RunAsync(maxGoals, runDeadline.Token);
-                    Print(new { result, journalPath, memoryPath, journalLayout = "per-goal", startedUtc, runMinutes });
+                    Print(new { result, journalPath, memoryPath, journalLayout = "per-goal", startedUtc, runMinutes, transport });
                 }
                 catch (OperationCanceledException) when (runDeadline.IsCancellationRequested && !shutdown.IsCancellationRequested)
                 {
                     // Executors unwind their owned actions with independent cleanup budgets. Pending
                     // strategic memory is deliberately preserved for receipt reconciliation on resume.
                     Print(new { stopReason = "wall-clock-budget", startedUtc, endedUtc = DateTime.UtcNow,
-                        runMinutes, journalPath, memoryPath, requiresReconciliation = true });
+                        runMinutes, journalPath, memoryPath, requiresReconciliation = true, transport });
                 }
             }
-            else Print(new { result = await controller.RunOnceAsync(runDeadline.Token), journalPath });
+            else Print(new { result = await controller.RunOnceAsync(runDeadline.Token), journalPath, transport });
             break;
         }
         case "automate-smelting":
@@ -531,20 +532,6 @@ catch (Exception error) when (error is not OutOfMemoryException)
 {
     Console.Error.WriteLine(JsonSerializer.Serialize(new { error = error.GetType().Name, message = error.Message }));
     Environment.ExitCode = 1;
-}
-
-static Dictionary<string, string> Parse(string[] values)
-{
-    var options = new Dictionary<string, string>(StringComparer.Ordinal);
-    for (int index = 0; index < values.Length; index++)
-    {
-        string value = values[index];
-        if (!value.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException($"Expected option, got {value}.");
-        string name = value[2..];
-        string contents = name is "fixture" or "stationary-threat" or "reuse" or "recovery-death" or "ollama-cloud" ? "true" : ++index < values.Length ? values[index] : throw new ArgumentException($"Missing value for {value}.");
-        if (!options.TryAdd(name, contents)) throw new ArgumentException($"Duplicate option {value}.");
-    }
-    return options;
 }
 
 static void Print<T>(T value) => Console.WriteLine(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));

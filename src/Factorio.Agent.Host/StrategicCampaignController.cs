@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Factorio.Agent.Core;
+using Factorio.Agent.Ollama;
 
 namespace Factorio.Agent.Host;
 
@@ -16,6 +17,8 @@ public sealed record StrategicMemory(int Version, ActorScope Scope, long Tick, b
 public sealed class StrategicCampaignController(IGameClient game, IStrategicGoalRunner runner, string memoryPath,
     string? journalPath = null, ICorpseRecovery? recovery = null, CampaignJournal? campaignJournal = null)
 {
+    public const int MaxConsecutiveFailures = 5;
+
     public async Task<StrategicCampaignResult> RunAsync(int maxGoals, CancellationToken token = default)
     {
         if (maxGoals is < 1 or > 10000) throw new ArgumentOutOfRangeException(nameof(maxGoals));
@@ -43,7 +46,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
         }
         if (memory.Pending) throw new InvalidDataException("An earlier strategic execution has no verified terminal outcome. Reconcile its journal and native effects before resuming.");
         string? lastGoal = null;
-        int repeated = 0;
+        int repeated = 0, consecutiveFailures = 0;
         for (int index = 0; index < maxGoals; index++)
         {
             token.ThrowIfCancellationRequested();
@@ -67,6 +70,8 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 string failureCode = error switch
                 {
                     GameRpcException rpc => rpc.Error.Code,
+                    NavigationPlanningException => "navigation_blocked",
+                    PlannerException => "planner_unavailable",
                     TimeoutException => "controller_budget_exhausted",
                     InvalidDataException => "observation_inconsistent",
                     InvalidOperationException => "execution_precondition_failed",
@@ -82,23 +87,16 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 }, token);
                 memory = await new StrategicRecoveryController(game, memoryPath, activeJournalPath, recovery).ResumeAsync(token);
                 observation = await ObserveAsync(token);
+                // A failed goal ends reconciled and idle; stop before the model can loop on the same cause.
+                if (++consecutiveFailures >= MaxConsecutiveFailures)
+                    return new(false, index + 1, observation.Tick, "repeated-failure");
+                memory = memory with { PreviousResult = WithFailureStreak(memory.PreviousResult, consecutiveFailures) };
+                await LocalJson.WriteAsync(memoryPath, memory, token);
                 continue;
             }
-            string feedback = JsonSerializer.Serialize(new
-            {
-                observedTick = after.Tick,
-                goal = new { result.Goal.Category, result.Goal.Target, result.Goal.Quantity, result.Goal.Unit },
-                result.UnsupportedReason,
-                result.Production,
-                result.Fluid,
-                result.Rocket,
-                result.Defense,
-                research = result.Research is { } research ? new { research.Target, research.Researched, research.StartTick,
-                    research.EndTick, completedCount = research.CompletedTechnologies.Count,
-                    recentCompleted = research.CompletedTechnologies.TakeLast(16).ToArray() } : null,
-                evidenceScope = "Historical verified result; current stock and conditions must be observed again."
-            }, Protocol.Json);
-            if (feedback.Length > 4000) throw new InvalidDataException("Strategic feedback exceeds the bounded context.");
+            consecutiveFailures = 0;
+            string feedback = Feedback(result, after.Tick, compact: false);
+            if (feedback.Length > 4000) feedback = Feedback(result, after.Tick, compact: true);
             memory = new(1, after.Scope, after.Tick, false, feedback);
             await LocalJson.WriteAsync(memoryPath, memory, token);
             observation = after;
@@ -109,6 +107,52 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             if (repeated >= 3) return new(false, index + 1, observation.Tick, "repeated-goal");
         }
         return new(observation.Rockets > 0, maxGoals, observation.Tick);
+    }
+
+    // The compact form keeps counts and the first identifiers so a large verified result can never block the campaign.
+    private static string Feedback(StrategicGoalResult result, long tick, bool compact)
+    {
+        var defense = result.Defense is { } d && compact
+            ? d with { ReadyIds = d.ReadyIds.Take(8).ToArray(), ExposedIds = d.ExposedIds.Take(8).ToArray() } : result.Defense;
+        string feedback = JsonSerializer.Serialize(new
+        {
+            observedTick = tick,
+            goal = new { result.Goal.Category, result.Goal.Target, result.Goal.Quantity, result.Goal.Unit },
+            result.UnsupportedReason,
+            result.Production,
+            result.Fluid,
+            result.Rocket,
+            Defense = defense,
+            research = result.Research is { } research ? new { research.Target, research.Researched, research.StartTick,
+                research.EndTick, completedCount = research.CompletedTechnologies.Count,
+                recentCompleted = research.CompletedTechnologies.TakeLast(16).ToArray() } : null,
+            evidenceTruncated = compact ? true : (bool?)null,
+            evidenceScope = "Historical verified result; current stock and conditions must be observed again."
+        }, Protocol.Json);
+        if (compact && feedback.Length > 4000)
+            feedback = JsonSerializer.Serialize(new
+            {
+                observedTick = tick,
+                goal = new { result.Goal.Category, result.Goal.Target, result.Goal.Quantity, result.Goal.Unit },
+                completed = result.UnsupportedReason is null, evidenceTruncated = true,
+                evidenceScope = "Verified details exceeded the context budget; observe current stock and conditions again."
+            }, Protocol.Json);
+        return feedback;
+    }
+
+    private static string? WithFailureStreak(string? previous, int failures)
+    {
+        const string guidance = "Consecutive strategic goals failed. Do not repeat the failed goal unchanged; choose a goal that removes the reported cause or makes different progress.";
+        if (previous is null) return null;
+        try
+        {
+            if (System.Text.Json.Nodes.JsonNode.Parse(previous) is not System.Text.Json.Nodes.JsonObject node) return previous;
+            node["consecutiveFailures"] = failures;
+            node["guidance"] = guidance;
+            string annotated = node.ToJsonString(Protocol.Json);
+            return annotated.Length <= 4000 ? annotated : previous;
+        }
+        catch (JsonException) { return previous; }
     }
 
     private async Task<CampaignObservation> ObserveAsync(CancellationToken token, bool allowDead = false)

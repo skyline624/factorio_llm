@@ -126,6 +126,55 @@ public sealed class SpatialControllerTests
         Assert.Contains("final-receipt", journal.Types);
     }
 
+    [Fact]
+    public async Task MalformedReceiptStopsNavigationInsteadOfPollingUntilTheCallerDeadline()
+    {
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var game = new MalformedReceiptGame();
+        var controller = new SpatialController(game, new Journal());
+        await Assert.ThrowsAsync<InvalidDataException>(() => controller.NavigateAsync(new(5, 0), cancellationToken: guard.Token));
+        // Disposal reports the still unproven stop instead of hiding it.
+        await Assert.ThrowsAsync<InvalidDataException>(async () => await controller.DisposeAsync());
+        Assert.False(guard.IsCancellationRequested);
+        Assert.InRange(game.Queries, 1, 20);
+    }
+
+    private sealed class MalformedReceiptGame : IGameClient
+    {
+        private string? operationId;
+        public int Queries { get; private set; }
+
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SpatialSnapshot map = SpatialPlannerTests.Map([]);
+            object data = request.Action switch
+            {
+                "observe" => new
+                {
+                    map.Scope, collectedTick = 100,
+                    coverage = new { atomic = true, collectionStartTick = 100, collectionEndTick = 100,
+                        enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
+                    agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = map.Actor.Position,
+                        health = 250, weapon = new { ready = false, rounds = 0, range = 0 } },
+                    enemies = Array.Empty<object>()
+                },
+                "spatial" => map,
+                "submit" => Receipt(request.Arguments.GetProperty("operationId").GetString(), "running"),
+                "operation" => Receipt(operationId, ++Queries > 0 ? "not-a-native-status" : "running"),
+                "cancel" => Receipt(operationId, "cancelled"),
+                _ => throw new InvalidOperationException(request.Action)
+            };
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, 100, Protocol.ToElement(data)));
+        }
+
+        private object Receipt(string? id, string status)
+        {
+            operationId = id;
+            return new { operationId = id, kind = "move", status, acceptedTick = 100, updatedTick = 100, effects = new { } };
+        }
+    }
+
     private sealed class Journal : IControllerJournal
     {
         public List<string> Types { get; } = [];

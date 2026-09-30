@@ -9,11 +9,20 @@ public static class OllamaConfiguration
 {
     public const string DefaultPath = "config/appsettings.local.json";
 
+    /// <summary>The private profile belongs to the repository, not to whichever directory launched the host.</summary>
+    public static string ResolveDefaultPath(string? searchFrom = null)
+    {
+        for (var directory = new DirectoryInfo(searchFrom ?? AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+            if (File.Exists(Path.Combine(directory.FullName, "Factorio.Agent.sln")))
+                return Path.Combine(directory.FullName, DefaultPath.Replace('/', Path.DirectorySeparatorChar));
+        return Path.GetFullPath(DefaultPath);
+    }
+
     public static async Task<OllamaOptions> LoadAsync(string? path, bool directCloud, string? environmentApiKey,
-        CancellationToken token = default)
+        CancellationToken token = default, string? searchFrom = null)
     {
         bool explicitPath = path is not null;
-        path ??= DefaultPath;
+        path ??= ResolveDefaultPath(searchFrom);
         var settings = new Settings();
         if (explicitPath || File.Exists(path))
         {
