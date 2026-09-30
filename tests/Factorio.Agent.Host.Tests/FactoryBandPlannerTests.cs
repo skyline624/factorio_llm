@@ -130,6 +130,19 @@ internal static class FactoryMaps
     private static readonly CollisionMask Solid = new(["item", "object", "player", "water_tile"], false, false, false);
     private static readonly CollisionMask Ground = new(["ground_tile"], false, false, false);
     private static readonly CollisionMask Water = new(["water_tile", "item", "player"], false, false, false);
+    private static readonly Dictionary<string, bool> SolidOre = new() { ["basic-solid"] = true };
+
+    // resources.lua: every base ore has mining_time 1 and a 0.1 collision box.
+    private static EntityGeometry Deposit(string name) => new(name, "resource", new(new(-0.1, -0.1), new(0.1, 0.1)),
+        new(["resource"], false, false, false), 1, 1, ResourceCategory: "basic-solid", MiningTime: 1);
+
+    /// <summary>One deposit entity per tile of the rectangle [x0, x1) x [y0, y1).</summary>
+    public static IEnumerable<SpatialEntity> Patch(string name, int x0, int y0, int x1, int y1, double amount = 5000)
+    {
+        for (int x = x0; x < x1; x++)
+            for (int y = y0; y < y1; y++)
+                yield return new($"{name}:{x}:{y}", name, new(x + .5, y + .5), new(new(x + .4, y + .4), new(x + .6, y + .6)), 0, "neutral", amount);
+    }
 
     public static SpatialSnapshot Grass(int half, IReadOnlyList<SpatialEntity>? entities = null, Func<int, int, string>? tile = null)
     {
@@ -146,7 +159,17 @@ internal static class FactoryMaps
             ["small-electric-pole"] = new("small-electric-pole", "electric-pole", Box(0.1484375), Solid, 1, 1,
                 SupplyArea: 2.5, MaxWireDistance: 7.5),
             ["tree"] = new("tree", "tree", Box(0.4), Solid, 1, 1),
-            ["iron-ore"] = new("iron-ore", "resource", Box(0.1), new(["resource"], false, false, false), 1, 1, ResourceCategory: "basic-solid")
+            ["iron-chest"] = new("iron-chest", "container", Box(0.3515625), Solid, 1, 1),
+            // mining-drill.lua: collision, resource_searching_radius, vector_to_place_result and mining_speed.
+            ["electric-mining-drill"] = new("electric-mining-drill", "mining-drill", Box(1.3515625), Solid, 3, 3, MiningRadius: 2.49,
+                MiningOutput: new(0, -1.85), ResourceCategories: SolidOre, IsElectric: true, MiningSpeed: 0.5, EnergyPerTick: 1500),
+            ["burner-mining-drill"] = new("burner-mining-drill", "mining-drill", Box(0.69921875), Solid, 2, 2, MiningRadius: 0.99,
+                MiningOutput: new(-0.5, -1.3), ResourceCategories: SolidOre, FuelCategories: new Dictionary<string, bool> { ["chemical"] = true },
+                MiningSpeed: 0.25, EnergyPerTick: 2500, BurnerEffectivity: 1),
+            ["iron-ore"] = Deposit("iron-ore"),
+            ["copper-ore"] = Deposit("copper-ore"),
+            ["coal"] = Deposit("coal"),
+            ["stone"] = Deposit("stone")
         };
         var items = new Dictionary<string, PlaceableItem>
         {
@@ -155,7 +178,10 @@ internal static class FactoryMaps
             ["stone-furnace"] = new("stone-furnace", 50),
             ["inserter"] = new("inserter", 50),
             ["wooden-chest"] = new("wooden-chest", 50),
-            ["small-electric-pole"] = new("small-electric-pole", 50)
+            ["iron-chest"] = new("iron-chest", 50),
+            ["small-electric-pole"] = new("small-electric-pole", 50),
+            ["electric-mining-drill"] = new("electric-mining-drill", 50),
+            ["burner-mining-drill"] = new("burner-mining-drill", 50)
         };
         var rows = new List<TileRun>();
         for (int y = -half; y < half; y++)

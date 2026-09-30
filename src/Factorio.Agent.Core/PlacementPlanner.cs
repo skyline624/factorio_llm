@@ -74,7 +74,7 @@ public sealed class PlacementPlanner
 
     // Prove a continuous, body-sized exit beyond the construction neighbourhood. Merely being
     // within interaction reach of another machine does not prove the actor can leave a pocket.
-    private static bool CanEscape(SpatialCollisionField field, WorldBox footprint)
+    internal static bool CanEscape(SpatialCollisionField field, WorldBox footprint)
     {
         var neighbourhood = new WorldBox(new(footprint.Min.X - 4, footprint.Min.Y - 4),
             new(footprint.Max.X + 4, footprint.Max.Y + 4));

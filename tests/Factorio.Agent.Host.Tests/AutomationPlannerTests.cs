@@ -77,4 +77,49 @@ internal static class Catalogs
         {
             ["assembling-machine-1"] = new("assembling-machine-1", new Dictionary<string, bool> { ["crafting"] = true, ["basic-crafting"] = true }, 0.5, 2500, 255)
         });
+
+    /// <summary>Early catalog plus base-game deposits, smelting and extraction equipment.</summary>
+    public static ProductionCatalog Raw(bool electricDrill = true)
+    {
+        var early = Early();
+        NativeItem Placed(string name, string type, int stack = 50) => new(0, stack, PlaceEntity: name, PlaceEntityType: type);
+        var items = new Dictionary<string, NativeItem>(early.Items)
+        {
+            ["coal"] = new(4000000, 50, FuelCategory: "chemical"), ["iron-ore"] = new(0, 50), ["copper-ore"] = new(0, 50),
+            ["stone"] = new(0, 50), ["stone-brick"] = new(0, 100), ["steel-plate"] = new(0, 100),
+            ["stone-furnace"] = Placed("stone-furnace", "furnace"), ["iron-chest"] = Placed("iron-chest", "container"),
+            ["wooden-chest"] = Placed("wooden-chest", "container"), ["small-electric-pole"] = Placed("small-electric-pole", "electric-pole"),
+            ["electric-mining-drill"] = Placed("electric-mining-drill", "mining-drill"),
+            ["burner-mining-drill"] = Placed("burner-mining-drill", "mining-drill"),
+            ["inserter"] = Placed("inserter", "inserter")
+        };
+        return early with
+        {
+            Scope = FactoryMaps.Grass(1).Scope,
+            Recipes = [.. early.Recipes,
+                Recipe("stone-brick", 3.2, "smelting", [Item("stone", 2)], Item("stone-brick", 1)),
+                Recipe("steel-plate", 16, "smelting", [Item("iron-plate", 5)], Item("steel-plate", 1)),
+                Recipe("stone-furnace", 0.5, "crafting", [Item("stone", 5)], Item("stone-furnace", 1)),
+                Recipe("iron-chest", 0.5, "crafting", [Item("iron-plate", 8)], Item("iron-chest", 1)),
+                Recipe("small-electric-pole", 0.5, "crafting", [Item("copper-cable", 2)], Item("small-electric-pole", 2)),
+                Recipe("burner-mining-drill", 2, "crafting", [Item("iron-gear-wheel", 3), Item("stone-furnace", 1), Item("iron-plate", 3)], Item("burner-mining-drill", 1)),
+                new("electric-mining-drill", electricDrill, "crafting", 2, [Item("electronic-circuit", 3), Item("iron-gear-wheel", 5), Item("iron-plate", 10)],
+                    [Item("electric-mining-drill", 1)], false)],
+            Items = items,
+            Mining = new Dictionary<string, NativeMaterial[]>
+            {
+                ["iron-ore"] = [Item("iron-ore", 1)], ["copper-ore"] = [Item("copper-ore", 1)], ["coal"] = [Item("coal", 1)],
+                ["stone"] = [Item("stone", 1)], ["tree"] = [Item("wood", 4)]
+            },
+            MiningSourceTypes = new Dictionary<string, string>
+            {
+                ["iron-ore"] = "resource", ["copper-ore"] = "resource", ["coal"] = "resource", ["stone"] = "resource", ["tree"] = "tree"
+            },
+            Machines = new Dictionary<string, NativeFurnace>
+            {
+                ["stone-furnace"] = new("stone-furnace", new Dictionary<string, bool> { ["smelting"] = true },
+                    new Dictionary<string, bool> { ["chemical"] = true }, 1)
+            }
+        };
+    }
 }

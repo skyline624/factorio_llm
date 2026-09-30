@@ -2,7 +2,9 @@ using Factorio.Agent.Core;
 
 namespace Factorio.Agent.Host;
 
-/// <summary>Grows the persistent factory: sizes assembler chains for a target rate and adds laboratories.</summary>
+public sealed record RawCellCapacity(string Item, string Kind, int Cells, double PerMinute, int Built);
+
+/// <summary>Grows the persistent factory: sizes assembler chains for a target rate, adds laboratories and raw resource cells.</summary>
 public sealed class FactoryDirector(IGameClient game, IControllerJournal journal, string directory)
 {
     public static readonly string[] MachinePreference = ["assembling-machine-2", "assembling-machine-1"];
@@ -41,6 +43,41 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         for (int built = existing; built < count; built++)
             await new FactoryCellBuilder(game, journal, directory).BuildAsync("lab", "lab", null, token);
         return Math.Max(existing, count);
+    }
+
+    /// <summary>
+    /// Adds miner or smelter cells on ore patches until ready cells cover the rate. Each cell's rate comes from native
+    /// drill, furnace and inserter speeds; at most maximumNewCells are built per call.
+    /// </summary>
+    public async Task<RawCellCapacity> EnsureRawAsync(string item, double perMinute, CancellationToken token,
+        int maximumNewCells = ResourceCellPlanner.MaximumRowCells, int explorationBudget = 16)
+    {
+        if (!double.IsFinite(perMinute) || perMinute <= 0 || perMinute > 10000) throw new ArgumentOutOfRangeException(nameof(perMinute));
+        if (maximumNewCells is < 0 or > 64) throw new ArgumentOutOfRangeException(nameof(maximumNewCells));
+        var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+        var supply = ResourceCellPlanner.Supply(catalog, item)
+            ?? throw new InvalidOperationException($"{item} is neither mined nor smelted from a single ore.");
+        var registry = new FactoryRegistry(directory);
+        var builder = new ResourceCellBuilder(game, journal, directory);
+        for (int built = 0; ; built++)
+        {
+            var (cells, current) = RawCapacity(await registry.LoadAsync(catalog.Scope.WorldId, token), item);
+            if (current >= perMinute - 1e-9 || built >= maximumNewCells)
+            {
+                var capacity = new RawCellCapacity(item, supply.Kind, cells, current, built);
+                await journal.AppendAsync("factory-raw-capacity", new { capacity, perMinute }, token);
+                return capacity;
+            }
+            await builder.BuildNextAsync(item, perMinute - current, token, explorationBudget);
+        }
+    }
+
+    /// <summary>Ready resource cells producing the item and their summed native rate.</summary>
+    public static (int Cells, double PerMinute) RawCapacity(FactoryState state, string item)
+    {
+        var rows = (state.Rows ?? []).Where(r => r.Product == item).ToDictionary(r => r.Id);
+        var ready = state.Cells.Where(c => c.Zone == 0 && c.Status == "ready" && rows.ContainsKey(c.Slot.Band)).ToArray();
+        return (ready.Length, ready.Sum(c => rows[c.Slot.Band].CellPerMinute));
     }
 
     private static int Depth(ProductionCatalog catalog, string recipeName, IReadOnlySet<string> machines, int guard = 0)

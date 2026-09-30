@@ -7,9 +7,12 @@ public sealed record FactoryZone(int Id, MapPosition Origin, int Slots, int Pitc
 /// <summary>A persistent automated cell. Entity identities are native ids proven by build receipts.</summary>
 public sealed record FactoryCell(string Id, int Zone, CellSlot Slot, string Kind, string MachineItem, string? Recipe,
     IReadOnlyDictionary<string, string> Entities, string Status, long Tick);
-public sealed record FactoryState(int Version, string WorldId, IReadOnlyList<FactoryZone> Zones, IReadOnlyList<FactoryCell> Cells)
+/// <summary>Resource cells use zone 0; their slot band is the id of their <see cref="ResourceRow"/>.</summary>
+public sealed record FactoryState(int Version, string WorldId, IReadOnlyList<FactoryZone> Zones, IReadOnlyList<FactoryCell> Cells,
+    IReadOnlyList<ResourceRow>? Rows = null)
 {
     public FactoryState With(FactoryCell cell) => this with { Cells = [.. Cells.Where(c => c.Id != cell.Id), cell] };
+    public FactoryState With(ResourceRow row) => this with { Rows = [.. (Rows ?? []).Where(r => r.Id != row.Id), row] };
 }
 
 /// <summary>Durable C# memory of the automated factory in one world. The engine stays the source of stock truth.</summary>

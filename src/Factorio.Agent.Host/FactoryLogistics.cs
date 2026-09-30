@@ -28,9 +28,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         FactorySnapshot snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
 
-        foreach (var cell in cells.Where(c => c.Entities.ContainsKey("output-chest")))
+        foreach (string chest in OutputChests(cells))
         {
-            string chest = cell.Entities["output-chest"];
             foreach (var (item, count) in Items(snapshot, chest).Where(p => p.Value > 0))
             {
                 long moved = await TransferAsync("take", chest, item, count);
@@ -75,25 +74,21 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 supplied[pack] = supplied.GetValueOrDefault(pack) + moved;
             }
         }
-        // Steam supply and cell furnaces stop without fuel. Keep each burner above a quarter stack of coal.
-        var cellIds = cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
-        foreach (var burner in snapshot.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "factory"
-            && r.Data.TryGetProperty("fuelInventoryId", out _)
-            && (r.Data.GetProperty("type").GetString() == "boiler" || cellIds.Contains(r.EntityId))))
+        // Steam supply, cell furnaces and burner drills stop without fuel. Keep each burner above a quarter stack of coal.
+        const string fuel = "coal";
+        long stack = catalog.Items[fuel].StackSize;
+        var burners = Burners(snapshot, cells);
+        var plan = PlanFuel(burners.Select(b => b.Loaded).ToArray(), carried.GetValueOrDefault(fuel), stack);
+        for (int index = 0; index < burners.Count; index++)
         {
-            const string fuel = "coal";
-            string inventoryId = burner.Data.GetProperty("fuelInventoryId").GetString()!;
-            var inventory = snapshot.Records.SingleOrDefault(r => r.Id == inventoryId && r.Kind == "inventory");
-            long loaded = inventory is null ? 0 : inventory.Data.GetProperty("items").EnumerateObject().Sum(p => p.Value.GetInt64());
-            long stack = catalog.Items[fuel].StackSize;
+            var (burner, loaded) = burners[index];
             if (loaded >= stack / 4) continue;
-            long give = Math.Min(stack - loaded, carried.GetValueOrDefault(fuel));
-            if (give > 0)
+            long give = 0;
+            if (plan[index] > 0)
             {
-                long moved = await TransferAsync("insert", burner.EntityId, fuel, give, "fuel");
-                carried[fuel] = carried.GetValueOrDefault(fuel) - moved;
-                supplied[fuel] = supplied.GetValueOrDefault(fuel) + moved;
-                give = moved;
+                give = await TransferAsync("insert", burner, fuel, plan[index], "fuel");
+                carried[fuel] = carried.GetValueOrDefault(fuel) - give;
+                supplied[fuel] = supplied.GetValueOrDefault(fuel) + give;
             }
             if (loaded + give < stack / 4) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + stack - loaded - give;
         }
@@ -118,6 +113,45 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             }
             return receipt.Effects.GetProperty("transferred").GetInt64();
         }
+    }
+
+    /// <summary>Output chests of ready cells: assembler products, smelted plates and mined resources alike.</summary>
+    internal static IReadOnlyList<string> OutputChests(IEnumerable<FactoryCell> cells) => cells
+        .Where(c => c.Status == "ready" && c.Entities.ContainsKey("output-chest")).Select(c => c.Entities["output-chest"]).ToArray();
+
+    /// <summary>Boilers and every fuelled entity of a cell (furnaces, burner drills) with the fuel they hold, by native id.</summary>
+    internal static IReadOnlyList<(string EntityId, long Loaded)> Burners(FactorySnapshot snapshot, IEnumerable<FactoryCell> cells)
+    {
+        var cellIds = cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
+        return snapshot.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "factory"
+                && r.Data.TryGetProperty("fuelInventoryId", out _)
+                && (r.Data.GetProperty("type").GetString() == "boiler" || cellIds.Contains(r.EntityId)))
+            .Select(r =>
+            {
+                string inventoryId = r.Data.GetProperty("fuelInventoryId").GetString()!;
+                var inventory = snapshot.Records.SingleOrDefault(i => i.Id == inventoryId && i.Kind == "inventory");
+                return (r.EntityId, inventory is null ? 0 : inventory.Data.GetProperty("items").EnumerateObject().Sum(p => p.Value.GetInt64()));
+            })
+            .OrderBy(b => b.EntityId, StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>
+    /// Splits carried fuel among burners below a quarter stack: every starved burner first reaches a quarter stack,
+    /// so scarce coal from a young miner starts all furnaces instead of filling one.
+    /// </summary>
+    internal static long[] PlanFuel(IReadOnlyList<long> loaded, long available, long stack)
+    {
+        var plan = new long[loaded.Count];
+        long threshold = stack / 4;
+        foreach (long target in new[] { threshold, stack })
+            for (int index = 0; index < loaded.Count && available > 0; index++)
+            {
+                if (loaded[index] >= threshold) continue;
+                long give = Math.Min(available, Math.Max(0, target - loaded[index] - plan[index]));
+                plan[index] += give;
+                available -= give;
+            }
+        return plan;
     }
 
     internal static Dictionary<string, long> Items(FactorySnapshot snapshot, string entityId)
