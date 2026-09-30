@@ -74,6 +74,13 @@ public sealed class PowerGridPlanner
         return new(PowerGridSearchStatus.NoObservedPath);
     }
 
+    /// <summary>
+    /// Poles an extension's planned chain places, up to the target or to the local waypoint toward a distant one:
+    /// the first pole's score is the chain cost. Zero when no pole is needed.
+    /// </summary>
+    public static int ChainPoles(PowerGridLink link) => link is { Status: PowerGridSearchStatus.Extension, Pole: { } first }
+        ? Math.Max(1, (int)Math.Round(first.Score)) : 0;
+
     public static bool Supplies(MapPosition position, EntityGeometry pole, WorldBox target) => pole.SupplyArea is > 0
         && new WorldBox(new(position.X - pole.SupplyArea.Value, position.Y - pole.SupplyArea.Value),
             new(position.X + pole.SupplyArea.Value, position.Y + pole.SupplyArea.Value)).Overlaps(target);

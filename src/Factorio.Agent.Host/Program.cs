@@ -32,7 +32,8 @@ try
           deploy-defense --session FILE --item NAME --quantity N
           factory-cell --session FILE --kind assembler|lab --machine ITEM [--recipe NAME]
           factory-logistics --session FILE [--quantity CRAFTS]
-          verify-factory-cells|verify-factory-research --session FILE
+          verify-factory-cells|verify-factory-research|verify-resource-cells --session FILE
+          resource-cells --session FILE --item NAME --quantity PER_MINUTE
           decision-replay --session FILE [--quantity N] [--config FILE]
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
@@ -97,6 +98,22 @@ try
             await WarmUpDecisionModelAsync(http, decision);
             Print(new { report = await DecisionReplay.RunAsync(session.Directory, new DecisionModelClient(http, decision),
                 int.Parse(Option("quantity") ?? "200", CultureInfo.InvariantCulture), shutdown.Token) });
+            break;
+        }
+        case "resource-cells":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            string journalPath = Path.Combine(session.Directory, $"resource-cells-{Guid.NewGuid():N}.jsonl");
+            Print(new { capacity = await new FactoryDirector(game, new ControllerJournal(journalPath), session.Directory)
+                .EnsureRawAsync(Required("item"), double.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token), journalPath });
+            break;
+        }
+        case "verify-resource-cells":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new ResourceCellQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-factory-research":
