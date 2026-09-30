@@ -64,6 +64,9 @@ local function prototype(value)
   if value.electric_energy_source_prototype then
     result.energyPerTick = value.get_max_energy_usage("normal")
   end
+  if value.type == "generator" or value.type == "burner-generator" then
+    result.maxPowerOutput = value.get_max_power_output("normal")
+  end
   if value.burner_prototype then
     result.fuelCategories = value.burner_prototype.fuel_categories
     result.burnerEffectivity = value.burner_prototype.effectivity

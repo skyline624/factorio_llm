@@ -12,7 +12,7 @@ public sealed class CellDelivery(long windowTicks = 3600)
     {
         foreach (var (item, count) in round.Collected)
             if (count > 0) Seen(item, round.Tick);
-        foreach (var cell in cells.Where(c => c.Zone == 0 && c.Status == "ready" && c.Recipe is not null)) Seen(cell.Recipe!, cell.Tick);
+        foreach (var cell in cells.Where(c => c.IsResource && c.Status == "ready" && c.Recipe is not null)) Seen(cell.Recipe!, cell.Tick);
     }
 
     public bool Covers(string item, long tick) => last.TryGetValue(item, out long seen) && tick - seen <= windowTicks;

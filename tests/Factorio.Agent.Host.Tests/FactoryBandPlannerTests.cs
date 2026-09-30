@@ -116,6 +116,16 @@ public sealed class FactoryBandPlannerTests
         Assert.False(zoneBox.Contains(reserved.Pole!.Position));
     }
 
+    [Fact]
+    public void EveryReservedZoneBlocksPlacementEvenWhenBandsTouch()
+    {
+        var map = FactoryMaps.Grass(40);
+        var west = new FactoryZone(1, new(-20, 0), 2, 3, 12);
+        var east = new FactoryZone(2, new(-14, 0), 2, 3, 12);
+        var reserved = FactoryCellBuilder.ReserveZone(FactoryCellBuilder.ReserveZone(map, west, "small-electric-pole"), east, "small-electric-pole");
+        Assert.False(new SpatialCollisionField(reserved).PlacementClear(map.Prototypes["small-electric-pole"], new(-13.5, 5.5), 0));
+    }
+
     private static MapPosition At(PlannedEntity e, MapPosition offset)
     {
         var rotated = ExtractionPlanner.Rotate(offset, e.Direction);
@@ -147,14 +157,16 @@ internal static class FactoryMaps
     public static SpatialSnapshot Grass(int half, IReadOnlyList<SpatialEntity>? entities = null, Func<int, int, string>? tile = null)
     {
         static WorldBox Box(double h) => new(new(-h, -h), new(h, h));
+        static FluidPortGeometry Port(int index, int direction, string flow, params MapPosition[] positions) =>
+            new(index, "normal", direction, flow, positions, ["default"]);
         var prototypes = new Dictionary<string, EntityGeometry>
         {
             ["character"] = new("character", "character", Box(0.19921875), new(["player"], false, false, true), 1, 1),
-            ["assembling-machine-1"] = new("assembling-machine-1", "assembling-machine", Box(1.19921875), Solid, 3, 3, IsElectric: true),
-            ["lab"] = new("lab", "lab", Box(1.19921875), Solid, 3, 3, IsElectric: true),
+            ["assembling-machine-1"] = new("assembling-machine-1", "assembling-machine", Box(1.19921875), Solid, 3, 3, IsElectric: true, EnergyPerTick: 1250),
+            ["lab"] = new("lab", "lab", Box(1.19921875), Solid, 3, 3, IsElectric: true, EnergyPerTick: 1000),
             ["stone-furnace"] = new("stone-furnace", "furnace", Box(0.7), Solid, 2, 2),
             ["inserter"] = new("inserter", "inserter", Box(0.1484375), Solid, 1, 1, IsElectric: true,
-                InserterPickup: new(0, -1), InserterDrop: new(0, 1.2)),
+                InserterPickup: new(0, -1), InserterDrop: new(0, 1.2), EnergyPerTick: 245),
             ["wooden-chest"] = new("wooden-chest", "container", Box(0.3515625), Solid, 1, 1),
             ["small-electric-pole"] = new("small-electric-pole", "electric-pole", Box(0.1484375), Solid, 1, 1,
                 SupplyArea: 2.5, MaxWireDistance: 7.5),
@@ -169,7 +181,21 @@ internal static class FactoryMaps
             ["iron-ore"] = Deposit("iron-ore"),
             ["copper-ore"] = Deposit("copper-ore"),
             ["coal"] = Deposit("coal"),
-            ["stone"] = Deposit("stone")
+            ["stone"] = Deposit("stone"),
+            ["boiler"] = new("boiler", "boiler", new(new(-1.2890625, -0.7890625), new(1.2890625, 0.7890625)), Solid, 3, 2,
+                FuelCategories: new Dictionary<string, bool> { ["chemical"] = true }, EnergyPerTick: 30000, BurnerEffectivity: 1, FluidBoxes:
+                [new(1, "input", [Port(1, 12, "input-output", new(-1, .5), new(-.5, -1), new(1, -.5), new(.5, 1)),
+                    Port(2, 4, "input-output", new(1, .5), new(-.5, 1), new(-1, -.5), new(.5, -1))], "water"),
+                 new(2, "output", [Port(1, 0, "output", new(0, -.5), new(.5, 0), new(0, .5), new(-.5, 0))], "steam")]),
+            ["steam-engine"] = new("steam-engine", "generator", new(new(-1.25, -2.34765625), new(1.25, 2.34765625)), Solid, 3, 5,
+                IsElectric: true, EnergyPerTick: 0, MaxPowerOutput: 15000, FluidBoxes:
+                [new(1, "input", [Port(1, 8, "input-output", new(0, 2), new(-2, 0), new(0, -2), new(2, 0)),
+                    Port(2, 0, "input-output", new(0, -2), new(2, 0), new(0, 2), new(-2, 0))], "steam", MinimumTemperature: 100)]),
+            ["offshore-pump"] = new("offshore-pump", "offshore-pump", new(new(-0.59765625, -1.046875), new(0.59765625, 0.296875)),
+                new(["is_lower_object", "is_object", "object", "train"], false, false, false), 1, 1, FluidSourceOffset: new(0, -1),
+                FluidBoxes: [new(1, "output", [Port(1, 8, "output", new(0, 0), new(0, 0), new(0, 0), new(0, 0))])],
+                TileBuildability: [new(Box(0.3984375), new(["water_tile"], false, false, false), Ground),
+                    new(new(new(-1, -2), new(1, -1)), new([], false, false, false), new(["water_tile"], false, false, false))])
         };
         var items = new Dictionary<string, PlaceableItem>
         {
@@ -181,7 +207,10 @@ internal static class FactoryMaps
             ["iron-chest"] = new("iron-chest", 50),
             ["small-electric-pole"] = new("small-electric-pole", 50),
             ["electric-mining-drill"] = new("electric-mining-drill", 50),
-            ["burner-mining-drill"] = new("burner-mining-drill", 50)
+            ["burner-mining-drill"] = new("burner-mining-drill", 50),
+            ["boiler"] = new("boiler", 50),
+            ["steam-engine"] = new("steam-engine", 10),
+            ["offshore-pump"] = new("offshore-pump", 20)
         };
         var rows = new List<TileRun>();
         for (int y = -half; y < half; y++)

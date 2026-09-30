@@ -120,6 +120,8 @@ dotnet $hostDll steam-power --session $sessionFile
 
 Cette commande C# calcule les raccordements directs depuis les ports fluides natifs et cherche une rive observée. Elle vérifie les connexions réellement établies, la génération électrique et l'alimentation d'un bras servant de faible charge. Elle ne fait pas encore partie de la traduction des objectifs libres du modèle. Voir les [preuves et limites de l'électricité](docs/steam-power.md), dont la reprise explicite d'une construction partielle.
 
+`power-expand --session $sessionFile` ajoute une étape à cette installation : une machine à la chaudière sous-équipée, sinon une chaudière et ses machines sur un port d'eau libre. Le directeur d'usine déclenche la même extension lorsque la demande projetée dépasse 80 % de la capacité native mesurée, et chaque chaudière devient une cellule alimentée par coffre que la logistique réapprovisionne. Voir l'[extension de l'alimentation](docs/power-expansion.md) et sa qualification préparée.
+
 La [mémoire des ressources](docs/resource-memory.md) conserve les gisements réellement vus et les zones explorées entre les commandes. Les souvenirs restent datés et sont vérifiés localement avant extraction.
 
 La commande `assemble --session $sessionFile --item electronic-circuit --quantity 5` installe et approvisionne un assembleur alimenté. `produce` réutilise ensuite une machine déjà configurée. Voir la [production par assemblage](docs/assembly.md) pour les bilans natifs, les essais et les limites.

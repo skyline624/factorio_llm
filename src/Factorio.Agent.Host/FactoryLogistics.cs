@@ -39,6 +39,15 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             await journal.AppendAsync("resource-cell-health", inspected, token);
             cells = cells.Where(c => inspected.All(i => i.Id != c.Id)).ToArray();
         }
+        // A cell whose registered entity is gone, e.g. destroyed by enemies, is journaled once and never serviced blindly.
+        var present = new List<FactoryCell>();
+        foreach (var cell in cells)
+        {
+            var missing = Missing(snapshot, cell);
+            if (missing.Length == 0) present.Add(cell);
+            else await journal.AppendAsync("factory-cell-missing", new { cell.Id, cell.Kind, missing, snapshot.CollectedTick }, token);
+        }
+        cells = present.ToArray();
 
         foreach (string chest in OutputChests(cells))
         {
@@ -86,16 +95,39 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 supplied[pack] = supplied.GetValueOrDefault(pack) + moved;
             }
         }
-        // Steam supply, cell furnaces and burner drills stop without fuel. Keep each burner above a quarter stack of coal.
         const string fuel = Fuel;
         long stack = catalog.Items[fuel].StackSize;
-        var burners = Burners(snapshot, cells);
+        // Power cells feed their boilers from a chest; keeping one stack there lets boilers run between actor visits.
+        foreach (var cell in cells.Where(c => c.Kind == "power" && c.Entities.ContainsKey("input-chest")))
+        {
+            string chest = cell.Entities["input-chest"];
+            var inChest = Items(snapshot, chest);
+            long moved = 0;
+            long need = PowerFuelNeed(inChest, fuel, stack);
+            if (need == 0 && inChest.Keys.Any(k => k != fuel))
+                await journal.AppendAsync("factory-power-chest-mixed", new { cell.Id, chest, inChest }, token);
+            long give = Math.Min(need, carried.GetValueOrDefault(fuel));
+            if (give > 0)
+            {
+                moved = await TransferAsync("insert", chest, fuel, give);
+                carried[fuel] = carried.GetValueOrDefault(fuel) - moved;
+                supplied[fuel] = supplied.GetValueOrDefault(fuel) + moved;
+                need -= moved;
+            }
+            long burning = cell.Entities.TryGetValue("boiler", out var boiler) ? Items(snapshot, boiler).GetValueOrDefault(fuel) : 0;
+            long powerShort = PowerFuelShortfall(need, inChest.GetValueOrDefault(fuel) + moved + burning, stack);
+            if (powerShort > 0) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + powerShort;
+        }
+        // Steam supply, cell furnaces and burner drills stop without fuel. Keep each burner above a quarter stack of coal;
+        // a boiler with a feeder cell burns from its chest and is only restarted by hand once completely dry.
+        var fedBoilers = cells.Where(c => c.Kind == "power").Select(c => c.Entities.GetValueOrDefault("boiler")).OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+        var burners = Burners(snapshot, cells).Where(b => NeedsDirectFuel(fedBoilers.Contains(b.EntityId), b.Loaded, stack)).ToList();
         var plan = PlanFuel(burners.Select(b => b.Loaded).ToArray(), carried.GetValueOrDefault(fuel), stack);
         bool powerStarved = false;
         for (int index = 0; index < burners.Count; index++)
         {
             var (burner, loaded, power) = burners[index];
-            if (loaded >= stack / 4) continue;
             long give = 0;
             if (plan[index] > 0)
             {
@@ -172,6 +204,23 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             }
         return plan;
     }
+
+    /// <summary>Fuel a feeder chest still needs to reach the target; a chest holding anything else is never topped up.</summary>
+    internal static long PowerFuelNeed(IReadOnlyDictionary<string, long> chest, string fuel, long target) =>
+        chest.Any(p => p.Key != fuel && p.Value > 0) ? 0 : Math.Max(0, target - chest.GetValueOrDefault(fuel));
+
+    /// <summary>
+    /// Coal worth a procurement trip for a feeder. Chests are topped up to a stack whenever coal is carried, but only a supply
+    /// below a quarter stack, chest and boiler together, is reported short: small refills must not make the actor a coal miner.
+    /// </summary>
+    internal static long PowerFuelShortfall(long need, long supply, long stack) => supply < stack / 4 ? need : 0;
+
+    /// <summary>Registered entities of a cell that the native photograph no longer shows.</summary>
+    internal static string[] Missing(FactorySnapshot snapshot, FactoryCell cell) =>
+        cell.Entities.Values.Where(id => !snapshot.Records.Any(r => r.Kind == "entity" && r.EntityId == id)).ToArray();
+
+    /// <summary>A boiler with a feeder cell burns from its chest; the actor only restarts it after it ran completely dry.</summary>
+    internal static bool NeedsDirectFuel(bool fedByCell, long loaded, long stack) => fedByCell ? loaded == 0 : loaded < stack / 4;
 
     internal static Dictionary<string, long> Items(FactorySnapshot snapshot, string entityId)
     {

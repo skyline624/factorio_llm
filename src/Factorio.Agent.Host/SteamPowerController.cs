@@ -159,7 +159,7 @@ public sealed class SteamPowerController(IGameClient game, IControllerJournal jo
         if (receipt.Status != "completed") throw new InvalidOperationException($"Power action {receipt.Kind} ended with {receipt.Status}: {receipt.Error?.Code}. Reconcile partial effects.");
     }
 
-    private static void VerifyLink(SpatialSnapshot map, string source, string target, FluidConnectionPlacement planned)
+    internal static void VerifyLink(SpatialSnapshot map, string source, string target, FluidConnectionPlacement planned)
     {
         ObservedFluidConnection? connection = map.Entities.Single(e => e.Id == source).FluidConnections?
             .SingleOrDefault(c => c.BoxIndex == planned.SourceBox && c.PortIndex == planned.SourcePort);

@@ -29,6 +29,8 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         {
             var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
             int existing = state.Cells.Count(c => c.Kind == "assembler" && c.Recipe == stage.Recipe && c.Status == "ready");
+            // Power grows before the cells that will draw it, so new machines never brown out the running factory.
+            await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync(stage.MachineItem, stage.Machines - existing, true, token);
             for (int count = existing; count < stage.Machines; count++)
                 await builder.BuildAsync("assembler", stage.MachineItem, stage.Recipe, token);
         }
@@ -40,6 +42,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         var registry = new FactoryRegistry(directory);
         int existing = (await registry.LoadAsync(catalog.Scope.WorldId, token)).Cells.Count(c => c.Kind == "lab" && c.Status == "ready");
+        await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync("lab", count - existing, false, token);
         for (int built = existing; built < count; built++)
             await new FactoryCellBuilder(game, journal, directory).BuildAsync("lab", "lab", null, token);
         return Math.Max(existing, count);
@@ -76,7 +79,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     public static (int Cells, double PerMinute) RawCapacity(FactoryState state, string item)
     {
         var rows = (state.Rows ?? []).Where(r => r.Product == item).ToDictionary(r => r.Id);
-        var ready = state.Cells.Where(c => c.Zone == 0 && c.Status == "ready" && rows.ContainsKey(c.Slot.Band)).ToArray();
+        var ready = state.Cells.Where(c => c.IsResource && c.Status == "ready" && rows.ContainsKey(c.Slot.Band)).ToArray();
         return (ready.Length, ready.Sum(c => rows[c.Slot.Band].CellPerMinute));
     }
 

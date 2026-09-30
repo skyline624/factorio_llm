@@ -32,8 +32,9 @@ try
           deploy-defense --session FILE --item NAME --quantity N
           factory-cell --session FILE --kind assembler|lab --machine ITEM [--recipe NAME]
           factory-logistics --session FILE [--quantity CRAFTS]
-          verify-factory-cells|verify-factory-research|verify-resource-cells --session FILE
+          verify-factory-cells|verify-factory-research|verify-resource-cells|verify-power-expansion --session FILE
           resource-cells --session FILE --item NAME --quantity PER_MINUTE
+          power-expand --session FILE
           decision-replay --session FILE [--quantity N] [--config FILE]
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
@@ -114,6 +115,22 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new ResourceCellQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "power-expand":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            string journalPath = Path.Combine(session.Directory, $"power-expansion-{Guid.NewGuid():N}.jsonl");
+            Print(new { result = await new PowerExpansionController(game, new ControllerJournal(journalPath), session.Directory)
+                .ExpandAsync(shutdown.Token), journalPath });
+            break;
+        }
+        case "verify-power-expansion":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new PowerExpansionQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-factory-research":

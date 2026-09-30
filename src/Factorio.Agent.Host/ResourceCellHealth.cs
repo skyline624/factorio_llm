@@ -17,7 +17,7 @@ public static class ResourceCellHealth
     public static IReadOnlyList<FactoryCell> Inspect(FactorySnapshot snapshot, IEnumerable<FactoryCell> cells)
     {
         var changed = new List<FactoryCell>();
-        foreach (var cell in cells.Where(c => c.Zone == 0 && c.Status == "ready"))
+        foreach (var cell in cells.Where(c => c.IsResource && c.Status == "ready"))
         {
             var standing = Standing(snapshot, cell.Entities);
             if (standing.Count < cell.Entities.Count) changed.Add(cell with { Status = "building", Entities = standing, Attempts = 0 });

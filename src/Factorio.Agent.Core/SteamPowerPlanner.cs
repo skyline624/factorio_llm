@@ -77,7 +77,7 @@ public sealed class SteamPowerPlanner
         EntityGeometry Geometry(string item) => map.Prototypes[map.Items[item].EntityName];
     }
 
-    private static SpatialSnapshot Add(SpatialSnapshot map, string id, EntityGeometry geometry, PlacementCandidate placement) =>
+    internal static SpatialSnapshot Add(SpatialSnapshot map, string id, EntityGeometry geometry, PlacementCandidate placement) =>
         map with
         {
             Entities = [.. map.Entities, new("planned:" + id, geometry.Name, placement.Position,

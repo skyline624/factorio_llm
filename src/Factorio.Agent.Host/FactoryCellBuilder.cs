@@ -25,7 +25,9 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
         await using var controller = new SpatialController(game, journal);
         var spatial = new SpatialClient(game);
-        string[] items = [machineItem, equipment.Inserter, equipment.Chest, equipment.Pole];
+        // Steam power grows beside its installation; bands and their power links keep that room free.
+        var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
+        string[] items = [machineItem, equipment.Inserter, equipment.Chest, equipment.Pole, .. steam?.Machines ?? []];
 
         FactoryCell? cell = state.Cells.FirstOrDefault(c => c.Status == "building" && c.Kind == kind && c.MachineItem == machineItem && c.Recipe == recipe);
         FactoryZone zone;
@@ -56,7 +58,8 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
 
         var ids = new Dictionary<string, string>(cell.Entities, StringComparer.Ordinal);
         // The pole goes first so power problems are discovered before machines are committed.
-        var context = new BuildContext(catalog, equipment, zone, controller, registry, items);
+        var context = new BuildContext(catalog, equipment, zone, controller, registry, items,
+            map => KeepSteamGrowth(map, state.Zones));
         foreach (var planned in layout.Entities.OrderBy(e => e.Role == "pole" ? 0 : e.Role == "machine" ? 1 : 2))
         {
             if (!ids.ContainsKey(planned.Role))
@@ -87,6 +90,9 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         await journal.AppendAsync("factory-cell-ready", cell, token);
         return cell;
 
+        SpatialSnapshot KeepSteamGrowth(SpatialSnapshot map, IReadOnlyList<FactoryZone> zones) => steam is null ? map
+            : PowerExpansionController.ReserveGrowth(map, steam, zones, map.Entities.Single(e => e.Id == map.Actor.Id).Force);
+
         async Task<FactoryZone> CreateZoneAsync(EntityGeometry machine)
         {
             var map = await spatial.CaptureAsync(items, 48, token);
@@ -95,9 +101,15 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                     && map.Entities.Any(o => o.Id != e.Id && o.Power?.NetworkId == e.Power.NetworkId && IsPowerSource(map.Prototypes[o.Name].Type)))
                 .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).FirstOrDefault()
                 ?? throw new InvalidOperationException("A factory zone needs an observed generator network near the actor; build steam power first.");
-            var site = new FactoryZonePlanner().Find(map, machine, powered.Position, ZoneSlots, token)
-                ?? throw new InvalidOperationException("No dry, deposit-free rectangle for a factory band near the power network.");
             var current = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            var site = new FactoryZonePlanner().Find(KeepSteamGrowth(map, current.Zones), machine, powered.Position, ZoneSlots, token);
+            if (site is null && steam is not null)
+            {
+                // A band that blocks steam growth is still better than no factory; the journal keeps the trade-off visible.
+                await journal.AppendAsync("factory-zone-steam-growth-blocked", new { map.CollectedTick }, token);
+                site = new FactoryZonePlanner().Find(map, machine, powered.Position, ZoneSlots, token);
+            }
+            if (site is null) throw new InvalidOperationException("No dry, deposit-free rectangle for a factory band near the power network.");
             var created = new FactoryZone(current.Zones.Count == 0 ? 1 : current.Zones.Max(z => z.Id) + 1, site.Origin, site.Slots,
                 FactoryBandPlanner.Pitch(machine), FactoryBandPlanner.BandHeight(machine));
             await registry.SaveAsync(current with { Zones = [.. current.Zones, created] }, token);
@@ -151,8 +163,9 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
 
     }
 
+    /// <summary>Protect keeps planned steam growth free when possible; links fall back to the plain reservation.</summary>
     private sealed record BuildContext(ProductionCatalog Catalog, CellEquipment Equipment, FactoryZone Zone,
-        SpatialController Controller, FactoryRegistry Registry, string[] Items);
+        SpatialController Controller, FactoryRegistry Registry, string[] Items, Func<SpatialSnapshot, SpatialSnapshot> Protect);
 
     /// <summary>Joins unfed cell poles to a powered network, e.g. cells built before a failed link.</summary>
     public async Task<int> RepairPowerAsync(CancellationToken token = default)
@@ -161,6 +174,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         var registry = new FactoryRegistry(directory);
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
         var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
         int repaired = 0;
         await using var controller = new SpatialController(game, journal);
         foreach (var cell in state.Cells.Where(c => c.Entities.ContainsKey("pole") && c.Zone > 0))
@@ -171,7 +185,9 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 .Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
             await controller.TravelAsync(position, 6, catalog, token);
             var context = new BuildContext(catalog, equipment, state.Zones.Single(z => z.Id == cell.Zone), controller, registry,
-                [cell.MachineItem, equipment.Inserter, equipment.Chest, equipment.Pole]);
+                [cell.MachineItem, equipment.Inserter, equipment.Chest, equipment.Pole, .. steam?.Machines ?? []],
+                map => steam is null ? map : PowerExpansionController.ReserveGrowth(map, steam, state.Zones,
+                    map.Entities.Single(e => e.Id == map.Actor.Id).Force));
             await ConnectPowerAsync(context, cell.Entities["pole"], position, token);
             snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
             repaired++;
@@ -204,7 +220,10 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 && (map.Prototypes[e.Name].Type == "electric-pole" || IsPowerSource(map.Prototypes[e.Name].Type)))) return;
             var sources = map.Entities.Where(e => e.Force == pole.Force && e.Id != poleId
                 && (fed is null || FactoryPower.IsFed(snapshot, e.Id) == true)).Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
-            var next = new PowerGridPlanner().Next(ReserveZone(map, context.Zone, context.Equipment.Pole), context.Equipment.Pole, pole.Bounds, sources, token);
+            var reserved = ReserveZone(map, context.Zone, context.Equipment.Pole);
+            var next = new PowerGridPlanner().Next(context.Protect(reserved), context.Equipment.Pole, pole.Bounds, sources, token);
+            if (next.Status is PowerGridSearchStatus.NoObservedPath)
+                next = new PowerGridPlanner().Next(reserved, context.Equipment.Pole, pole.Bounds, sources, token);
             await journal.AppendAsync("factory-power-link", new { poleId, fed, next, map.CollectedTick }, token);
             if (next.Status == PowerGridSearchStatus.Connected && fed is null) return;
             if (next.Status != PowerGridSearchStatus.Extension || next.Pole is null)
@@ -217,16 +236,18 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         throw new InvalidOperationException("Joining the cell to the electric network exceeded its link budget.");
     }
 
-    /// <summary>Marks the whole band as occupied so power links never take a future cell's slot.</summary>
+    /// <summary>Marks the whole band as occupied so power links never take a future cell's slot. A band is reserved once.</summary>
     public static SpatialSnapshot ReserveZone(SpatialSnapshot map, FactoryZone zone, string poleItem)
     {
         const string name = "factory-zone-reservation";
+        if (map.Entities.Any(e => e.Id == $"{name}:{zone.Id}")) return map;
         var box = new WorldBox(zone.Origin, new(zone.Origin.X + zone.Slots * zone.Pitch, zone.Origin.Y + zone.BandHeight));
         var pole = map.Prototypes[map.Items[poleItem].EntityName];
         return map with
         {
             Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { [name] = pole with { Name = name, Type = "reservation" } },
-            Entities = [.. map.Entities, new SpatialEntity(name, name,
+            // One id per zone: the collision field reports each obstacle id once, so shared ids would hide touching bands.
+            Entities = [.. map.Entities, new SpatialEntity($"{name}:{zone.Id}", name,
                 new((box.Min.X + box.Max.X) / 2, (box.Min.Y + box.Max.Y) / 2), box, 0, "planned")]
         };
     }

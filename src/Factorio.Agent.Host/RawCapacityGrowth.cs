@@ -53,5 +53,5 @@ public sealed class RawCapacityGrowth(long persistentTicks = 3600, int persisten
 
     /// <summary>Resource cells of the item that stand or are being built; depleted and abandoned cells leave the budget.</summary>
     public static int Cells(FactoryState state, string item) =>
-        state.Cells.Count(c => c.Zone == 0 && c.Recipe == item && c.Status is "ready" or "building");
+        state.Cells.Count(c => c.IsResource && c.Recipe == item && c.Status is "ready" or "building");
 }

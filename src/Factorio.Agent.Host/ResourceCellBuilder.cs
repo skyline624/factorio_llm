@@ -23,7 +23,7 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
     /// </summary>
     internal static (FactoryCell? Resume, IReadOnlyList<FactoryCell> Abandoned) Interrupted(FactoryState state, string kind, string product)
     {
-        var interrupted = state.Cells.Where(c => c.Zone == 0 && c.Status == "building" && c.Kind == kind && c.Recipe == product).ToArray();
+        var interrupted = state.Cells.Where(c => c.IsResource && c.Status == "building" && c.Kind == kind && c.Recipe == product).ToArray();
         var resume = interrupted.FirstOrDefault(c => c.Attempts < MaximumAttempts);
         return (resume is null ? null : resume with { Attempts = resume.Attempts + 1 },
             interrupted.Where(c => c.Attempts >= MaximumAttempts).Select(c => c with { Status = Abandoned }).ToArray());
@@ -106,7 +106,7 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
         {
             foreach (var open in (state.Rows ?? []).Where(r => r.Product == product).OrderBy(r => r.Id))
             {
-                var used = state.Cells.Where(c => c.Zone == 0 && c.Slot.Band == open.Id).Select(c => c.Slot.Index).ToHashSet();
+                var used = state.Cells.Where(c => c.IsResource && c.Slot.Band == open.Id).Select(c => c.Slot.Index).ToHashSet();
                 int next = Enumerable.Range(0, open.Cells).FirstOrDefault(i => !used.Contains(i), -1);
                 if (next < 0) continue;
                 string[] openItems = Items(open.Equipment);
