@@ -4,6 +4,8 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 public sealed record RawCellCapacity(string Item, string Kind, int Cells, double PerMinute, int Built);
+/// <summary>What the resource cells of one raw item deliver: ready capacity, depleted cells and the drills that mine it.</summary>
+public sealed record RawSupplyFact(string Item, int ReadyCells, double PerMinute, int DepletedCells, IReadOnlyList<string> Drills);
 
 /// <summary>Grows the persistent factory: sizes assembler and furnace chains for a target rate, adds laboratories and raw resource cells.</summary>
 public sealed class FactoryDirector(IGameClient game, IControllerJournal journal, string directory)
@@ -126,6 +128,16 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             }
         }
     }
+
+    /// <summary>Raw supply per item with resource rows, for the planner to see raw bottlenecks such as depleted patches.</summary>
+    public static IReadOnlyList<RawSupplyFact> RawSupply(FactoryState state) => (state.Rows ?? []).Select(r => r.Product)
+        .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(item =>
+        {
+            var (cells, perMinute) = RawCapacity(state, item);
+            var resource = state.Cells.Where(c => c.IsResource && c.Recipe == item).ToArray();
+            return new RawSupplyFact(item, cells, Math.Round(perMinute, 2), resource.Count(c => c.Status == "depleted"),
+                resource.Where(c => c.Status == "ready").Select(c => c.MachineItem).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+        }).ToArray();
 
     /// <summary>Ready resource cells producing the item and their summed native rate.</summary>
     public static (int Cells, double PerMinute) RawCapacity(FactoryState state, string item)

@@ -4,17 +4,22 @@ namespace Factorio.Agent.Host;
 /// Decides when a raw shortfall justifies one more resource cell. The shortfall must persist over consecutive logistics
 /// rounds that span real game time, so a new cell delivers before the next one counts; ready cells must fall short of
 /// the demanded rate; and each item's cells stay within a budget counted in the registry across research runs. An item
-/// whose growth failed is left to ordinary procurement for the rest of the run.
+/// whose growth failed is left to ordinary procurement until a retry delay passes: depleted local deposits leave no row
+/// site in view, but a later attempt that explores toward remembered deposits may succeed.
 /// </summary>
 public sealed class RawCapacityGrowth(long persistentTicks = 3600, int persistentRounds = 2, int maximumCells = 16)
 {
+    /// <summary>Game ticks (ten minutes) a failed growth waits before the item may grow again.</summary>
+    public const long RetryTicks = 36000;
+    /// <summary>Exploration steps toward remembered deposits when no deposit in view holds a resource row.</summary>
+    public const int ExplorationBudget = 6;
     /// <summary>Rate requested for a raw item that no automation plan sized, such as fuel.</summary>
     public const double DefaultPerMinute = 15;
     /// <summary>Share of their native rate that ready cells must deliver before an unplanned item grows past it.</summary>
     public const double SaturatedShare = .8;
     private sealed record Streak(long FirstTick, long LastTick, int Rounds, long Delivered);
     private readonly Dictionary<string, Streak> streaks = new(StringComparer.Ordinal);
-    private readonly HashSet<string> failed = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> failed = new(StringComparer.Ordinal);
 
     /// <summary>A short item extends its streak with what cells delivered since it began; any other item ends its streak.</summary>
     public void Observe(LogisticsResult round)
@@ -41,15 +46,15 @@ public sealed class RawCapacityGrowth(long persistentTicks = 3600, int persisten
         return capacity > 0 && Delivered(item) >= SaturatedShare * capacity ? capacity + DefaultPerMinute : DefaultPerMinute;
     }
 
-    public bool Due(string item, int cells, double capacity, double demand) => !failed.Contains(item) && cells < maximumCells
-        && capacity < demand - 1e-9 && streaks.TryGetValue(item, out var streak) && streak.Rounds >= persistentRounds
-        && streak.LastTick - streak.FirstTick >= persistentTicks;
+    public bool Due(string item, int cells, double capacity, double demand) => cells < maximumCells
+        && capacity < demand - 1e-9 && streaks.TryGetValue(item, out var streak) && !HasFailed(item, streak.LastTick)
+        && streak.Rounds >= persistentRounds && streak.LastTick - streak.FirstTick >= persistentTicks;
 
     public void Grew(string item) => streaks.Remove(item); // The new cell must deliver before another shortfall counts.
 
-    public void Failed(string item) => failed.Add(item);
+    public void Failed(string item, long tick) => failed[item] = tick;
 
-    public bool HasFailed(string item) => failed.Contains(item);
+    public bool HasFailed(string item, long tick) => failed.TryGetValue(item, out long at) && tick < at + RetryTicks;
 
     /// <summary>Resource cells of the item that stand or are being built; depleted and abandoned cells leave the budget.</summary>
     public static int Cells(FactoryState state, string item) =>

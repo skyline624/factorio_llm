@@ -76,7 +76,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
             foreach (var (item, missing) in shortfall)
             {
                 bool raw = ResourceCellPlanner.Supply(catalog, item) is not null;
-                if (!grew && raw && await GrowAsync(item, factory))
+                if (!grew && raw && await GrowAsync(item, factory, service.Tick))
                 {
                     grew = true;
                     continue;
@@ -101,15 +101,16 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         }
         throw new TimeoutException("Factory research exhausted its round budget.");
 
-        // One bounded cell per round, on deposits already in view: research never wanders off to explore.
-        async Task<bool> GrowAsync(string item, FactoryState factory)
+        // One bounded cell per round, in view first, then a few steps toward remembered deposits: once a small patch is
+        // depleted, growing in view only would leave the raw item to hand-fed procurement for the rest of the research.
+        async Task<bool> GrowAsync(string item, FactoryState factory, long tick)
         {
             double capacity = FactoryDirector.RawCapacity(factory, item).PerMinute;
             double demand = growth.Demand(item, rawRates.GetValueOrDefault(item), capacity);
             if (!growth.Due(item, RawCapacityGrowth.Cells(factory, item), capacity, demand)) return false;
             try
             {
-                if ((await director.EnsureRawAsync(item, demand, token, maximumNewCells: 1, explorationBudget: 0)).Built > 0)
+                if ((await director.EnsureRawAsync(item, demand, token, maximumNewCells: 1, explorationBudget: RawCapacityGrowth.ExplorationBudget)).Built > 0)
                 {
                     growth.Grew(item);
                     return true;
@@ -121,7 +122,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
                 if (ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token)).Scope != catalog.Scope) throw;
                 await journal.AppendAsync("factory-raw-capacity-failed", new { item, demand, error = error.GetType().Name, error.Message }, token);
             }
-            growth.Failed(item);
+            growth.Failed(item, tick);
             return false;
         }
     }
@@ -132,7 +133,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
     /// </summary>
     internal static bool LeftToCells(string item, bool raw, LogisticsResult round, IReadOnlySet<string> cellProducts,
         CellDelivery delivery, RawCapacityGrowth growth) => raw
-        ? !growth.HasFailed(item) && !(item == FactoryLogistics.Fuel && round.PowerStarved) && delivery.Covers(item, round.Tick)
+        ? !growth.HasFailed(item, round.Tick) && !(item == FactoryLogistics.Fuel && round.PowerStarved) && delivery.Covers(item, round.Tick)
         : cellProducts.Contains(item) || round.Collected.ContainsKey(item);
 
     /// <summary>

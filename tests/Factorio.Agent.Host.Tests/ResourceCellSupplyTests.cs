@@ -62,10 +62,15 @@ public sealed class ResourceCellSupplyTests
         growth.Grew("iron-plate");
         growth.Observe(Round(12700, ["iron-plate"]));
         Assert.False(growth.Due("iron-plate", 3, 18.75, 30)); // The new cell delivers before another streak counts.
-        growth.Failed("iron-plate");
+        growth.Failed("iron-plate", tick: 12700);
         growth.Observe(Round(20000, ["iron-plate"]));
-        Assert.True(growth.HasFailed("iron-plate"));
+        Assert.True(growth.HasFailed("iron-plate", 20000));
         Assert.False(growth.Due("iron-plate", 3, 18.75, 30));
+        // Campaign 2026-09-30 (seed 20261002): both iron cells depleted their patch and growth found no local site; a failure
+        // that lasted the whole research left iron to one hand-fed drill for two hours. A failure now expires, so growth retries.
+        growth.Observe(Round(12700 + RawCapacityGrowth.RetryTicks, ["iron-plate"]));
+        Assert.False(growth.HasFailed("iron-plate", 12700 + RawCapacityGrowth.RetryTicks));
+        Assert.True(growth.Due("iron-plate", 3, 18.75, 30));
     }
 
     [Fact]
@@ -86,6 +91,19 @@ public sealed class ResourceCellSupplyTests
         Assert.Equal(30, saturated.Delivered("coal"), 6);
         Assert.Equal(30 + RawCapacityGrowth.DefaultPerMinute, saturated.Demand("coal", 0, 30));
         Assert.True(saturated.Due("coal", 1, 30, saturated.Demand("coal", 0, 30)));
+    }
+
+    [Fact]
+    public void RawSupplyFactsShowReadyCapacityDepletionAndDrillsPerItem()
+    {
+        // The planner never saw its raw bottleneck: two depleted iron cells looked like any other factory state.
+        var state = new FactoryState(1, "world", [], [Cell(IronRow, 0, "ready"), Cell(IronRow, 1, "depleted"), Cell(IronRow, 2, "depleted"),
+            Cell(CoalRow, 0, "ready")], [IronRow with { Cells = 3 }, CoalRow]);
+        var facts = FactoryDirector.RawSupply(state);
+        Assert.Equal(["coal", "iron-plate"], facts.Select(f => f.Item));
+        var iron = facts.Single(f => f.Item == "iron-plate");
+        Assert.Equal((1, IronRow.CellPerMinute, 2), (iron.ReadyCells, iron.PerMinute, iron.DepletedCells));
+        Assert.Equal([Cell(IronRow, 0, "ready").MachineItem], iron.Drills);
     }
 
     [Fact]
@@ -121,7 +139,7 @@ public sealed class ResourceCellSupplyTests
         delivery.Observe(starved, ready);
         Assert.False(Left("coal", true, starved));
         Assert.True(Left("coal", true, starved with { PowerStarved = false }));
-        growth.Failed("iron-plate");
+        growth.Failed("iron-plate", later.Tick);
         Assert.False(Left("iron-plate", true, later));
         Assert.False(Left("copper-plate", true, later)); // No cell ever delivered it.
     }

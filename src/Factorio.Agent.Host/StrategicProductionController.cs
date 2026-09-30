@@ -23,8 +23,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         if (catalog.Scope != scope || science.Scope != scope || factory.Scope != scope) throw new InvalidDataException("Strategic observations span different actor scopes.");
         var defenses = catalog.Turrets is { Count: > 0 } ? DefenseFactoryState.Read(factory, catalog) : null;
         bool automation = factoryDirectory is not null && FactoryDirector.Available(catalog);
-        var cells = factoryDirectory is null ? [] : (await new FactoryRegistry(factoryDirectory).LoadAsync(scope.WorldId, token)).Cells
-            .Where(c => c.Status == "ready").ToArray();
+        var factoryState = factoryDirectory is null ? null : await new FactoryRegistry(factoryDirectory).LoadAsync(scope.WorldId, token);
+        var cells = factoryState is null ? [] : factoryState.Cells.Where(c => c.Status == "ready").ToArray();
         JsonElement agent = observation.Data.GetProperty("agent");
         string observationId = $"{observation.Data.GetProperty("snapshotId").GetInt64()}:{observation.Tick}";
         // Whitelist factual fields: no session credentials, player names or coordinates leave the machine.
@@ -89,6 +89,10 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 furnaceCells = cells.Where(c => c.Kind == FurnaceCellPlanner.Kind).GroupBy(c => c.Recipe!).OrderBy(g => g.Key, StringComparer.Ordinal)
                     .Select(g => new { recipe = g.Key, cells = g.Count() }).ToArray(),
                 laboratories = cells.Count(c => c.Kind == "lab"),
+                rawSupply = factoryState is null ? [] : FactoryDirector.RawSupply(factoryState),
+                enabledDrills = catalog.Items.Where(p => p.Value.PlaceEntityType == "mining-drill" && FactoryDirector.Enabled(catalog, p.Key))
+                    .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray(),
+                rawInterpretation = "Resource cells mine ore patches for plates, coal and stone; raw demand beyond their ready rate is mined and smelted by one hand-fed early drill. Burner drills burn coal and mine at half an electric drill's speed; depleted cells no longer produce.",
                 perimeterTurrets = cells.Where(c => c.Kind == "turret").Sum(c => c.Entities.Count),
                 perimeterWalls = cells.Where(c => c.Kind == "wall").Sum(c => c.Entities.Count),
                 interpretation = "Persistent chest-fed cells keep producing while inputs last; the actor restocks them between goals."
