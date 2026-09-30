@@ -27,7 +27,7 @@ Aucun `set_recipe` n'est envoyé : l'action native le refuse pour un four, qui c
 - La réserve de charbon vient des valeurs natives : durée de recette ÷ vitesse × consommation du four ÷ rendement du foyer ÷ pouvoir calorifique. Elle vaut au moins un quart de pile pour que le four tourne entre deux passages. Pour 40 aciers en four en pierre (90 kW, 16 s) : 57,6 MJ ÷ 4 MJ, soit 15 charbons ; pour 40 briques, 12 (le quart de pile).
 - Le charbon des coffres de fours passe après les chaudières, les coffres d'alimentation électrique et les foyers des cellules de ressources : la survie électrique et les matières brutes d'abord.
 - Les fours de bande ne sont jamais ravitaillés à la main : `FactoryLogistics.Burners` les exclut.
-- Les manques d'ingrédient et de charbon sont rapportés comme pour les autres cellules. La collecte de l'acier suit la règle commune des coffres de sortie.
+- Les manques d'ingrédient sont rapportés comme pour les autres cellules. Le coffre est complété jusqu'à la réserve de charbon dès que l'acteur en porte, mais un manque de charbon n'est rapporté que si le coffre et l'emplacement de combustible du four en tiennent ensemble moins d'un quart de pile, comme pour les coffres d'alimentation des chaudières : quelques charbons manquants ne doivent pas envoyer l'acteur miner à la main. La collecte de l'acier suit la règle commune des coffres de sortie.
 
 `FactoryDirector.AutomateAsync` construit ces cellules pour les étapes `furnace`. `FactoryResearchController` en profite sans changement, et un objectif `items_per_minute` pour `steel-plate` passe désormais l'ancrage de `StrategicProductionController`.
 
@@ -36,9 +36,10 @@ Aucun `set_recipe` n'est envoyé : l'action native le refuse pour un four, qui c
 | Essai | Type | Résultat |
 |---|---|---|
 | `verify-furnace-bands` | Fixture préparée : interface d'énergie injectée, recherche `steel-processing` débloquée, fours en pierre, bras, coffres, poteaux, 250 plaques de fer et 50 charbons fournis | `AutomateAsync("steel-plate", 3)` planifie un seul four en pierre (15 plaques par minute) et le construit avec un poteau de liaison. Premier passage : 200 plaques et 15 charbons dans le coffre d'entrée. Après 4 800 ticks : 7 charbons passés du coffre au four par le bras (5 en réserve, 1,71 MJ en combustion), 4 aciers collectés. Aucune fabrication manuelle, aucun minage, aucun chargement direct du four. `passed: true`, `isAutonomousCampaign: false`. |
+| `verify-furnace-bands` avec le seuil de manque de charbon | Même fixture, puis l'acteur vide son charbon et le coffre est ramené à 13 charbons (sous la réserve de 15, au-dessus du quart de pile de 12), enfin à 0 | Premières étapes identiques (200 plaques et 15 charbons, 7 charbons chargés par le bras, 4 aciers). Coffre à 13 sans charbon porté : aucun manque (l'ancien calcul en rapportait 2). Coffre vide : 15 charbons manquants. Aucune fabrication, aucun minage, aucun chargement direct. `passed: true`, `isAutonomousCampaign: false`. |
 | `factory-cell --kind furnace` puis `factory-logistics`, même serveur | Commandes manuelles sur la fixture | Sans `--recipe` : refus explicite. Avec `--recipe steel-plate` : cellule sud construite et prête. Le passage logistique suivant collecte 7 aciers, charge 18 charbons dans les deux coffres et rapporte 221 plaques manquantes. |
 
-Serveurs privés 2.0.77 en mode headless : graine 73104157 pour les deux lignes, puis `verify-furnace-bands` relancé sur un serveur neuf (graine 73104158) avec le code final, à l'identique (`passed: true`). Ces essais isolent le mécanisme ; ils ne remplacent ni une campagne normale ni la qualification finale.
+Serveurs privés 2.0.77 en mode headless : graine 73104157 pour la première et la dernière ligne, puis `verify-furnace-bands` relancé sur un serveur neuf (graine 73104158) avec le code de ce module, à l'identique (`passed: true`). La ligne du seuil de manque vient d'un serveur neuf (graine 73104272). Ces essais isolent le mécanisme ; ils ne remplacent ni une campagne normale ni la qualification finale.
 
 ## Limites
 

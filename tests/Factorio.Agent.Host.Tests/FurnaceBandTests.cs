@@ -199,7 +199,7 @@ public sealed class FurnaceBandTests
     }
 
     // entities.lua: stone furnace, 90 kW burner at effectivity 1, 2x2 tiles.
-    private static EntityGeometry StoneFurnace() => new("stone-furnace", "furnace", new(new(-0.7, -0.7), new(0.7, 0.7)),
+    internal static EntityGeometry StoneFurnace() => new("stone-furnace", "furnace", new(new(-0.7, -0.7), new(0.7, 0.7)),
         new(["item", "object", "player", "water_tile"], false, false, false), 2, 2,
         FuelCategories: new Dictionary<string, bool> { ["chemical"] = true }, EnergyPerTick: 1500, BurnerEffectivity: 1);
 

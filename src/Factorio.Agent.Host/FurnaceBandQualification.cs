@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Factorio.Agent.Core;
 using Factorio.Agent.Infrastructure;
@@ -7,7 +8,8 @@ namespace Factorio.Agent.Host;
 /// <summary>
 /// Prepared fixture: an injected power source, steel research and supplied stone furnaces, inserters, chests, poles,
 /// iron plates and coal. Proves that steel automation plans and builds a furnace band cell, that logistics fuels it only
-/// through its input chest and collects steel from its output chest, with no hand crafting; not a campaign.
+/// through its input chest and collects steel from its output chest, with no hand crafting, and that only a chest supply
+/// below a quarter stack reports coal short once the actor carries none; not a campaign.
 /// </summary>
 public sealed class FurnaceBandQualification(RuntimeSession session)
 {
@@ -66,6 +68,18 @@ public sealed class FurnaceBandQualification(RuntimeSession session)
             Require(loaded.ChestFuel < reserve && loaded.FurnaceFuel + loaded.BurningJoules > 0,
                 "The input inserter did not load the furnace's fuel slot from the chest.");
 
+            // With no coal carried, a chest below its reserve but above a quarter stack is not worth a trip; an emptied one is.
+            long quarter = catalog.Items[FactoryLogistics.Fuel].StackSize / 4;
+            Require(reserve - 2 > quarter, "The steel fuel reserve leaves no margin above a quarter stack.");
+            var kept = await DrainAsync(inputChest, reserve - 2, token);
+            var third = await logistics.ServiceAsync(BufferCrafts, token);
+            var emptied = await DrainAsync(inputChest, 0, token);
+            var fourth = await logistics.ServiceAsync(BufferCrafts, token);
+            evidence.Add(new { check = "furnace-fuel-shortfall", quarter, kept, third, emptied, fourth });
+            Require(kept.GetProperty("carried").GetInt64() == 0 && kept.GetProperty("chest").GetInt64() < reserve
+                && third.Shortfall.GetValueOrDefault(FactoryLogistics.Fuel) == 0, "A band furnace chest above a quarter stack asked for coal.");
+            Require(fourth.Shortfall.GetValueOrDefault(FactoryLogistics.Fuel) > 0, "An emptied band furnace chest did not report coal short.");
+
             var rows = (await File.ReadAllLinesAsync(journalPath, token)).Select(l => JsonDocument.Parse(l)).ToArray();
             try
             {
@@ -91,6 +105,18 @@ public sealed class FurnaceBandQualification(RuntimeSession session)
             await LocalJson.WriteAsync(path, new { kind = "prepared-furnace-band-qualification", passed, isAutonomousCampaign = false, journalPath, evidence },
                 CancellationToken.None);
         }
+    }
+
+    /// <summary>Fixture step: the actor drops its coal and the chest keeps at most <paramref name="keep"/> of it.</summary>
+    private async Task<JsonElement> DrainAsync(string chest, long keep, CancellationToken token)
+    {
+        long id = long.Parse(chest, NumberStyles.None, CultureInfo.InvariantCulture);
+        string response = await session.CreateRcon().ExecuteAsync(string.Create(CultureInfo.InvariantCulture, $$"""
+            /silent-command local c=game.surfaces.nauvis.find_entities_filtered{type='character',force=game.forces.factorio_agent}[1]; local bag=c.get_main_inventory(); local carried=bag.get_item_count('coal'); if carried>0 then bag.remove{name='coal',count=carried} end; local chest; for _,e in pairs(c.surface.find_entities_filtered{force=c.force,type='container'}) do if e.unit_number=={{id}} then chest=e end end; assert(chest); local i=chest.get_inventory(defines.inventory.chest); local n=i.get_item_count('coal'); if n>{{keep}} then i.remove{name='coal',count=n-{{keep}}} end; rcon.print(helpers.table_to_json{tick=game.tick,carried=bag.get_item_count('coal'),chest=i.get_item_count('coal')})
+            """), token);
+        if (!response.TrimStart().StartsWith('{')) throw new InvalidDataException("Native furnace fuel fixture failed: " + response[..Math.Min(response.Length, 1500)]);
+        using var value = JsonDocument.Parse(response);
+        return value.RootElement.Clone();
     }
 
     private sealed record FurnaceLoad(long ChestFuel, long FurnaceFuel, double BurningJoules, IReadOnlyDictionary<string, long> Furnace, long Tick);

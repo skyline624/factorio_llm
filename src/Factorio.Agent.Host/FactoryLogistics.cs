@@ -134,10 +134,16 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             powerStarved |= power;
         }
         // Band furnaces burn from their input chest, whose inserter loads the fuel slot; they come after power and burners.
+        // Like feeder chests, the reserve is topped up whenever coal is carried, but only a low supply is worth a trip.
         foreach (var (cellId, reserve) in await FurnaceBandFuel.ReservesAsync(game, catalog, cells, bufferCrafts, fuel, token))
         {
-            string chest = cells.Single(c => c.Id == cellId).Entities["input-chest"];
-            await RefillAsync(chest, fuel, reserve - Items(snapshot, chest).GetValueOrDefault(fuel));
+            var cell = cells.Single(c => c.Id == cellId);
+            string chest = cell.Entities["input-chest"];
+            long inChest = Items(snapshot, chest).GetValueOrDefault(fuel);
+            long moved = await RefillAsync(chest, fuel, reserve - inChest, reportShort: false);
+            long burning = cell.Entities.TryGetValue("machine", out var furnace) ? Items(snapshot, furnace).GetValueOrDefault(fuel) : 0;
+            long furnaceShort = PowerFuelShortfall(Math.Max(0, reserve - inChest - moved), inChest + moved + burning, stack);
+            if (furnaceShort > 0) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + furnaceShort;
         }
         var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, powerStarved, upkeep, degraded);
         await journal.AppendAsync("factory-logistics", result, token);
@@ -145,19 +151,20 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
 
         bool IsSciencePack(string item) => item.EndsWith("-science-pack", StringComparison.Ordinal);
 
-        // Tops a chest up from carried stock; what the actor lacks is reported as shortfall.
-        async Task RefillAsync(string chest, string item, long need)
+        // Tops a chest up from carried stock and returns what moved; what the actor lacks is shortfall unless the caller judges it.
+        async Task<long> RefillAsync(string chest, string item, long need, bool reportShort = true)
         {
-            if (need <= 0) return;
+            if (need <= 0) return 0;
+            long moved = 0;
             long give = Math.Min(need, carried.GetValueOrDefault(item));
             if (give > 0)
             {
-                long moved = await TransferAsync("insert", chest, item, give);
+                moved = await TransferAsync("insert", chest, item, give);
                 carried[item] = carried.GetValueOrDefault(item) - moved;
                 supplied[item] = supplied.GetValueOrDefault(item) + moved;
-                need -= moved;
             }
-            if (need > 0) shortfall[item] = shortfall.GetValueOrDefault(item) + need;
+            if (reportShort && need > moved) shortfall[item] = shortfall.GetValueOrDefault(item) + need - moved;
+            return moved;
         }
 
         async Task<long> TransferAsync(string kind, string entityId, string item, long count, string inventory = "chest")
@@ -226,8 +233,9 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         chest.Any(p => p.Key != fuel && p.Value > 0) ? 0 : Math.Max(0, target - chest.GetValueOrDefault(fuel));
 
     /// <summary>
-    /// Coal worth a procurement trip for a feeder. Chests are topped up to a stack whenever coal is carried, but only a supply
-    /// below a quarter stack, chest and boiler together, is reported short: small refills must not make the actor a coal miner.
+    /// Coal worth a procurement trip for a feeder or band furnace chest. Chests are topped up to their target whenever coal is
+    /// carried, but only a supply below a quarter stack, chest and burner together, is reported short: small refills must not
+    /// make the actor a coal miner.
     /// </summary>
     internal static long PowerFuelShortfall(long need, long supply, long stack) => supply < stack / 4 ? need : 0;
 
