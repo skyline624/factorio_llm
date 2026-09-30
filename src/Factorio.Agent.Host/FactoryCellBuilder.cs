@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Factorio.Agent.Core;
 using Factorio.Agent.Infrastructure;
 
@@ -55,13 +56,17 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
 
         var ids = new Dictionary<string, string>(cell.Entities, StringComparer.Ordinal);
         // The pole goes first so power problems are discovered before machines are committed.
+        var context = new BuildContext(catalog, equipment, zone, controller, registry, items);
         foreach (var planned in layout.Entities.OrderBy(e => e.Role == "pole" ? 0 : e.Role == "machine" ? 1 : 2))
         {
-            if (ids.ContainsKey(planned.Role)) continue;
-            ids[planned.Role] = await PlaceAsync(planned);
-            cell = cell with { Entities = new Dictionary<string, string>(ids, StringComparer.Ordinal) };
-            await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
-            if (planned.Role == "pole") await ConnectPowerAsync(ids["pole"], planned);
+            if (!ids.ContainsKey(planned.Role))
+            {
+                ids[planned.Role] = await PlaceAsync(planned);
+                cell = cell with { Entities = new Dictionary<string, string>(ids, StringComparer.Ordinal) };
+                await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
+            }
+            // Also on resume: a pole placed before an interrupted link may still be an unfed island.
+            if (planned.Role == "pole") await ConnectPowerAsync(context, ids["pole"], planned.Position, token);
         }
         if (recipe is not null)
         {
@@ -75,6 +80,8 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         var poleEntity = built.Entities.Single(e => e.Id == ids["pole"]);
         if (machineEntity.Power?.NetworkId is null || machineEntity.Power.NetworkId != poleEntity.Power?.NetworkId)
             throw new InvalidOperationException("The cell machine is not on the cell pole's electric network.");
+        if (FactoryPower.IsFed(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token), ids["machine"]) == false)
+            throw new InvalidOperationException("The cell network has no power source; its poles form an isolated island.");
         cell = cell with { Status = "ready", Tick = built.CollectedTick };
         await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
         await journal.AppendAsync("factory-cell-ready", cell, token);
@@ -109,13 +116,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             }
         }
 
-        async Task EnsureCarriedAsync(string item, int count)
-        {
-            var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory.GetValueOrDefault(item);
-            if (carried >= count) return;
-            using (ProductionReservations.Enter(await registry.CellEntityIdsAsync(catalog.Scope.WorldId, token)))
-                await new ProductionGoalExecutor(game, journal).RunAsync(item, Math.Min(1000, count), token);
-        }
+        Task EnsureCarriedAsync(string item, int count) => this.EnsureCarriedAsync(registry, catalog, item, count, token);
 
         async Task ClearAsync(CellLayout plan)
         {
@@ -148,28 +149,72 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 catalog, controller, token);
         }
 
-        async Task ConnectPowerAsync(string poleId, PlannedEntity planned)
+    }
+
+    private sealed record BuildContext(ProductionCatalog Catalog, CellEquipment Equipment, FactoryZone Zone,
+        SpatialController Controller, FactoryRegistry Registry, string[] Items);
+
+    /// <summary>Joins unfed cell poles to a powered network, e.g. cells built before a failed link.</summary>
+    public async Task<int> RepairPowerAsync(CancellationToken token = default)
+    {
+        var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+        var registry = new FactoryRegistry(directory);
+        var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        int repaired = 0;
+        await using var controller = new SpatialController(game, journal);
+        foreach (var cell in state.Cells.Where(c => c.Entities.ContainsKey("pole") && c.Zone > 0))
         {
-            for (int link = 0; link < 24; link++)
-            {
-                var map = await spatial.CaptureAsync(items, 48, token);
-                RequireScope(map.Scope, catalog);
-                var pole = map.Entities.Single(e => e.Id == poleId);
-                if (pole.Power?.NetworkId is { } network && map.Entities.Any(e => e.Id != poleId && e.Power?.NetworkId == network
-                    && (map.Prototypes[e.Name].Type == "electric-pole" || IsPowerSource(map.Prototypes[e.Name].Type)))) return;
-                var owned = map.Entities.Where(e => e.Force == pole.Force && e.Id != poleId).Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
-                var next = new PowerGridPlanner().Next(ReserveZone(map, zone, equipment.Pole), equipment.Pole, pole.Bounds, owned, token);
-                await journal.AppendAsync("factory-power-link", new { poleId, next, map.CollectedTick }, token);
-                if (next.Status == PowerGridSearchStatus.Connected) return;
-                if (next.Status != PowerGridSearchStatus.Extension || next.Pole is null)
-                    throw new InvalidOperationException($"The cell pole cannot join the observed network: {next.Status}.");
-                // The cell's own pole is already placed: a link needs one more carried pole.
-                await EnsureCarriedAsync(equipment.Pole, 1);
-                await new PoweredMachineController(game, journal).BuildAtAsync(equipment.Pole, next.Pole, catalog, controller, token);
-                await controller.TravelAsync(planned.Position, 6, catalog, token);
-            }
-            throw new InvalidOperationException("Joining the cell to the electric network exceeded its link budget.");
+            if (FactoryPower.IsFed(snapshot, cell.Entities["pole"]) != false) continue;
+            var equipment = Equipment(catalog, cell.MachineItem);
+            var position = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == cell.Entities["pole"])
+                .Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+            await controller.TravelAsync(position, 6, catalog, token);
+            var context = new BuildContext(catalog, equipment, state.Zones.Single(z => z.Id == cell.Zone), controller, registry,
+                [cell.MachineItem, equipment.Inserter, equipment.Chest, equipment.Pole]);
+            await ConnectPowerAsync(context, cell.Entities["pole"], position, token);
+            snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            repaired++;
         }
+        if (repaired > 0) await journal.AppendAsync("factory-power-repair", new { repaired }, token);
+        return repaired;
+    }
+
+    private async Task EnsureCarriedAsync(FactoryRegistry registry, ProductionCatalog catalog, string item, int count, CancellationToken token)
+    {
+        var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory.GetValueOrDefault(item);
+        if (carried >= count) return;
+        using (ProductionReservations.Enter(await registry.CellEntityIdsAsync(catalog.Scope.WorldId, token)))
+            await new ProductionGoalExecutor(game, journal).RunAsync(item, Math.Min(1000, count), token);
+    }
+
+    private async Task ConnectPowerAsync(BuildContext context, string poleId, MapPosition polePosition, CancellationToken token)
+    {
+        var spatial = new SpatialClient(game);
+        for (int link = 0; link < 24; link++)
+        {
+            // Connectivity is proven on the whole known factory: a neighbouring cell pole may belong to the same unfed island.
+            var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            bool? fed = FactoryPower.IsFed(snapshot, poleId);
+            if (fed == true) return;
+            var map = await spatial.CaptureAsync(context.Items, 48, token);
+            RequireScope(map.Scope, context.Catalog);
+            var pole = map.Entities.Single(e => e.Id == poleId);
+            if (fed is null && pole.Power?.NetworkId is { } network && map.Entities.Any(e => e.Id != poleId && e.Power?.NetworkId == network
+                && (map.Prototypes[e.Name].Type == "electric-pole" || IsPowerSource(map.Prototypes[e.Name].Type)))) return;
+            var sources = map.Entities.Where(e => e.Force == pole.Force && e.Id != poleId
+                && (fed is null || FactoryPower.IsFed(snapshot, e.Id) == true)).Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+            var next = new PowerGridPlanner().Next(ReserveZone(map, context.Zone, context.Equipment.Pole), context.Equipment.Pole, pole.Bounds, sources, token);
+            await journal.AppendAsync("factory-power-link", new { poleId, fed, next, map.CollectedTick }, token);
+            if (next.Status == PowerGridSearchStatus.Connected && fed is null) return;
+            if (next.Status != PowerGridSearchStatus.Extension || next.Pole is null)
+                throw new InvalidOperationException($"The cell pole cannot join a powered network: {next.Status}.");
+            // The cell's own pole is already placed: a link needs one more carried pole.
+            await EnsureCarriedAsync(context.Registry, context.Catalog, context.Equipment.Pole, 1, token);
+            await new PoweredMachineController(game, journal).BuildAtAsync(context.Equipment.Pole, next.Pole, context.Catalog, context.Controller, token);
+            await context.Controller.TravelAsync(polePosition, 6, context.Catalog, token);
+        }
+        throw new InvalidOperationException("Joining the cell to the electric network exceeded its link budget.");
     }
 
     /// <summary>Marks the whole band as occupied so power links never take a future cell's slot.</summary>

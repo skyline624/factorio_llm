@@ -34,6 +34,8 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         foreach (var pack in technology.Ingredients)
             await director.AutomateAsync(pack.Name, Math.Min(120, technology.Count * pack.Amount / minutes), token);
         await director.EnsureLabsAsync(labs, token);
+        var builder = new FactoryCellBuilder(game, journal, directory);
+        await builder.RepairPowerAsync(token);
         await journal.AppendAsync("factory-research-start", new { technologyName, technology.Count, unitSeconds, labs, minutes }, token);
 
         var logistics = new FactoryLogistics(game, journal, directory);
@@ -74,6 +76,8 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
                 procuredAny = true;
             }
             if (procuredAny) continue;
+            // Cells that stay silent may sit on an unfed pole island (e.g. built before a failed link).
+            if (service.Collected.Count == 0 && round % 8 == 0 && await builder.RepairPowerAsync(token) > 0) continue;
             if (service.Actions == 0 || service.Collected.Count == 0)
             {
                 var waited = await controller.WorkAsync("wait", new { ticks = 900 }, 1200, token: token);

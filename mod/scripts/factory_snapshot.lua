@@ -85,6 +85,11 @@ local function capture(args)
       metadata.defenseRange = defense and defense.range
     end
     if entity.burner then metadata.burnerRemainingJoules = entity.burner.remaining_burning_fuel end
+    -- Lets the controller prove that a pole island is joined to a generator anywhere in the known factory.
+    if entity.type == "electric-pole" or entity.prototype.electric_energy_source_prototype then
+      local ok, network = pcall(function() return entity.electric_network_id end)
+      if ok then metadata.electricNetworkId = network end
+    end
     if fuel and fuel.valid then
       local owner = fuel.entity_owner
       U.check(owner and owner.valid and fuel.index, "inventory_identity_unavailable", "Fuel inventory identity is unavailable")
