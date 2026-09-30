@@ -38,6 +38,30 @@ public sealed class FactoryLogisticsTests
     }
 
     [Fact]
+    public void TheCoalMinerIsFuelledFirstThenPowerThenTheRest()
+    {
+        // Campaign 2026-09-30 (seed 20261002): the new coal miner never got its own coal, so nothing refilled the others.
+        FactoryCell[] cells =
+        [
+            new("coal", 0, new(1, 0, true), "miner", "burner-mining-drill", FactoryLogistics.Fuel,
+                new Dictionary<string, string> { ["drill"] = "z-coal-drill", ["output-chest"] = "c" }, "ready", 1),
+            new("iron", 0, new(2, 0, true), "smelter", "burner-mining-drill", "iron-plate",
+                new Dictionary<string, string> { ["drill"] = "a-iron-drill", ["furnace"] = "b-furnace", ["output-chest"] = "p" }, "ready", 1)
+        ];
+        var ordered = FactoryLogistics.FuelOrder([("a-iron-drill", 0, false), ("b-furnace", 0, false), ("boiler", 0, true), ("z-coal-drill", 0, false)], cells);
+        Assert.Equal(["z-coal-drill", "boiler", "a-iron-drill", "b-furnace"], ordered.Select(b => b.EntityId));
+    }
+
+    [Theory]
+    [InlineData(0, 0, 12)]
+    [InlineData(5, 0, 7)]
+    [InlineData(0, 12, 0)]
+    [InlineData(20, 0, 0)]
+    public void AStarvedBurnerIsShortOnlyOfWhatRestartsIt(long loaded, long given, long expected) =>
+        // Reporting full stacks made the actor mine 250 coal by hand-fed drills before any cell could deliver.
+        Assert.Equal(expected, FactoryLogistics.FuelShortfall(loaded, given, stack: 50));
+
+    [Fact]
     public void OutputChestsOfEveryReadyCellAreCollected()
     {
         FactoryCell[] cells =

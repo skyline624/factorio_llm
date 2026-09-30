@@ -128,7 +128,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         // a boiler with a feeder cell burns from its chest and is only restarted by hand once completely dry.
         var fedBoilers = cells.Where(c => c.Kind == "power").Select(c => c.Entities.GetValueOrDefault("boiler")).OfType<string>()
             .ToHashSet(StringComparer.Ordinal);
-        var burners = Burners(snapshot, cells).Where(b => NeedsDirectFuel(fedBoilers.Contains(b.EntityId), b.Loaded, stack)).ToList();
+        var burners = FuelOrder(Burners(snapshot, cells).Where(b => NeedsDirectFuel(fedBoilers.Contains(b.EntityId), b.Loaded, stack)).ToArray(), cells);
         var plan = PlanFuel(burners.Select(b => b.Loaded).ToArray(), carried.GetValueOrDefault(fuel), stack);
         bool powerStarved = false;
         for (int index = 0; index < burners.Count; index++)
@@ -142,7 +142,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 supplied[fuel] = supplied.GetValueOrDefault(fuel) + give;
             }
             if (loaded + give >= stack / 4) continue;
-            shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + stack - loaded - give;
+            shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + FuelShortfall(loaded, give, stack);
             powerStarved |= power;
         }
         var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, powerStarved, upkeep, degraded);
@@ -191,6 +191,24 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             })
             .OrderBy(b => b.EntityId, StringComparer.Ordinal).ToArray();
     }
+
+    /// <summary>
+    /// Burners in fuelling order: drills of the cells that mine the fuel first, because once they burn they feed every
+    /// other burner through their chests; then power sources, whose starvation stops electric cells; then the rest.
+    /// </summary>
+    internal static IReadOnlyList<(string EntityId, long Loaded, bool PowerSource)> FuelOrder(
+        IReadOnlyList<(string EntityId, long Loaded, bool PowerSource)> burners, IEnumerable<FactoryCell> cells)
+    {
+        var producers = cells.Where(c => c.IsResource && c.Recipe == Fuel).Select(c => c.Entities.GetValueOrDefault("drill"))
+            .OfType<string>().ToHashSet(StringComparer.Ordinal);
+        return burners.OrderByDescending(b => producers.Contains(b.EntityId)).ThenByDescending(b => b.PowerSource).ToArray();
+    }
+
+    /// <summary>
+    /// Fuel a starved burner still lacks to reach a quarter stack. It sizes procurement to restart burners, not to fill them:
+    /// full stacks made the actor extract 250 coal through its early drill before the coal cell could deliver.
+    /// </summary>
+    internal static long FuelShortfall(long loaded, long given, long stack) => Math.Max(0, stack / 4 - loaded - given);
 
     /// <summary>
     /// Splits carried fuel among burners below a quarter stack: every starved burner first reaches a quarter stack,
