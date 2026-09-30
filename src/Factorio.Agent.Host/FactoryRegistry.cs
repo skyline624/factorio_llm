@@ -4,9 +4,12 @@ using Factorio.Agent.Core;
 namespace Factorio.Agent.Host;
 
 public sealed record FactoryZone(int Id, MapPosition Origin, int Slots, int Pitch, int BandHeight);
-/// <summary>A persistent automated cell. Entity identities are native ids proven by build receipts.</summary>
+/// <summary>
+/// A persistent automated cell. Entity identities are native ids proven by build receipts. Attempts counts the builds
+/// of a resource cell since it last stood complete, so a cell that keeps failing is abandoned instead of resumed forever.
+/// </summary>
 public sealed record FactoryCell(string Id, int Zone, CellSlot Slot, string Kind, string MachineItem, string? Recipe,
-    IReadOnlyDictionary<string, string> Entities, string Status, long Tick);
+    IReadOnlyDictionary<string, string> Entities, string Status, long Tick, int Attempts = 0);
 /// <summary>Resource cells use zone 0; their slot band is the id of their <see cref="ResourceRow"/>.</summary>
 public sealed record FactoryState(int Version, string WorldId, IReadOnlyList<FactoryZone> Zones, IReadOnlyList<FactoryCell> Cells,
     IReadOnlyList<ResourceRow>? Rows = null)

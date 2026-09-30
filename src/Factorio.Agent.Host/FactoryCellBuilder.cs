@@ -158,7 +158,8 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 if (next.Status == PowerGridSearchStatus.Connected) return;
                 if (next.Status != PowerGridSearchStatus.Extension || next.Pole is null)
                     throw new InvalidOperationException($"The cell pole cannot join the observed network: {next.Status}.");
-                await EnsureItemsAsync(new Dictionary<string, int>(StringComparer.Ordinal) { [equipment.Pole] = 1 });
+                // Link poles come from the carried stock: the cell's placed pole never stands in for them.
+                await CarriedStock.EnsureAsync(game, journal, equipment.Pole, PowerGridPlanner.ChainPoles(next), token);
                 await new PoweredMachineController(game, journal).BuildAtAsync(equipment.Pole, next.Pole, catalog, controller, token);
                 await controller.TravelAsync(planned.Position, 6, catalog, token);
             }

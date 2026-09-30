@@ -7,11 +7,27 @@ namespace Factorio.Agent.Host;
 /// <summary>
 /// Builds persistent drill cells on ore patches. Resumes an interrupted cell, continues an unfinished row, or plans a new
 /// row on observed deposits, exploring toward remembered ones within a budget. The pole joins the network first, then
-/// receivers precede their sources so no ore or plate spills; native drop and pickup targets prove every link.
+/// receivers precede their sources so no ore or plate spills; native drop and pickup targets prove every link. A resumed
+/// cell first drops recorded parts that no longer stand; a cell whose proof fails, or whose attempts are spent, is
+/// abandoned where it stands.
 /// </summary>
 public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal journal, string directory)
 {
+    public const int MaximumAttempts = 3;
+    public const string Abandoned = "abandoned";
     private static readonly string[] BuildOrder = ["pole", "output-chest", "output-inserter", "furnace", "drill"];
+
+    /// <summary>
+    /// The interrupted cell of this product to resume, counting one more attempt, and the interrupted cells whose attempts
+    /// are spent: those are abandoned where they stand and keep their slot.
+    /// </summary>
+    internal static (FactoryCell? Resume, IReadOnlyList<FactoryCell> Abandoned) Interrupted(FactoryState state, string kind, string product)
+    {
+        var interrupted = state.Cells.Where(c => c.Zone == 0 && c.Status == "building" && c.Kind == kind && c.Recipe == product).ToArray();
+        var resume = interrupted.FirstOrDefault(c => c.Attempts < MaximumAttempts);
+        return (resume is null ? null : resume with { Attempts = resume.Attempts + 1 },
+            interrupted.Where(c => c.Attempts >= MaximumAttempts).Select(c => c with { Status = Abandoned }).ToArray());
+    }
 
     public async Task<FactoryCell> BuildNextAsync(string product, double perMinute, CancellationToken token = default, int explorationBudget = 16)
     {
@@ -29,22 +45,28 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
         await using var controller = new SpatialController(game, journal);
 
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-        FactoryCell? cell = state.Cells.FirstOrDefault(c => c.Zone == 0 && c.Status == "building" && c.Kind == supply.Kind && c.Recipe == product);
+        var (cell, spent) = Interrupted(state, supply.Kind, product);
+        foreach (var worn in spent) await AbandonAsync(worn, "The cell spent its build attempts.");
         ResourceRow row;
-        if (cell is not null) row = state.Rows!.Single(r => r.Id == cell.Slot.Band);
+        if (cell is not null)
+        {
+            row = state.Rows!.Single(r => r.Id == cell.Slot.Band);
+            await SaveAsync(cell);
+        }
         else
         {
             int index;
             (row, index) = await NextSlotAsync();
             cell = new($"cell-{Guid.NewGuid():N}", 0, new(row.Id, index, true), row.Kind, row.Equipment.Drill, product,
-                new Dictionary<string, string>(), "building", 0);
+                new Dictionary<string, string>(), "building", 0, Attempts: 1);
             await SaveAsync(cell);
         }
         string[] items = Items(row.Equipment);
         CellLayout layout = planner.Layout(await MapAsync(items, 8), row, cell.Slot.Index);
         // CellLayout.Machine names assembler cells only; resource cells journal their parts explicitly.
-        await journal.AppendAsync("resource-cell-plan", new { cell.Id, row, layout.Slot, layout.Entities, layout.Footprint, layout.Walkway }, token);
-        await EnsureItemsAsync(layout.Entities.GroupBy(e => e.Item).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal));
+        await journal.AppendAsync("resource-cell-plan", new { cell.Id, cell.Attempts, row, layout.Slot, layout.Entities, layout.Footprint, layout.Walkway }, token);
+        if (cell.Entities.Count > 0) await ReconcileAsync();
+        foreach (var (item, count) in CarriedStock.Unplaced(layout, cell.Entities)) await CarriedStock.EnsureAsync(game, journal, item, count, token);
         await controller.TravelAsync(Center(layout.Walkway), 1, catalog, token);
         await ClearAsync();
 
@@ -65,7 +87,12 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
         // Native targets can resolve after the next entity update; observing again is not a mutation retry.
         for (int attempt = 0; Problem(built, ids) is { } problem; attempt++)
         {
-            if (attempt >= 3) throw new InvalidDataException(problem);
+            if (attempt >= 3)
+            {
+                // A disproven native link does not heal on resume: the cell is abandoned rather than retried forever.
+                await AbandonAsync(cell, problem);
+                throw new InvalidDataException(problem);
+            }
             var waited = await controller.WorkAsync("wait", new { ticks = 60 }, 300, token: token);
             if (waited.Status != "completed") throw new InvalidOperationException($"Waiting for native targets ended with {waited.Status}.");
             built = await MapAsync(items, 32);
@@ -145,17 +172,23 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
         IEnumerable<WorldBox> Reserved(SpatialSnapshot map) => (state.Rows ?? []).SelectMany(r => ResourceCellPlanner.Reservation(map, r))
             .Concat(state.Zones.Select(z => new WorldBox(z.Origin, new(z.Origin.X + z.Slots * z.Pitch, z.Origin.Y + z.BandHeight))));
 
-        async Task EnsureItemsAsync(IReadOnlyDictionary<string, int> needed)
+        // Recorded parts destroyed or replaced since they were built are built again. The factory photograph lists every
+        // known own entity wherever the actor stands, so absence from it is native truth rather than a local view.
+        async Task ReconcileAsync()
         {
-            var production = new ProductionController(game, journal);
-            var executor = new ProductionGoalExecutor(game, journal);
-            foreach (var (item, count) in needed)
-            {
-                int missing = count - layout.Entities.Count(e => e.Item == item && cell!.Entities.ContainsKey(e.Role));
-                if (missing <= 0) continue;
-                var carried = (await production.ObserveAsync(token)).Inventory.GetValueOrDefault(item);
-                if (carried < missing) await executor.RunAsync(item, Math.Min(1000, missing), token);
-            }
+            var known = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            if (known.Scope != catalog.Scope) throw new InvalidDataException("Actor identity changed while building a resource cell; reconcile partial construction.");
+            var standing = ResourceCellHealth.Standing(known, cell!.Entities, layout);
+            if (standing.Count == cell.Entities.Count) return;
+            await journal.AppendAsync("resource-cell-lost-parts", new { cell.Id, lost = cell.Entities.Where(p => !standing.ContainsKey(p.Key)) }, token);
+            cell = cell with { Entities = standing };
+            await SaveAsync(cell);
+        }
+
+        async Task AbandonAsync(FactoryCell value, string reason)
+        {
+            await SaveAsync(value with { Status = Abandoned });
+            await journal.AppendAsync("resource-cell-abandoned", new { value.Id, value.Slot, value.Entities, value.Attempts, reason }, token);
         }
 
         async Task ClearAsync()
@@ -205,6 +238,9 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
                 }
                 if (target is null)
                 {
+                    // One approach tells a pole out of view from a destroyed one; a gone pole is never chased.
+                    if (link > 0 || map.Bounds.Contains(polePosition))
+                        throw new InvalidOperationException($"The resource cell pole {poleId} is not observed at its planned position.");
                     await controller.TravelAsync(polePosition, 6, catalog, token);
                     continue;
                 }
@@ -216,7 +252,8 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
                 await journal.AppendAsync("resource-power-link", new { poleId, next, map.CollectedTick }, token);
                 if (next.Status == PowerGridSearchStatus.Extension && next.Pole is not null)
                 {
-                    await EnsureItemsAsync(new Dictionary<string, int>(StringComparer.Ordinal) { [poleItem] = 1 });
+                    // Link poles come from the carried stock, for the whole planned chain at once.
+                    await CarriedStock.EnsureAsync(game, journal, poleItem, PowerGridPlanner.ChainPoles(next), token);
                     string added = await new PoweredMachineController(game, journal).BuildAtAsync(poleItem, next.Pole, catalog, controller, token);
                     await journal.AppendAsync("resource-power-pole", new { poleId, added, next.Pole.Position }, token);
                     await controller.TravelAsync(next.Pole.Position, 3, catalog, token);

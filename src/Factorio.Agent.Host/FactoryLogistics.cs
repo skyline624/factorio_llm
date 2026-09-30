@@ -4,8 +4,9 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
+/// <summary>PowerStarved: a boiler stayed below a quarter stack of fuel after this round's distribution.</summary>
 public sealed record LogisticsResult(IReadOnlyDictionary<string, long> Collected, IReadOnlyDictionary<string, long> Supplied,
-    IReadOnlyDictionary<string, long> Shortfall, int Actions, long Tick);
+    IReadOnlyDictionary<string, long> Shortfall, int Actions, long Tick, bool PowerStarved = false);
 
 /// <summary>
 /// The actor as the factory's transport: empties cell output chests, then refills input chests and laboratories
@@ -13,6 +14,9 @@ public sealed record LogisticsResult(IReadOnlyDictionary<string, long> Collected
 /// </summary>
 public sealed class FactoryLogistics(IGameClient game, IControllerJournal journal, string directory)
 {
+    /// <summary>Fuel loaded into boilers, cell furnaces and burner drills.</summary>
+    public const string Fuel = "coal";
+
     public async Task<LogisticsResult> ServiceAsync(int bufferCrafts = 40, CancellationToken token = default)
     {
         if (bufferCrafts is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(bufferCrafts));
@@ -27,6 +31,14 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         var snapshots = new FactorySnapshotClient(game);
         FactorySnapshot snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
+        // Destroyed parts and exhausted deposits take a resource cell out of service before it is visited or counted.
+        var inspected = ResourceCellHealth.Inspect(snapshot, cells);
+        if (inspected.Count > 0)
+        {
+            await new FactoryRegistry(directory).SaveAsync(inspected.Aggregate(state, (current, cell) => current.With(cell)), token);
+            await journal.AppendAsync("resource-cell-health", inspected, token);
+            cells = cells.Where(c => inspected.All(i => i.Id != c.Id)).ToArray();
+        }
 
         foreach (string chest in OutputChests(cells))
         {
@@ -75,13 +87,14 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             }
         }
         // Steam supply, cell furnaces and burner drills stop without fuel. Keep each burner above a quarter stack of coal.
-        const string fuel = "coal";
+        const string fuel = Fuel;
         long stack = catalog.Items[fuel].StackSize;
         var burners = Burners(snapshot, cells);
         var plan = PlanFuel(burners.Select(b => b.Loaded).ToArray(), carried.GetValueOrDefault(fuel), stack);
+        bool powerStarved = false;
         for (int index = 0; index < burners.Count; index++)
         {
-            var (burner, loaded) = burners[index];
+            var (burner, loaded, power) = burners[index];
             if (loaded >= stack / 4) continue;
             long give = 0;
             if (plan[index] > 0)
@@ -90,9 +103,11 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 carried[fuel] = carried.GetValueOrDefault(fuel) - give;
                 supplied[fuel] = supplied.GetValueOrDefault(fuel) + give;
             }
-            if (loaded + give < stack / 4) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + stack - loaded - give;
+            if (loaded + give >= stack / 4) continue;
+            shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + stack - loaded - give;
+            powerStarved |= power;
         }
-        var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick);
+        var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, powerStarved);
         await journal.AppendAsync("factory-logistics", result, token);
         return result;
 
@@ -119,8 +134,11 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     internal static IReadOnlyList<string> OutputChests(IEnumerable<FactoryCell> cells) => cells
         .Where(c => c.Status == "ready" && c.Entities.ContainsKey("output-chest")).Select(c => c.Entities["output-chest"]).ToArray();
 
-    /// <summary>Boilers and every fuelled entity of a cell (furnaces, burner drills) with the fuel they hold, by native id.</summary>
-    internal static IReadOnlyList<(string EntityId, long Loaded)> Burners(FactorySnapshot snapshot, IEnumerable<FactoryCell> cells)
+    /// <summary>
+    /// Boilers and every fuelled entity of a cell (furnaces, burner drills) with the fuel they hold, by native id.
+    /// Boilers are power sources: their starvation stops every electric cell.
+    /// </summary>
+    internal static IReadOnlyList<(string EntityId, long Loaded, bool PowerSource)> Burners(FactorySnapshot snapshot, IEnumerable<FactoryCell> cells)
     {
         var cellIds = cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
         return snapshot.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "factory"
@@ -130,7 +148,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             {
                 string inventoryId = r.Data.GetProperty("fuelInventoryId").GetString()!;
                 var inventory = snapshot.Records.SingleOrDefault(i => i.Id == inventoryId && i.Kind == "inventory");
-                return (r.EntityId, inventory is null ? 0 : inventory.Data.GetProperty("items").EnumerateObject().Sum(p => p.Value.GetInt64()));
+                return (r.EntityId, inventory is null ? 0 : inventory.Data.GetProperty("items").EnumerateObject().Sum(p => p.Value.GetInt64()),
+                    r.Data.GetProperty("type").GetString() == "boiler");
             })
             .OrderBy(b => b.EntityId, StringComparer.Ordinal).ToArray();
     }

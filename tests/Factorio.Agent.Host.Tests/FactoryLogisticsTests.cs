@@ -22,7 +22,9 @@ public sealed class FactoryLogisticsTests
             Cell("miner", "ready", new() { ["drill"] = "electric-drill", ["output-chest"] = "chest-2" })
         ];
         var burners = FactoryLogistics.Burners(snapshot, cells);
-        Assert.Equal([("boiler", 30L), ("burner-drill", 0L), ("furnace", 2L)], burners.Select(b => (b.EntityId, b.Loaded)).ToArray());
+        // Only the boiler's starvation stops the electric network, which is survival rather than production.
+        Assert.Equal([("boiler", 30L, true), ("burner-drill", 0L, false), ("furnace", 2L, false)],
+            burners.Select(b => (b.EntityId, b.Loaded, b.PowerSource)).ToArray());
     }
 
     [Fact]

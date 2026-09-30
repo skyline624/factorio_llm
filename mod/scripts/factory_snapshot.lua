@@ -6,6 +6,8 @@ local M = {}
 local maximum_entities, maximum_records, lifetime = 20000, 150000, 3600
 local belt_types = {["transport-belt"] = true, ["underground-belt"] = true, splitter = true,
   loader = true, ["loader-1x1"] = true, ["linked-belt"] = true}
+local status_names = {}
+for name, value in pairs(defines.entity_status) do status_names[value] = name end
 
 local function stack_data(stack)
   if not stack or not stack.valid_for_read then return end
@@ -141,7 +143,7 @@ local function capture(args)
     if entity.type == "mining-drill" then
       local target = entity.mining_target
       add("work:" .. id, "work", id, "native-mining", {progress = entity.mining_progress,
-        bonusProgress = entity.bonus_mining_progress, status = entity.status,
+        bonusProgress = entity.bonus_mining_progress, status = entity.status, statusName = status_names[entity.status],
         targetId = target and target.valid and U.entity_id(target),
         targetName = target and target.valid and target.name,
         internalOutputBufferObservable = false,
