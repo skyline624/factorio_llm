@@ -100,16 +100,21 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
 
         async Task EnsureItemsAsync(IReadOnlyDictionary<string, int> needed)
         {
-            var production = new ProductionController(game, journal);
-            var executor = new ProductionGoalExecutor(game, journal);
             var placed = new HashSet<string>(cell!.Entities.Keys, StringComparer.Ordinal);
             foreach (var (item, count) in needed)
             {
                 int missing = count - layout.Entities.Count(e => e.Item == item && placed.Contains(e.Role));
                 if (missing <= 0) continue;
-                var carried = (await production.ObserveAsync(token)).Inventory.GetValueOrDefault(item);
-                if (carried < missing) await executor.RunAsync(item, Math.Min(1000, missing), token);
+                await EnsureCarriedAsync(item, missing);
             }
+        }
+
+        async Task EnsureCarriedAsync(string item, int count)
+        {
+            var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory.GetValueOrDefault(item);
+            if (carried >= count) return;
+            using (ProductionReservations.Enter(await registry.CellEntityIdsAsync(catalog.Scope.WorldId, token)))
+                await new ProductionGoalExecutor(game, journal).RunAsync(item, Math.Min(1000, count), token);
         }
 
         async Task ClearAsync(CellLayout plan)
@@ -158,7 +163,8 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 if (next.Status == PowerGridSearchStatus.Connected) return;
                 if (next.Status != PowerGridSearchStatus.Extension || next.Pole is null)
                     throw new InvalidOperationException($"The cell pole cannot join the observed network: {next.Status}.");
-                await EnsureItemsAsync(new Dictionary<string, int>(StringComparer.Ordinal) { [equipment.Pole] = 1 });
+                // The cell's own pole is already placed: a link needs one more carried pole.
+                await EnsureCarriedAsync(equipment.Pole, 1);
                 await new PoweredMachineController(game, journal).BuildAtAsync(equipment.Pole, next.Pole, catalog, controller, token);
                 await controller.TravelAsync(planned.Position, 6, catalog, token);
             }

@@ -67,7 +67,9 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
                 if (cellProducts.Contains(item) || service.Collected.ContainsKey(item)) continue;
                 var carried = FactoryLogistics.Carried(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token));
                 int target = (int)Math.Min(1000, carried.GetValueOrDefault(item) + Math.Min(missing, 400));
-                var stock = await executor.RunAsync(item, target, token);
+                StockGoalResult stock;
+                using (ProductionReservations.Enter(await new FactoryRegistry(directory).CellEntityIdsAsync(observation.Scope.WorldId, token)))
+                    stock = await executor.RunAsync(item, target, token);
                 procured[item] = procured.GetValueOrDefault(item) + Math.Max(0, stock.FinalStock - stock.InitialStock);
                 procuredAny = true;
             }
