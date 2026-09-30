@@ -440,8 +440,22 @@ try
                 int maxGoals = int.Parse(Option("max-goals") ?? (runMinutes is null ? "10" : "10000"), CultureInfo.InvariantCulture);
                 try
                 {
-                    var result = await new StrategicCampaignController(game, controller, memoryPath, journalPath, campaignJournal: campaignJournal)
-                        .RunAsync(maxGoals, runDeadline.Token);
+                    var maintenanceJournal = new ControllerJournal(Path.Combine(session.Directory, "factory-maintenance.jsonl"));
+                    var result = await new StrategicCampaignController(game, controller, memoryPath, journalPath, campaignJournal: campaignJournal,
+                        maintenance: async token =>
+                        {
+                            try
+                            {
+                                var cells = await new FactoryRegistry(session.Directory).LoadAsync(session.ProposedWorldId, token);
+                                if (cells.Cells.Any(c => c.Status == "ready"))
+                                    await new FactoryLogistics(game, maintenanceJournal, session.Directory).ServiceAsync(40, token);
+                            }
+                            catch (Exception error) when (!token.IsCancellationRequested)
+                            {
+                                await maintenanceJournal.AppendAsync("factory-maintenance-error", new { error = error.GetType().FullName, error.Message }, token);
+                                throw;
+                            }
+                        }).RunAsync(maxGoals, runDeadline.Token);
                     Print(new { result, journalPath, memoryPath, journalLayout = "per-goal", startedUtc, runMinutes, transport });
                 }
                 catch (OperationCanceledException) when (runDeadline.IsCancellationRequested && !shutdown.IsCancellationRequested)

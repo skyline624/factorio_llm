@@ -158,6 +158,20 @@ public sealed class StrategicCampaignTests : IDisposable
         Assert.Equal(12, runner.History.Count);
     }
 
+    [Fact]
+    public async Task FactoryMaintenanceRunsBetweenGoalsAndItsFailureDoesNotStopTheCampaign()
+    {
+        int calls = 0, goal = 0;
+        var runner = new Runner(() => Completed() with { Goal = Completed().Goal with { Target = $"goal-{goal++}" } });
+        var result = await new StrategicCampaignController(new Game(), runner, Memory, maintenance: _ =>
+        {
+            calls++;
+            throw new InvalidOperationException("Synthetic empty chest");
+        }).RunAsync(3);
+        Assert.Equal(3, result.GoalsExecuted);
+        Assert.Equal(2, calls);
+    }
+
     private string Journal => Path.Combine(directory, "journal.jsonl");
     private static StrategicGoalResult Completed() => new(new("o", "Research automation", GoalCategory.Research,
         "automation", 1, GoalUnit.Completion, GoalPriority.Normal, new(TimeSpan.Zero, 1, null, null, null)),

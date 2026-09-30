@@ -15,7 +15,8 @@ public sealed record StrategicMemory(int Version, ActorScope Scope, long Tick, b
 
 /// <summary>Sequential strategic goals under the caller's actor lease. Unknown outcomes are never retried.</summary>
 public sealed class StrategicCampaignController(IGameClient game, IStrategicGoalRunner runner, string memoryPath,
-    string? journalPath = null, ICorpseRecovery? recovery = null, CampaignJournal? campaignJournal = null)
+    string? journalPath = null, ICorpseRecovery? recovery = null, CampaignJournal? campaignJournal = null,
+    Func<CancellationToken, Task>? maintenance = null)
 {
     public const int MaxConsecutiveFailures = 5;
 
@@ -50,6 +51,14 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
         for (int index = 0; index < maxGoals; index++)
         {
             token.ThrowIfCancellationRequested();
+            if (index > 0 && maintenance is not null)
+            {
+                // Persistent cells keep producing only if restocked between decisions. A maintenance failure is the
+                // maintainer's own journal entry; an operation it left active still blocks the next goal below.
+                try { await maintenance(token); }
+                catch (Exception) when (!token.IsCancellationRequested) { }
+                observation = await ObserveAsync(token);
+            }
             Validate(memory, observation);
             if (observation.Rockets > 0) return new(true, index, observation.Tick, "rocket-observed");
             if (campaignJournal is not null) activeJournalPath = await campaignJournal.BeginGoalAsync(index, token);
