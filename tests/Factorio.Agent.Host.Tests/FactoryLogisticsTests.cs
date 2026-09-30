@@ -50,6 +50,35 @@ public sealed class FactoryLogisticsTests
     }
 
     [Fact]
+    public void PlannedCellsBufferTenMinutesOfTheirShareAndUnplannedOnesTheMinimum()
+    {
+        // Campaign 2026-09-30 (seed 20261002): a magazine cell nobody planned kept 160 iron plates in its chest while science
+        // cells starved; flat 40-craft buffers ignore what each cell actually has to deliver.
+        var shares = new Dictionary<string, double> { ["automation-science-pack"] = 3, ["iron-gear-wheel"] = 10, ["copper-cable"] = 0.2 };
+        Assert.Equal(30, FactoryLogistics.BufferCrafts(shares, "automation-science-pack", maximum: 40));
+        Assert.Equal(40, FactoryLogistics.BufferCrafts(shares, "iron-gear-wheel", 40));
+        Assert.Equal(FactoryLogistics.MinimumBufferCrafts, FactoryLogistics.BufferCrafts(shares, "copper-cable", 40));
+        Assert.Equal(FactoryLogistics.MinimumBufferCrafts, FactoryLogistics.BufferCrafts(shares, "firearm-magazine", 40));
+        // Without any registered target (prepared fixtures, older registries) the caller's buffer applies unchanged.
+        Assert.Equal(50, FactoryLogistics.BufferCrafts(null, "iron-gear-wheel", 50));
+    }
+
+    [Fact]
+    public void CellSharesSplitEachPlannedStageAcrossItsReadyCells()
+    {
+        var state = new FactoryState(1, "world", [], [
+            Assembler("red-1", "automation-science-pack"), Assembler("red-2", "automation-science-pack"), Assembler("gears", "iron-gear-wheel")])
+            .WithTarget("automation-science-pack", 12);
+        var shares = FactoryLogistics.CellShares(Catalogs.Early(), state)!;
+        Assert.Equal(6, shares["automation-science-pack"], 6);
+        Assert.Equal(12, shares["iron-gear-wheel"], 6);
+        Assert.Null(FactoryLogistics.CellShares(Catalogs.Early(), state with { Targets = null }));
+    }
+
+    private static FactoryCell Assembler(string id, string recipe) => new(id, 1, new(0, 0, true), "assembler", "assembling-machine-1", recipe,
+        new Dictionary<string, string> { ["machine"] = id, ["input-chest"] = id + "-in", ["output-chest"] = id + "-out" }, "ready", 1);
+
+    [Fact]
     public void TheCoalMinerIsFuelledFirstThenPowerThenTheRest()
     {
         // Campaign 2026-09-30 (seed 20261002): the new coal miner never got its own coal, so nothing refilled the others.

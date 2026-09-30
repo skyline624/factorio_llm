@@ -17,6 +17,10 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
 {
     /// <summary>Fuel loaded into boilers, cell furnaces and burner drills.</summary>
     public const string Fuel = "coal";
+    /// <summary>Minutes of its planned share a planned cell's input chest holds between actor visits.</summary>
+    public const double BufferMinutes = 10;
+    /// <summary>Crafts an input chest holds at least, and all a cell outside the plan keeps.</summary>
+    public const int MinimumBufferCrafts = 5;
 
     public async Task<LogisticsResult> ServiceAsync(int bufferCrafts = 40, CancellationToken token = default)
     {
@@ -67,25 +71,28 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
         var carried = Carried(snapshot);
+        var shares = CellShares(catalog, state);
         var refills = cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest")).SelectMany(cell =>
         {
             NativeRecipe recipe = catalog.Recipes.Single(r => r.Name == cell.Recipe);
             string chest = cell.Entities["input-chest"];
             var inChest = Items(snapshot, chest);
+            // Fluid chain cells are sized by their own chain, not by the assembler plan, and keep the caller's buffer.
+            int crafts = cell.Kind is "assembler" or FurnaceCellPlanner.Kind ? BufferCrafts(shares, cell.Recipe!, bufferCrafts) : bufferCrafts;
             return recipe.Ingredients.Where(i => i.DeterministicItem).Select(i => (Chest: chest, Item: i.Name,
-                Loaded: inChest.GetValueOrDefault(i.Name), Target: checked((long)(i.Amount!.Value * bufferCrafts))));
+                Loaded: inChest.GetValueOrDefault(i.Name), Target: checked((long)(i.Amount!.Value * crafts))));
         }).ToArray();
         // Scarce items are shared before any chest is filled; transfers still go chest by chest to keep one visit each.
-        var shares = new Dictionary<(string Chest, string Item), long>();
+        var allotted = new Dictionary<(string Chest, string Item), long>();
         foreach (var item in refills.GroupBy(r => r.Item))
         {
             var wanting = item.Where(r => r.Loaded < r.Target).ToArray();
             var split = PlanShares(wanting.Select(r => (r.Loaded, r.Target)).ToArray(), carried.GetValueOrDefault(item.Key));
-            for (int index = 0; index < wanting.Length; index++) shares[(wanting[index].Chest, item.Key)] = split[index];
+            for (int index = 0; index < wanting.Length; index++) allotted[(wanting[index].Chest, item.Key)] = split[index];
         }
         foreach (var (chest, item, loaded, target) in refills.Where(r => r.Loaded < r.Target))
         {
-            long moved = await RefillAsync(chest, item, shares[(chest, item)], reportShort: false);
+            long moved = await RefillAsync(chest, item, allotted[(chest, item)], reportShort: false);
             if (target - loaded > moved) shortfall[item] = shortfall.GetValueOrDefault(item) + target - loaded - moved;
         }
         foreach (var cell in cells.Where(c => c.Kind == "lab"))
@@ -238,6 +245,28 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// full stacks made the actor extract 250 coal through its early drill before the coal cell could deliver.
     /// </summary>
     internal static long FuelShortfall(long loaded, long given, long stack) => Math.Max(0, stack / 4 - loaded - given);
+
+    /// <summary>
+    /// Crafts per minute each ready cell of a planned recipe must deliver under the registered automation targets, or null
+    /// when the registry holds no target (prepared fixtures and older registries keep flat buffers).
+    /// </summary>
+    internal static IReadOnlyDictionary<string, double>? CellShares(ProductionCatalog catalog, FactoryState state)
+    {
+        var machines = FactoryDirector.MachineItems(catalog);
+        if (state.Targets is not { Count: > 0 } targets || machines.Count == 0) return null;
+        return AutomationPlanner.Plan(catalog, targets, machines).Stages.ToDictionary(s => s.Recipe, s => s.CraftsPerMinute
+            / Math.Max(1, state.Cells.Count(c => c.Kind == s.Kind && c.Recipe == s.Recipe && c.Status == "ready")), StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Crafts an input chest holds: ten minutes of the cell's planned share within [minimum, maximum], the minimum for a
+    /// cell outside the plan, or the caller's maximum when no plan exists. On 2026-09-30 (seed 20261002) flat 40-craft
+    /// buffers let a magazine cell nobody planned hold 160 iron plates while the science cells starved.
+    /// </summary>
+    internal static int BufferCrafts(IReadOnlyDictionary<string, double>? shares, string recipe, int maximum) => shares is null ? maximum
+        : shares.TryGetValue(recipe, out double perCell)
+            ? (int)Math.Clamp(Math.Ceiling(perCell * BufferMinutes - 1e-9), Math.Min(MinimumBufferCrafts, maximum), maximum)
+            : Math.Min(MinimumBufferCrafts, maximum);
 
     /// <summary>
     /// Splits a carried item among input chests: every chest first reaches a quarter of its target, then chests are filled

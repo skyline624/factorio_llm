@@ -41,7 +41,8 @@ public sealed class FurnaceBandQualification(RuntimeSession session)
 
             var plan = await new FactoryDirector(game, journal, session.Directory).AutomateAsync(Steel, 3, token);
             var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
-            var cells = (await new FactoryRegistry(session.Directory).LoadAsync(catalog.Scope.WorldId, token)).Cells;
+            var registered = await new FactoryRegistry(session.Directory).LoadAsync(catalog.Scope.WorldId, token);
+            var cells = registered.Cells;
             evidence.Add(new { check = "steel-automation", plan, cells });
             var stage = plan.Stages.SingleOrDefault();
             Require(stage is { Kind: FurnaceCellPlanner.Kind, Recipe: Steel, MachineItem: "stone-furnace", Machines: 1 }
@@ -56,7 +57,11 @@ public sealed class FurnaceBandQualification(RuntimeSession session)
             var logistics = new FactoryLogistics(game, journal, session.Directory);
             var reserve = (await FurnaceBandFuel.ReservesAsync(game, catalog, [cell], BufferCrafts, FactoryLogistics.Fuel, token))[cell.Id];
             var first = await logistics.ServiceAsync(BufferCrafts, token);
-            Require(first.Supplied.GetValueOrDefault("iron-plate") == 5 * BufferCrafts, "The input chest was not stocked with plates for the buffered crafts.");
+            // The steel target (3 a minute on one cell) buffers ten minutes of crafts, below the caller's 40-craft maximum.
+            int buffered = FactoryLogistics.BufferCrafts(FactoryLogistics.CellShares(catalog, registered), Steel, BufferCrafts);
+            evidence.Add(new { check = "planned-buffer", buffered, maximum = BufferCrafts });
+            Require(buffered == 30 && first.Supplied.GetValueOrDefault("iron-plate") == 5 * buffered,
+                "The input chest was not stocked with plates for ten minutes of the planned steel rate.");
             Require(first.Supplied.GetValueOrDefault(FactoryLogistics.Fuel) == reserve, "The input chest was not stocked with the native fuel reserve.");
             await using (var controller = new SpatialController(game, journal))
                 Require((await controller.WorkAsync("wait", new { ticks = 4800 }, 5100, token: token)).Status == "completed", "Wait failed.");
