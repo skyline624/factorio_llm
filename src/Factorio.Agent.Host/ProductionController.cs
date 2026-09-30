@@ -80,8 +80,10 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 await SmeltAsync(new("smelt", item, batches, recipe, StockTarget: targetStock), state, catalog, map, engaged.Id);
                 continue;
             }
+            // Collectable cell chests are listed so their finished stock is planned as a collection, never as a machine to reuse.
             ProductionStep step = planner.Next(item, targetStock, state.Inventory, catalog, map,
-                state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id)).Select(e => e.AsMachine()).ToArray(),
+                state.Entities.Where(e => ProductionReservations.Collects(e.Id) && reservedEntityIds?.Contains(e.Id) != true)
+                    .Select(e => e.AsMachine()).ToArray(),
                 allowExtractionPreparation: !SmeltingPreparationController.IsPreparing && !StoredResourceExtractionController.IsPreparing);
             await journal.AppendAsync("production-step", new { item, targetStock, stepNumber, state.Tick, step }, deadline.Token);
             switch (step.Kind)
@@ -310,7 +312,7 @@ internal sealed record ProductionState(ActorScope Scope, long Tick, string Contr
     IReadOnlyList<ProductionEntity> Entities, MapPosition? Position = null)
 {
     public ProductionEntity? AvailableOutput(string item, IReadOnlySet<string>? reservedEntityIds = null) => Entities
-        .Where(e => !ProductionReservations.Current.Contains(e.Id) && reservedEntityIds?.Contains(e.Id) != true && e.Count("output", item) > 0)
+        .Where(e => ProductionReservations.Collects(e.Id) && reservedEntityIds?.Contains(e.Id) != true && e.Count("output", item) > 0)
         .OrderBy(e => Position is { } actor ? e.Position.DistanceTo(actor) : 0).ThenByDescending(e => e.Count("output", item))
         .FirstOrDefault();
 

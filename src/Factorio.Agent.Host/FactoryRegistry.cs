@@ -46,14 +46,6 @@ public sealed class FactoryRegistry(string directory)
 
     public Task SaveAsync(FactoryState state, CancellationToken token) => LocalJson.WriteAsync(Path, state, token);
 
-    /// <summary>
-    /// Entities that actor-driven production must not reuse: a cell assembler would fight its inserters and its
-    /// chests feed other cells. Callers enter ProductionReservations themselves because an AsyncLocal value set
-    /// inside an async method does not flow back to the caller.
-    /// </summary>
-    public async Task<IReadOnlySet<string>> CellEntityIdsAsync(string worldId, CancellationToken token) =>
-        (await LoadAsync(worldId, token)).Cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
-
     /// <summary>Allocates the next slot of a compatible zone: north then south row, from the zone origin outward.</summary>
     public static CellSlot? NextSlot(FactoryState state, FactoryZone zone)
     {

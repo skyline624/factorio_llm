@@ -129,8 +129,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             return new(goal, UnsupportedReason: reason);
         }
         // Actor-driven executors must not reuse or empty persistent factory cells.
-        using var reserved = ProductionReservations.Enter(factoryDirectory is null ? null
-            : await new FactoryRegistry(factoryDirectory).CellEntityIdsAsync(scope.WorldId, token));
+        using var reserved = factoryDirectory is null ? ProductionReservations.Enter(null)
+            : ProductionReservations.EnterFactory(await new FactoryRegistry(factoryDirectory).LoadAsync(scope.WorldId, token));
         // Production recollects inventory, recipes and geometry before acting; the LLM context is never a precondition.
         if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.FluidUnits)
             return new(goal, Fluid: await new FluidProductionController(game, journal).RunAsync(goal.Target, (double)goal.Quantity, token));

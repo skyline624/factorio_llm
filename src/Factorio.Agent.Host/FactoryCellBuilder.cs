@@ -219,7 +219,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
     {
         var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory.GetValueOrDefault(item);
         if (carried >= count) return;
-        using (ProductionReservations.Enter(await registry.CellEntityIdsAsync(catalog.Scope.WorldId, token)))
+        using (ProductionReservations.EnterFactory(await registry.LoadAsync(catalog.Scope.WorldId, token)))
             await new ProductionGoalExecutor(game, journal).RunAsync(item, Math.Min(1000, count), token);
     }
 
