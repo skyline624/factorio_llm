@@ -34,7 +34,7 @@ Le registre `factory-cells.json` conserve les identifiants natifs prouvés par l
 À chaque passage, `FactoryLogistics` s'appuie sur une photographie d'usine et sur les reçus de transfert. Il :
 
 1. vide les coffres de sortie ;
-2. remplit les coffres d'entrée selon la recette (40 fabrications par défaut) ;
+2. remplit les coffres d'entrée selon la recette. Dès que le registre contient des cibles d'automatisation, le coffre d'une cellule d'assembleur ou de four garde dix minutes de la part planifiée de sa cellule, entre 5 et 40 fabrications ; une cellule hors plan n'en garde que 5. Sans cible (fixtures préparées, anciens registres), le tampon reste de 40 fabrications par défaut. Une matière rare est d'abord répartie pour que chaque coffre atteigne le quart de sa cible, puis les coffres sont complétés dans l'ordre ; les transferts restent groupés coffre par coffre ;
 3. charge les packs dans les laboratoires ;
 4. maintient au moins un quart de pile de charbon dans les chaudières et dans les foyers des cellules.
 
@@ -47,7 +47,9 @@ Un transfert refusé est journalisé comme limite observée ; il n'est jamais re
 - **`AutomationPlanner`** calcule la chaîne d'assembleurs d'un objet à partir des quantités natives des recettes. Il descend récursivement dans les intermédiaires faits en assembleur, et dans l'acier fondu en [bandes de fours](furnace-bands.md). Les plaques de minerai, les minerais et les fluides restent des matières premières fournies autrement. Le nombre de cellules est borné par deux limites :
   - la vitesse de la machine ;
   - le débit d'un inserteur de base, mesuré à environ 0,8 objet par seconde sur le moteur.
-- **`FactoryDirector`** construit les cellules manquantes, fournisseurs d'abord, et ajoute des laboratoires.
+- **`FactoryDirector`** construit les cellules manquantes, fournisseurs d'abord, et ajoute des laboratoires. Le registre retient chaque cible d'automatisation au débit le plus élevé demandé ; chaque appel planifie toutes les cibles ensemble, si bien que les intermédiaires partagés s'additionnent. Les cellules manquantes se déduisent de la capacité native des cellules prêtes de la recette, chacune avec sa machine et la limite de son bras, et non de leur nombre.
+
+  Le 30 septembre 2026 (graine 20261002), ces règles manquaient. Le plan de la science verte comptait la cellule d'engrenages de la science rouge comme la sienne : les engrenages manquaient de 80 à 120 par tour et la cellule de bras est restée vide jusqu'à l'échéance de la recherche. Les coffres remplis dans l'ordre du registre donnaient tous les engrenages aux premiers consommateurs. Enfin, une cellule de munitions hors plan immobilisait 160 plaques de fer dans son coffre.
 - **`FactoryResearchController`** traite une technologie de laboratoire :
   1. le nombre de laboratoires vise environ quinze minutes de recherche, dix au plus ;
   2. il automatise les packs au débit correspondant ;
