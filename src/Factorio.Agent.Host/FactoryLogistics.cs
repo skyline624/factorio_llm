@@ -21,6 +21,10 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     public const double BufferMinutes = 10;
     /// <summary>Crafts an input chest holds at least, and all a cell outside the plan keeps.</summary>
     public const int MinimumBufferCrafts = 5;
+    /// <summary>Minutes of its planned rate a product may stock before its producers stop being refilled.</summary>
+    public const double StockMinutes = 20;
+    /// <summary>Stock that pauses the producers of an item outside the plan.</summary>
+    public const long UnplannedStock = 50;
 
     public async Task<LogisticsResult> ServiceAsync(int bufferCrafts = 40, CancellationToken token = default)
     {
@@ -74,7 +78,16 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         // Power and burners come first: recipes burning fuel only take what their thresholds leave.
         long fuelReserve = FuelReserve(snapshot, cells, catalog.Items[Fuel].StackSize);
         var shares = CellShares(catalog, state);
-        var refills = cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest")).SelectMany(cell =>
+        // Demand pulls production: a producer whose product already holds enough stock is not refilled and drains to a stop.
+        var caps = StockCaps(catalog, state);
+        var stocks = snapshot.SummarizeStocks().InventoryItems;
+        var paused = cells.Where(c => c.Kind is "assembler" or FurnaceCellPlanner.Kind && c.Recipe is not null)
+            .Select(c => (Cell: c, Product: catalog.Recipes.Single(r => r.Name == c.Recipe).Products[0].Name))
+            .Where(p => Paused(caps, p.Product, stocks.GetValueOrDefault(p.Product))).ToArray();
+        if (paused.Length > 0)
+            await journal.AppendAsync("factory-cells-paused", paused.Select(p => new { p.Cell.Id, p.Cell.Recipe, p.Product,
+                stock = stocks.GetValueOrDefault(p.Product), cap = caps!.GetValueOrDefault(p.Product, UnplannedStock) }), token);
+        var refills = cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest") && paused.All(p => p.Cell.Id != c.Id)).SelectMany(cell =>
         {
             NativeRecipe recipe = catalog.Recipes.Single(r => r.Name == cell.Recipe);
             string chest = cell.Entities["input-chest"];
@@ -260,6 +273,26 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         return AutomationPlanner.Plan(catalog, targets, machines).Stages.ToDictionary(s => s.Recipe, s => s.CraftsPerMinute
             / Math.Max(1, state.Cells.Count(c => c.Kind == s.Kind && c.Recipe == s.Recipe && c.Status == "ready")), StringComparer.Ordinal);
     }
+
+    /// <summary>
+    /// Stock each planned item may hold before its producers pause: twenty minutes of its whole-factory planned rate, or null
+    /// when the registry holds no target (prepared fixtures and older registries never pause).
+    /// </summary>
+    internal static IReadOnlyDictionary<string, long>? StockCaps(ProductionCatalog catalog, FactoryState state)
+    {
+        var machines = FactoryDirector.MachineItems(catalog);
+        if (state.Targets is not { Count: > 0 } targets || machines.Count == 0) return null;
+        return AutomationPlanner.Plan(catalog, targets, machines).Stages.ToDictionary(s => s.Item, s => (long)Math.Ceiling(s.CraftsPerMinute
+            * catalog.Recipes.Single(r => r.Name == s.Recipe).Products[0].Amount!.Value * StockMinutes - 1e-9), StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Whether a producer of the item pauses: its known stock reached its cap, or the unplanned cap for an item outside
+    /// the plan. On 2026-09-30 (seed 20261002) unregulated cells stocked 1338 red packs and 509 magazines while green
+    /// science starved.
+    /// </summary>
+    internal static bool Paused(IReadOnlyDictionary<string, long>? caps, string product, long stock) =>
+        caps is not null && stock >= (caps.TryGetValue(product, out long cap) ? Math.Max(1, cap) : UnplannedStock);
 
     /// <summary>
     /// Crafts an input chest holds: ten minutes of the cell's planned share within [minimum, maximum], the minimum for a

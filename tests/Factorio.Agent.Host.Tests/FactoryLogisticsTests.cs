@@ -75,6 +75,25 @@ public sealed class FactoryLogisticsTests
         Assert.Null(FactoryLogistics.CellShares(Catalogs.Early(), state with { Targets = null }));
     }
 
+    [Fact]
+    public void ProducersPauseOnceTheirProductHoldsTwentyMinutesOfItsPlannedRate()
+    {
+        // Campaign 2026-09-30 (seed 20261002): unregulated cells piled up 1338 red packs, 509 magazines and 445 belts, about
+        // 2500 iron plates, while inserters and gears for green science stayed short.
+        var state = new FactoryState(1, "world", [], [Assembler("red", "automation-science-pack"), Assembler("gears", "iron-gear-wheel")])
+            .WithTarget("automation-science-pack", 8);
+        var caps = FactoryLogistics.StockCaps(Catalogs.Early(), state)!;
+        Assert.Equal(160, caps["automation-science-pack"]);
+        Assert.Equal(160, caps["iron-gear-wheel"]);
+        Assert.True(FactoryLogistics.Paused(caps, "automation-science-pack", stock: 1338));
+        Assert.False(FactoryLogistics.Paused(caps, "iron-gear-wheel", stock: 21));
+        Assert.True(FactoryLogistics.Paused(caps, "firearm-magazine", stock: FactoryLogistics.UnplannedStock));
+        Assert.False(FactoryLogistics.Paused(caps, "firearm-magazine", stock: FactoryLogistics.UnplannedStock - 1));
+        // Without registered targets nothing pauses, as in prepared fixtures.
+        Assert.Null(FactoryLogistics.StockCaps(Catalogs.Early(), state with { Targets = null }));
+        Assert.False(FactoryLogistics.Paused(null, "automation-science-pack", stock: 100000));
+    }
+
     private static FactoryCell Assembler(string id, string recipe) => new(id, 1, new(0, 0, true), "assembler", "assembling-machine-1", recipe,
         new Dictionary<string, string> { ["machine"] = id, ["input-chest"] = id + "-in", ["output-chest"] = id + "-out" }, "ready", 1);
 
