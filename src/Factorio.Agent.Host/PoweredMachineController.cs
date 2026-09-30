@@ -155,9 +155,9 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
                 .TryMaintainAsync(boiler.Id, networkId, map, catalog, controller, expectedEnergy, reserve, power.Energy <= 0, token)) return;
             if (!reserve && power.Energy > 0) return;
             var categories = map.Prototypes[boiler.Name].FuelCategories;
-            string fuel = catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.FuelCategory is { } category && categories?.ContainsKey(category) == true
-                    && catalog.Mining.Values.Any(products => products.Any(m => m.Name == p.Key && m.DeterministicItem)))
-                .OrderByDescending(p => owned.Inventory.GetValueOrDefault(p.Key) > 0).ThenBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key).First();
+            var candidates = catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.FuelCategory is { } category && categories?.ContainsKey(category) == true
+                    && catalog.Mining.Values.Any(products => products.Any(m => m.Name == p.Key && m.DeterministicItem))).Select(p => p.Key).ToArray();
+            string fuel = ChooseFuel(candidates, catalog.Items, owned.Entities.Single(e => e.Id == boiler.Id).Items("fuel"), owned.Inventory);
             int capacity = Math.Min(100, catalog.Items[fuel].StackSize);
             int target = (int)Math.Clamp(Math.Ceiling(expectedEnergy * 1.25 / catalog.Items[fuel].FuelValue), Math.Min(2, capacity), capacity);
             int missing = (int)Math.Max(0, target - owned.Entities.Single(e => e.Id == boiler.Id).Count("fuel", fuel));
@@ -169,6 +169,15 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
             await journal.AppendAsync("powered-machine-fuel", new { machineId, boilerId = boiler.Id, fuel, count = missing, expectedEnergy }, token);
         }
     }
+
+    /// <summary>
+    /// A burner slot holds one item: the fuel already loaded must be topped up, otherwise the engine refuses the transfer.
+    /// An empty burner takes carried fuel first, then the richest candidate.
+    /// </summary>
+    internal static string ChooseFuel(IReadOnlyList<string> candidates, IReadOnlyDictionary<string, NativeItem> items,
+        IReadOnlyDictionary<string, long> loaded, IReadOnlyDictionary<string, long> carried) =>
+        candidates.OrderByDescending(fuel => loaded.GetValueOrDefault(fuel) > 0).ThenByDescending(fuel => carried.GetValueOrDefault(fuel) > 0)
+            .ThenByDescending(fuel => items[fuel].FuelValue).ThenBy(fuel => fuel, StringComparer.Ordinal).First();
 
     private static void RequireScope(ActorScope scope, ProductionCatalog catalog)
     {
