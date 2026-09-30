@@ -29,19 +29,23 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         var machines = MachineItems(catalog);
         if (machines.Count == 0) throw new InvalidOperationException("No assembling machine or furnace recipe is enabled; research automation first.");
-        var plan = AutomationPlanner.Plan(catalog, item, perMinute, machines);
-        await journal.AppendAsync("factory-automation-plan", new { item, perMinute, plan }, token);
-        await SeedRawAsync(catalog, plan.RawPerMinute, token);
         var registry = new FactoryRegistry(directory);
+        var registered = (await registry.LoadAsync(catalog.Scope.WorldId, token)).WithTarget(item, perMinute);
+        await registry.SaveAsync(registered, token);
+        // Every registered target shares the stages: a second science pack adds its gears to the first one's.
+        var plan = AutomationPlanner.Plan(catalog, registered.Targets!, machines);
+        await journal.AppendAsync("factory-automation-plan", new { item, perMinute, targets = registered.Targets, plan }, token);
+        await SeedRawAsync(catalog, plan.RawPerMinute, token);
         var builder = new FactoryCellBuilder(game, journal, directory);
         // Consumers after their suppliers keeps early cells useful even if a later build is interrupted.
         foreach (var stage in plan.Stages.OrderBy(s => Depth(catalog, s.Recipe, machines)))
         {
             var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-            int existing = state.Cells.Count(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready");
+            var ready = state.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready").Select(c => c.MachineItem).ToArray();
+            int missing = AutomationPlanner.MissingMachines(catalog, stage, ready);
             // Power grows before the cells that will draw it, so new machines never brown out the running factory.
-            await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync(stage.MachineItem, stage.Machines - existing, true, token);
-            for (int count = existing; count < stage.Machines; count++)
+            await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync(stage.MachineItem, missing, true, token);
+            for (int count = 0; count < missing; count++)
                 await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
         }
         return plan;

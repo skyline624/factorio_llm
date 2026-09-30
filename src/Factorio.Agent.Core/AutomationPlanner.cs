@@ -12,22 +12,22 @@ public static class AutomationPlanner
     public const double InserterItemsPerSecond = 0.8;
 
     public static AutomationPlan Plan(ProductionCatalog catalog, string item, double perMinute, IReadOnlySet<string> machineItems,
+        int maximumMachinesPerStage = 8) => Plan(catalog, new Dictionary<string, double>(StringComparer.Ordinal) { [item] = perMinute },
+            machineItems, maximumMachinesPerStage);
+
+    /// <summary>Several targets share their intermediate stages: crafts add up per recipe before machines are counted.</summary>
+    public static AutomationPlan Plan(ProductionCatalog catalog, IReadOnlyDictionary<string, double> targets, IReadOnlySet<string> machineItems,
         int maximumMachinesPerStage = 8)
     {
-        if (!double.IsFinite(perMinute) || perMinute <= 0 || perMinute > 10000) throw new ArgumentOutOfRangeException(nameof(perMinute));
+        if (targets.Count == 0 || targets.Values.Any(rate => !double.IsFinite(rate) || rate <= 0 || rate > 10000))
+            throw new ArgumentOutOfRangeException(nameof(targets));
         var crafts = new Dictionary<string, (NativeRecipe Recipe, string Machine, double Crafts)>(StringComparer.Ordinal);
         var raw = new Dictionary<string, double>(StringComparer.Ordinal);
-        Add(item, perMinute, []);
+        foreach (var (item, perMinute) in targets.OrderBy(p => p.Key, StringComparer.Ordinal)) Add(item, perMinute, []);
         var stages = crafts.Values.Select(stage =>
         {
             bool furnace = catalog.Assemblers?.ContainsKey(stage.Machine) != true;
-            double speed = furnace ? catalog.Machines[stage.Machine].CraftingSpeed : catalog.Assemblers![stage.Machine].CraftingSpeed;
-            double machineCrafts = 60 * speed / stage.Recipe.EnergySeconds;
-            // A furnace's input arm also carries its fuel, a small share next to the ingredient (0.36 coal per steel craft).
-            double inputs = stage.Recipe.Ingredients.Where(i => i.DeterministicItem).Sum(i => i.Amount!.Value);
-            double outputs = stage.Recipe.Products.Sum(p => p.Amount!.Value);
-            double armCrafts = 60 * InserterItemsPerSecond / Math.Max(inputs, outputs);
-            int machines = (int)Math.Ceiling(stage.Crafts / Math.Min(machineCrafts, armCrafts) - 1e-9);
+            int machines = (int)Math.Ceiling(stage.Crafts / CellCraftsPerMinute(catalog, stage.Recipe, stage.Machine) - 1e-9);
             return new AutomationStage(stage.Recipe.Name, stage.Recipe.Products[0].Name, stage.Machine, stage.Crafts,
                 Math.Clamp(machines, 1, maximumMachinesPerStage), furnace ? FurnaceCellPlanner.Kind : "assembler");
         }).OrderBy(s => s.Recipe, StringComparer.Ordinal).ToArray();
@@ -49,6 +49,31 @@ public static class AutomationPlanner
             foreach (var ingredient in recipe.Ingredients)
                 Add(ingredient.Name, recipeCrafts * ingredient.Amount!.Value, [.. path, name]);
         }
+    }
+
+    /// <summary>Crafts per minute one cell of this machine gives: native crafting speed, capped by one basic inserter per side.</summary>
+    public static double CellCraftsPerMinute(ProductionCatalog catalog, NativeRecipe recipe, string machineItem)
+    {
+        bool furnace = catalog.Assemblers?.ContainsKey(machineItem) != true;
+        double speed = furnace ? catalog.Machines[machineItem].CraftingSpeed : catalog.Assemblers![machineItem].CraftingSpeed;
+        double machineCrafts = 60 * speed / recipe.EnergySeconds;
+        // A furnace's input arm also carries its fuel, a small share next to the ingredient (0.36 coal per steel craft).
+        double inputs = recipe.Ingredients.Where(i => i.DeterministicItem).Sum(i => i.Amount!.Value);
+        double outputs = recipe.Products.Sum(p => p.Amount!.Value);
+        return Math.Min(machineCrafts, 60 * InserterItemsPerSecond / Math.Max(inputs, outputs));
+    }
+
+    /// <summary>
+    /// Cells to add so the ready cells of the stage's recipe cover its crafts. Each ready cell counts with its own machine,
+    /// so slower early cells are not mistaken for the faster machines a new plan sizes; the per-stage budget still applies.
+    /// </summary>
+    public static int MissingMachines(ProductionCatalog catalog, AutomationStage stage, IReadOnlyList<string> readyMachineItems,
+        int maximumMachinesPerStage = 8)
+    {
+        var recipe = catalog.Recipes.Single(r => r.Name == stage.Recipe);
+        double missing = stage.CraftsPerMinute - readyMachineItems.Sum(machine => CellCraftsPerMinute(catalog, recipe, machine));
+        int wanted = missing <= 1e-9 ? 0 : (int)Math.Ceiling(missing / CellCraftsPerMinute(catalog, recipe, stage.MachineItem) - 1e-9);
+        return Math.Clamp(wanted, 0, Math.Max(0, maximumMachinesPerStage - readyMachineItems.Count));
     }
 
     /// <summary>

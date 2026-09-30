@@ -23,11 +23,21 @@ public sealed record FactoryCell(string Id, int Zone, CellSlot Slot, string Kind
     public bool IsResource => Zone == 0 && Kind is "smelter" or "miner";
 }
 /// <summary>Resource cells use zone 0; their slot band is the id of their <see cref="ResourceRow"/>.</summary>
+/// <summary>Targets are the automation rates requested so far, item to items per minute; older registries load without them.</summary>
 public sealed record FactoryState(int Version, string WorldId, IReadOnlyList<FactoryZone> Zones, IReadOnlyList<FactoryCell> Cells,
-    IReadOnlyList<ResourceRow>? Rows = null)
+    IReadOnlyList<ResourceRow>? Rows = null, IReadOnlyDictionary<string, double>? Targets = null)
 {
     public FactoryState With(FactoryCell cell) => this with { Cells = [.. Cells.Where(c => c.Id != cell.Id), cell] };
     public FactoryState With(ResourceRow row) => this with { Rows = [.. (Rows ?? []).Where(r => r.Id != row.Id), row] };
+
+    /// <summary>A target keeps the highest rate ever requested: the factory grows with demand and never shrinks a plan.</summary>
+    public FactoryState WithTarget(string item, double perMinute) => this with
+    {
+        Targets = new Dictionary<string, double>(Targets ?? new Dictionary<string, double>(), StringComparer.Ordinal)
+        {
+            [item] = Math.Max(Targets?.GetValueOrDefault(item) ?? 0, perMinute)
+        }
+    };
 }
 
 /// <summary>Durable C# memory of the automated factory in one world. The engine stays the source of stock truth.</summary>

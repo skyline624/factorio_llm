@@ -33,10 +33,11 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         int labs = (int)Math.Clamp(Math.Ceiling(technology.Count * unitSeconds / TargetResearchSeconds), 1, 10);
         double minutes = Math.Max(1, technology.Count * unitSeconds / labs / 60);
         var director = new FactoryDirector(game, journal, directory);
-        var rawRates = new Dictionary<string, double>(StringComparer.Ordinal);
+        AutomationPlan? plan = null;
         foreach (var pack in technology.Ingredients)
-            foreach (var (raw, rate) in (await director.AutomateAsync(pack.Name, Math.Min(120, technology.Count * pack.Amount / minutes), token)).RawPerMinute)
-                rawRates[raw] = rawRates.GetValueOrDefault(raw) + rate;
+            plan = await director.AutomateAsync(pack.Name, Math.Min(120, technology.Count * pack.Amount / minutes), token);
+        // Each plan covers every registered target, so the last one holds the whole factory's raw demand.
+        var rawRates = new Dictionary<string, double>(plan?.RawPerMinute ?? new Dictionary<string, double>(), StringComparer.Ordinal);
         await director.EnsureLabsAsync(labs, token);
         var builder = new FactoryCellBuilder(game, journal, directory);
         await builder.RepairPowerAsync(token);
