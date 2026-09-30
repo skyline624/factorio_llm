@@ -52,8 +52,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 await TravelAsync(ready.Position, 3, catalog);
                 ProductionState arrived = await ObserveAsync(deadline.Token);
                 if (arrived.Scope != state.Scope || arrived.ControlMode != "ai") throw new InvalidOperationException("Actor changed before stock collection.");
-                long count = Math.Min(arrived.Entities.FirstOrDefault(e => e.Id == ready.Id)?.Count("output", item) ?? 0,
-                    Math.Max(0, targetStock - arrived.Inventory.GetValueOrDefault(item)));
+                long count = ProductionState.CollectionCount(arrived.Entities.FirstOrDefault(e => e.Id == ready.Id)?.Count("output", item) ?? 0,
+                    Math.Max(0, targetStock - arrived.Inventory.GetValueOrDefault(item)),
+                    catalog.Items.TryGetValue(item, out var native) ? native.StackSize : 1);
                 if (count == 0) continue;
                 await ActAsync("take", new
                 {
@@ -287,7 +288,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             throw new InvalidDataException("Production requires complete, current known entity inventories.");
         return new(data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!, response.Tick,
             agent.GetProperty("controlMode").GetString()!, agent.GetProperty("inventory").Deserialize<Dictionary<string, long>>(Protocol.Json)!,
-            ReadEntities(data.GetProperty("entities")));
+            ReadEntities(data.GetProperty("entities")),
+            agent.TryGetProperty("position", out var position) ? position.Deserialize<MapPosition>(Protocol.Json) : null);
     }
 
     private static IReadOnlyList<ProductionEntity> ReadEntities(JsonElement value)
@@ -303,11 +305,20 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
 
 public sealed record ProductionResult(string Item, int TargetStock, long StartTick, long EndTick, long InitialStock,
     long FinalStock, int Steps, IReadOnlyList<OperationReceipt> Receipts);
+/// <summary>Position is the actor's native position; stock is collected from the nearest output first.</summary>
 internal sealed record ProductionState(ActorScope Scope, long Tick, string ControlMode, IReadOnlyDictionary<string, long> Inventory,
-    IReadOnlyList<ProductionEntity> Entities)
+    IReadOnlyList<ProductionEntity> Entities, MapPosition? Position = null)
 {
-    public ProductionEntity? AvailableOutput(string item, IReadOnlySet<string>? reservedEntityIds = null) =>
-        Entities.FirstOrDefault(e => !ProductionReservations.Current.Contains(e.Id) && reservedEntityIds?.Contains(e.Id) != true && e.Count("output", item) > 0);
+    public ProductionEntity? AvailableOutput(string item, IReadOnlySet<string>? reservedEntityIds = null) => Entities
+        .Where(e => !ProductionReservations.Current.Contains(e.Id) && reservedEntityIds?.Contains(e.Id) != true && e.Count("output", item) > 0)
+        .OrderBy(e => Position is { } actor ? e.Position.DistanceTo(actor) : 0).ThenByDescending(e => e.Count("output", item))
+        .FirstOrDefault();
+
+    /// <summary>
+    /// A visit takes up to a stack even when fewer are missing: recipes ask for their ingredients one at a time, and each
+    /// exact-quantity collection used to be its own trip. Surplus stays the factory's own stock, now carried.
+    /// </summary>
+    public static long CollectionCount(long available, long missing, int stackSize) => Math.Min(available, Math.Max(missing, stackSize));
 }
 internal sealed record ProductionEntity(string Id, string Name, MapPosition Position, string? Recipe, JsonElement Inventories, string? PreviousRecipe = null, string? Type = null)
 {
