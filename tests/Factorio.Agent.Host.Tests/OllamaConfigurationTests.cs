@@ -89,6 +89,23 @@ public sealed class OllamaConfigurationTests : IDisposable
     }
 
     [Fact]
+    public async Task DecisionModelIsOffUnlessExplicitlyEnabledInItsOwnSection()
+    {
+        string off = await WriteAsync("""{"Ollama":{"BaseUrl":"https://ollama.com/","ApiKey":"synthetic-file-key"}}""");
+        Assert.Null(await OllamaConfiguration.LoadDecisionAsync(off));
+        string on = await WriteAsync("""{"Ollama":{},"DecisionModel":{"Enabled":true,"Model":"nimble:9b-q4_K_M","Mode":"shadow"}}""");
+        var options = await OllamaConfiguration.LoadDecisionAsync(on);
+        Assert.Equal("nimble:9b-q4_K_M", options!.Model);
+        Assert.True(options.BaseUrl.IsLoopback);
+        string disabled = await WriteAsync("""{"Ollama":{},"DecisionModel":{"Enabled":false,"Model":"nimble:9b"}}""");
+        Assert.Null(await OllamaConfiguration.LoadDecisionAsync(disabled));
+        string remote = await WriteAsync("""{"Ollama":{},"DecisionModel":{"Enabled":true,"BaseUrl":"https://ollama.com/","Mode":"shadow"}}""");
+        await Assert.ThrowsAsync<InvalidDataException>(() => OllamaConfiguration.LoadDecisionAsync(remote));
+        string acting = await WriteAsync("""{"Ollama":{},"DecisionModel":{"Enabled":true,"Mode":"decide"}}""");
+        await Assert.ThrowsAsync<InvalidDataException>(() => OllamaConfiguration.LoadDecisionAsync(acting));
+    }
+
+    [Fact]
     public async Task ExplicitMissingFileDoesNotSilentlySelectTheGateway()
     {
         await Assert.ThrowsAsync<FileNotFoundException>(() => OllamaConfiguration.LoadAsync(

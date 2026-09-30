@@ -33,6 +33,7 @@ try
           factory-cell --session FILE --kind assembler|lab --machine ITEM [--recipe NAME]
           factory-logistics --session FILE [--quantity CRAFTS]
           verify-factory-cells|verify-factory-research --session FILE
+          decision-replay --session FILE [--quantity N] [--config FILE]
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
           verify-assembly-batches --session FILE
@@ -85,6 +86,17 @@ try
             string journalPath = Path.Combine(session.Directory, $"factory-logistics-{Guid.NewGuid():N}.jsonl");
             Print(new { result = await new FactoryLogistics(game, new ControllerJournal(journalPath), session.Directory)
                 .ServiceAsync(int.Parse(Option("quantity") ?? "40", CultureInfo.InvariantCulture), shutdown.Token), journalPath });
+            break;
+        }
+        case "decision-replay":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            var decision = await OllamaConfiguration.LoadDecisionAsync(Option("config"), shutdown.Token)
+                ?? throw new InvalidOperationException("Enable the DecisionModel section (Mode=shadow) in the local profile first.");
+            using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
+            await WarmUpDecisionModelAsync(http, decision);
+            Print(new { report = await DecisionReplay.RunAsync(session.Directory, new DecisionModelClient(http, decision),
+                int.Parse(Option("quantity") ?? "200", CultureInfo.InvariantCulture), shutdown.Token) });
             break;
         }
         case "verify-factory-research":
@@ -426,14 +438,20 @@ try
                 Environment.GetEnvironmentVariable("OLLAMA_API_KEY"), shutdown.Token);
             using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
             var planner = new OllamaStrategicPlanner(http, plannerOptions);
-            var transport = new { kind = plannerOptions.IsDirectCloud ? "ollama-cloud-direct" : "ollama-gateway", model = plannerOptions.RequestModel };
+            // The optional decision model is a separately configured local shadow: it never replaces the planner.
+            var decisionOptions = await OllamaConfiguration.LoadDecisionAsync(Option("config"), shutdown.Token);
+            using var decisionHttp = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
+            var shadow = decisionOptions is null ? null : new DecisionModelClient(decisionHttp, decisionOptions);
+            if (decisionOptions is not null) _ = WarmUpDecisionModelAsync(decisionHttp, decisionOptions);
+            var transport = new { kind = plannerOptions.IsDirectCloud ? "ollama-cloud-direct" : "ollama-gateway", model = plannerOptions.RequestModel,
+                decisionShadow = decisionOptions?.Model };
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
             await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"strategic-production-{Guid.NewGuid():N}.jsonl");
             using var campaignJournal = args[0] == "run-campaign" ? new CampaignJournal(journalPath) : null;
             IControllerJournal journal = campaignJournal is null ? new ControllerJournal(journalPath) : campaignJournal;
-            var controller = new StrategicProductionController(game, planner, journal, session.Directory);
+            var controller = new StrategicProductionController(game, planner, journal, session.Directory, shadow);
             if (args[0] == "run-campaign")
             {
                 string memoryPath = Path.Combine(session.Directory, "strategic-memory.json");
@@ -581,6 +599,17 @@ catch (Exception error) when (error is not OutOfMemoryException)
 {
     Console.Error.WriteLine(JsonSerializer.Serialize(new { error = error.GetType().Name, message = error.Message }));
     Environment.ExitCode = 1;
+}
+
+// Loading a System One model can take minutes; a failed warm-up only means the first shadow call may time out.
+static async Task WarmUpDecisionModelAsync(HttpClient http, DecisionModelOptions options)
+{
+    try
+    {
+        await new DecisionModelClient(http, options with { RequestTimeout = TimeSpan.FromMinutes(5) }).DecideAsync("{\"warmup\":true}",
+            new Dictionary<string, DecisionQuestion> { ["ready"] = new("noul", "Is this a warm-up request?") });
+    }
+    catch (DecisionModelException) { }
 }
 
 static void Print<T>(T value) => Console.WriteLine(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));

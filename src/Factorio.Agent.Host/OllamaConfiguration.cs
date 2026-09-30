@@ -23,28 +23,8 @@ public static class OllamaConfiguration
     {
         bool explicitPath = path is not null;
         path ??= ResolveDefaultPath(searchFrom);
-        var settings = new Settings();
-        if (explicitPath || File.Exists(path))
-        {
-            if (!File.Exists(path)) throw new FileNotFoundException("The requested Ollama configuration file does not exist.");
-            if (new FileInfo(path).Length > 65536) throw new InvalidDataException("Ollama configuration exceeds 64 KiB.");
-            try
-            {
-                string json = await File.ReadAllTextAsync(path, token);
-                var profile = JsonSerializer.Deserialize<Profile>(json, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-                    AllowDuplicateProperties = false
-                });
-                settings = profile?.Ollama ?? throw new InvalidDataException("The configuration requires an Ollama section.");
-            }
-            catch (JsonException)
-            {
-                // Parsing errors can echo a malformed secret or property name. Do not preserve the exception.
-                throw new InvalidDataException("Invalid Ollama configuration JSON, field, or value type. Contents are not logged.");
-            }
-        }
+        var settings = (await ReadAsync(path, explicitPath, token))?.Ollama
+            ?? (explicitPath || File.Exists(path) ? throw new InvalidDataException("The configuration requires an Ollama section.") : new Settings());
         if (settings.Stream) throw new InvalidDataException("The strategic planner requires Stream=false.");
         if (!Uri.TryCreate(settings.BaseUrl, UriKind.Absolute, out var baseUrl))
             throw new InvalidDataException("Ollama BaseUrl must be an absolute URI.");
@@ -61,9 +41,55 @@ public static class OllamaConfiguration
         };
     }
 
+    /// <summary>
+    /// The optional typed decision model runs only when its own section enables it, and only in shadow mode:
+    /// it is never a substitute for the strategic model and never selects actions.
+    /// </summary>
+    public static async Task<DecisionModelOptions?> LoadDecisionAsync(string? path, CancellationToken token = default, string? searchFrom = null)
+    {
+        bool explicitPath = path is not null;
+        path ??= ResolveDefaultPath(searchFrom);
+        var decision = (await ReadAsync(path, explicitPath, token))?.DecisionModel;
+        if (decision is not { Enabled: true }) return null;
+        if (decision.Mode != "shadow") throw new InvalidDataException("The decision model supports only Mode=shadow.");
+        if (!Uri.TryCreate(decision.BaseUrl, UriKind.Absolute, out var baseUrl) || !baseUrl.IsLoopback || baseUrl.Scheme != "http")
+            throw new InvalidDataException("The decision model must be a local HTTP Ollama.");
+        return new DecisionModelOptions { BaseUrl = baseUrl, Model = decision.Model };
+    }
+
+    private static async Task<Profile?> ReadAsync(string path, bool required, CancellationToken token)
+    {
+        if (!required && !File.Exists(path)) return null;
+        if (!File.Exists(path)) throw new FileNotFoundException("The requested Ollama configuration file does not exist.");
+        if (new FileInfo(path).Length > 65536) throw new InvalidDataException("Ollama configuration exceeds 64 KiB.");
+        try
+        {
+            return JsonSerializer.Deserialize<Profile>(await File.ReadAllTextAsync(path, token), new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+                AllowDuplicateProperties = false
+            });
+        }
+        catch (JsonException)
+        {
+            // Parsing errors can echo a malformed secret or property name. Do not preserve the exception.
+            throw new InvalidDataException("Invalid Ollama configuration JSON, field, or value type. Contents are not logged.");
+        }
+    }
+
     private sealed class Profile
     {
         public Settings? Ollama { get; init; }
+        public DecisionSettings? DecisionModel { get; init; }
+    }
+
+    private sealed class DecisionSettings
+    {
+        public bool Enabled { get; init; }
+        public string BaseUrl { get; init; } = "http://localhost:11434/";
+        public string Model { get; init; } = "nimble:9b-q4_K_M";
+        public string Mode { get; init; } = "shadow";
     }
 
     private sealed class Settings

@@ -10,7 +10,7 @@ public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Pro
 
 /// <summary>Grounds semantic production or research goals into verified native execution.</summary>
 public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal,
-    string? factoryDirectory = null) : IStrategicGoalRunner
+    string? factoryDirectory = null, DecisionModelClient? shadow = null) : IStrategicGoalRunner
 {
     public async Task<StrategicGoalResult> RunOnceAsync(CancellationToken token = default, string? previousResult = null)
     {
@@ -117,6 +117,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             await defense.StopOwnedActionAsync(stop.Token);
         }
         await journal.AppendAsync("strategic-goal", goal, token);
+        if (shadow is not null) await ShadowAsync(facts, previousResult, goal, token);
         string? reason = GroundingFailure(goal, observationId, catalog, science.Technologies, automation);
         if (reason is not null)
         {
@@ -142,6 +143,38 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         if (goal.Category == GoalCategory.Defense)
             return new(goal, Defense: await new DefenseDeploymentController(game, journal).RunAsync(goal.Target, (int)goal.Quantity, token));
         return new(goal, Production: await new ProductionGoalExecutor(game, journal).RunAsync(goal.Target, (int)goal.Quantity, token));
+    }
+
+    /// <summary>Journals the decision model's view of this proposal. It never changes the goal or delays defense.</summary>
+    private async Task ShadowAsync(string facts, string? previousResult, GoalProposal goal, CancellationToken token)
+    {
+        var defense = new DefenseController(game, journal);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
+        object entry;
+        try
+        {
+            Task<ShadowVerdict> pending = DecisionShadow.AskAsync(shadow!, DecisionShadow.Build(facts, previousResult, goal), deadline.Token);
+            try
+            {
+                while (!pending.IsCompleted)
+                {
+                    await defense.StepAsync(token);
+                    await Task.WhenAny(pending, Task.Delay(150, token));
+                }
+                entry = await pending;
+            }
+            finally
+            {
+                using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await defense.StopOwnedActionAsync(stop.Token);
+            }
+        }
+        catch (Exception error) when (!token.IsCancellationRequested && error is not GameRpcException)
+        {
+            entry = new { error = error.GetType().Name, error.Message };
+        }
+        await journal.AppendAsync("decision-shadow", entry, token);
     }
 
     public static string? GroundingFailure(GoalProposal goal, string observationId, ProductionCatalog catalog,
