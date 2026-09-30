@@ -80,6 +80,7 @@ local handlers = {hello = hello, observe = Observation.observe, research_state =
     return {fixture = true, reason = s.fixtureReason, markedTick = s.fixtureTick}
   end,
   operation = function(args) return Operations.get(args.operationId) end,
+  receipt_window = function() return Operations.window() end,
   cancel = function(args) return Operations.cancel(args.operationId) end,
   recipes = Catalog.recipes, technologies = Catalog.technologies, production_catalog = Catalog.production}
 

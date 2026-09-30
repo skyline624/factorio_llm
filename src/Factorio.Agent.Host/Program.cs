@@ -30,6 +30,9 @@ try
           research --session FILE --technology NAME
           launch-rocket --session FILE --item NAME
           deploy-defense --session FILE --item NAME --quantity N
+          factory-cell --session FILE --kind assembler|lab --machine ITEM [--recipe NAME]
+          factory-logistics --session FILE [--quantity CRAFTS]
+          verify-factory-cells --session FILE
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
           verify-assembly-batches --session FILE
@@ -64,6 +67,32 @@ try
     string Required(string name) => Option(name) ?? throw new ArgumentException($"Missing --{name}.");
     switch (args[0])
     {
+        case "factory-cell":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            string journalPath = Path.Combine(session.Directory, $"factory-cell-{Guid.NewGuid():N}.jsonl");
+            Print(new { cell = await new FactoryCellBuilder(game, new ControllerJournal(journalPath), session.Directory)
+                .BuildAsync(Required("kind"), Required("machine"), Option("recipe"), shutdown.Token), journalPath });
+            break;
+        }
+        case "factory-logistics":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            string journalPath = Path.Combine(session.Directory, $"factory-logistics-{Guid.NewGuid():N}.jsonl");
+            Print(new { result = await new FactoryLogistics(game, new ControllerJournal(journalPath), session.Directory)
+                .ServiceAsync(int.Parse(Option("quantity") ?? "40", CultureInfo.InvariantCulture), shutdown.Token), journalPath });
+            break;
+        }
+        case "verify-factory-cells":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new FactoryCellQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
         case "deploy-defense":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);

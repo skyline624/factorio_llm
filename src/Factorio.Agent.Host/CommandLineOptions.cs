@@ -11,7 +11,7 @@ public static class CommandLineOptions
     private static readonly HashSet<string> Values = new(StringComparer.Ordinal)
     {
         "action", "boiler", "capacity-items", "config", "distance", "fluid", "installation", "item", "items",
-        "journal", "json", "json-file", "kind", "max-goals", "minutes", "phase", "plan", "quantity", "reserve",
+        "journal", "json", "json-file", "kind", "machine", "max-goals", "minutes", "phase", "plan", "quantity", "recipe", "reserve",
         "root", "seconds", "seed", "session", "source", "target", "technology", "ticks", "x", "y"
     };
 

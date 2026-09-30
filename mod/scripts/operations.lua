@@ -148,6 +148,15 @@ function M.tick()
   end
 end
 
+-- FIFO eviction makes the oldest retained acceptance a proof boundary: any operation accepted
+-- after it is still retained, so an unknown id submitted after that tick never reached the engine.
+function M.window()
+  local s = Actor.state()
+  local oldest = s.receiptOrder[1] and s.receipts[s.receiptOrder[1]]
+  return {count = #s.receiptOrder, capacity = M.capacity, evicted = #s.receiptOrder >= M.capacity,
+    oldestAcceptedTick = oldest and oldest.receipt.acceptedTick or nil}
+end
+
 function M.last_receipt()
   local s = Actor.state()
   local id = s.activeId or s.lastOperationId

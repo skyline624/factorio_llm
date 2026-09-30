@@ -311,6 +311,29 @@ public sealed class StrategicReconciliationTests : IDisposable
         Assert.DoesNotContain("submit", game.Calls);
     }
 
+    [Fact]
+    public async Task SubmissionThatNeverReachedTheEngineIsProvenAbsentByTheReceiptWindow()
+    {
+        var game = await PrepareAsync(false);
+        game.Failure = "absent";
+        await new StrategicReconciliationController(game, Memory).ReconcileAsync(Journal);
+        var memory = await ReadMemoryAsync();
+        Assert.False(memory.Pending);
+        Assert.Contains("never_dispatched", memory.PreviousResult);
+        Assert.Contains("receipt_window", game.Calls);
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
+    [Fact]
+    public async Task UnknownOperationAfterPossibleEvictionStaysBlocked()
+    {
+        var game = await PrepareAsync(false);
+        game.Failure = "evicted";
+        string original = await File.ReadAllTextAsync(Memory);
+        await Assert.ThrowsAnyAsync<Exception>(() => new StrategicReconciliationController(game, Memory).ReconcileAsync(Journal));
+        Assert.Equal(original, await File.ReadAllTextAsync(Memory));
+    }
+
     [Theory]
     [InlineData("world")]
     [InlineData("incarnation")]
@@ -390,11 +413,15 @@ public sealed class StrategicReconciliationTests : IDisposable
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
             Calls.Add(request.Action);
-            Assert.Contains(request.Action, new[] { "observe", "operation" });
+            Assert.Contains(request.Action, new[] { "observe", "operation", "receipt_window" });
+            if (request.Action == "receipt_window")
+                return Task.FromResult(new GameResponse(1, request.RequestId, true, 40000 + Calls.Count, Protocol.ToElement(Failure == "absent"
+                    ? new { count = 12, capacity = 2048, evicted = false, oldestAcceptedTick = 50L }
+                    : new { count = 2048, capacity = 2048, evicted = true, oldestAcceptedTick = 39000L })));
             if (request.Action == "operation")
             {
                 Assert.Equal(OperationId, request.Arguments.GetProperty("operationId").GetString());
-                return Task.FromResult(Failure == "unknown"
+                return Task.FromResult(Failure is "unknown" or "absent" or "evicted"
                     ? new GameResponse(1, request.RequestId, false, 40000, default, new("operation_unknown", "Absent receipt"))
                     : new GameResponse(1, request.RequestId, true, 40000, Receipt()));
             }
@@ -417,7 +444,7 @@ public sealed class StrategicReconciliationTests : IDisposable
                 agent = new { alive, controlMode = "ai", stopUnconfirmed = false,
                     walking = Failure == "moving", mining = false, shooting = false, craftingQueueSize = Failure == "queue" ? 1 : 0,
                     inventory = new Dictionary<string, int> { ["automation-science-pack"] = 119 } },
-                operation = Receipt(), goal = new { rocketsLaunched = 0 }
+                operation = Failure is "absent" or "evicted" ? (object?)null : Receipt(), goal = new { rocketsLaunched = 0 }
             })));
         }
     }

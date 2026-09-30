@@ -33,18 +33,30 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         var queried = new List<OperationReceipt>();
         var unresolved = audit.Submissions.Values.Where(s => !audit.Receipts.TryGetValue(s.OperationId, out var r) || !r.IsTerminal)
             .Select(s => s.OperationId).ToHashSet(StringComparer.Ordinal);
+        bool lastIsJournaled = false;
         if (before.Data.TryGetProperty("operation", out var last) && last.ValueKind == JsonValueKind.Object)
         {
             string id = last.GetProperty("operationId").GetString()!;
-            if (audit.Submissions.ContainsKey(id)) unresolved.Add(id);
-            else if (audit.Submissions.Count > 0 || last.GetProperty("updatedTick").GetInt64() > memory.Tick
+            lastIsJournaled = audit.Submissions.ContainsKey(id);
+            if (lastIsJournaled) unresolved.Add(id);
+            else if (last.GetProperty("updatedTick").GetInt64() > memory.Tick
                 || memory.Pending && last.GetProperty("updatedTick").GetInt64() == memory.Tick)
                 throw new InvalidDataException("The last native operation is outside the pending journal.");
         }
-        else if (audit.Submissions.Count > 0) throw new InvalidDataException("The native last operation is missing.");
+        // If no journaled operation is the engine's latest, none of them may have been accepted: each must be proven absent.
+        if (!lastIsJournaled && audit.Submissions.Count > 0 && audit.Receipts.Count > 0)
+            throw new InvalidDataException("Journaled receipts exist but the engine's last operation is not journaled.");
+        var absent = new HashSet<string>(StringComparer.Ordinal);
         foreach (string id in unresolved)
         {
-            OperationReceipt receipt = await operations.QueryAsync(id, token);
+            OperationReceipt receipt;
+            try { receipt = await operations.QueryAsync(id, token); }
+            catch (GameRpcException error) when (error.Error.Code == "operation_unknown" && !lastIsJournaled)
+            {
+                await ProveNeverDispatchedAsync(id);
+                absent.Add(id);
+                continue;
+            }
             ValidateReceipt(audit.Submissions[id], receipt, memory.Tick);
             if (!receipt.IsTerminal) throw new InvalidDataException("A pending native operation is still active.");
             if (audit.Receipts.TryGetValue(id, out var recorded) && recorded.IsTerminal && !Equivalent(recorded, receipt))
@@ -52,7 +64,7 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
             audit.Receipts[id] = receipt;
             queried.Add(receipt);
         }
-        if (audit.Submissions.Keys.Any(id => !audit.Receipts.TryGetValue(id, out var r) || !r.IsTerminal))
+        if (audit.Submissions.Keys.Any(id => !absent.Contains(id) && (!audit.Receipts.TryGetValue(id, out var r) || !r.IsTerminal)))
             throw new InvalidDataException("Not every submitted operation has a terminal outcome.");
         GameResponse after = await ObserveAsync(memory, token, afterDeath);
         var scope = after.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
@@ -65,9 +77,10 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         string feedback = JsonSerializer.Serialize(new
         {
             outcome = afterDeath ? "actor-death-reconciled" : "interrupted-goal-reconciled", observedTick = after.Tick, goal = audit.Goal, death,
-            submittedOperations = audit.Submissions.Count, nonCompletedOperations = failures.Length,
+            submittedOperations = audit.Submissions.Count, nonCompletedOperations = failures.Length + absent.Count,
             executionFailure = audit.FailureCode,
-            recentOutcomes = failures.TakeLast(3).Select(r => new { r.Kind, r.Status, error = r.Error?.Code, r.UpdatedTick }),
+            recentOutcomes = failures.TakeLast(3).Select(r => new { r.Kind, r.Status, error = r.Error?.Code, UpdatedTick = (long?)r.UpdatedTick })
+                .Concat(absent.Take(3).Select(id => new { audit.Submissions[id].Kind, Status = "never_dispatched", error = (string?)null, UpdatedTick = (long?)null })),
             interpretation = "The previous goal is not certified complete. Partial products remain in the native world. Observe current stocks and research before choosing the next goal; never replay prior mutations."
         }, Protocol.Json);
         if (feedback.Length > 4000) throw new InvalidDataException("Reconciliation feedback exceeds the strategic context budget.");
@@ -86,6 +99,32 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
             Recovery: death ?? memory.Recovery,
             RecoveryDeathObserved: memory.RecoveryDeathObserved || afterDeath && memory.Recovery is not null), token);
         return new(reportPath, audit.Submissions.Count, after.Tick);
+
+        // Receipts are evicted oldest first. While the oldest retained acceptance precedes this attempt,
+        // every operation accepted during the attempt is still retained, so an unknown id was never accepted.
+        async Task ProveNeverDispatchedAsync(string id)
+        {
+            for (int reading = 0; reading < 2; reading++)
+            {
+                if (reading > 0)
+                {
+                    await Task.Delay(500, token);
+                    try
+                    {
+                        await operations.QueryAsync(id, token);
+                        throw new InvalidDataException("A delayed native receipt appeared during reconciliation.");
+                    }
+                    catch (GameRpcException error) when (error.Error.Code == "operation_unknown") { }
+                }
+                var window = await game.ExecuteAsync(GameRequest.Create("receipt_window"), token);
+                if (!window.Ok) throw new GameRpcException(window.Error!);
+                bool evicted = window.Data.GetProperty("evicted").GetBoolean();
+                bool bounded = window.Data.TryGetProperty("oldestAcceptedTick", out var oldest) && oldest.ValueKind == JsonValueKind.Number
+                    && oldest.GetInt64() <= memory.Tick;
+                if (evicted && !bounded)
+                    throw new InvalidDataException("An unknown operation may have been evicted from the native receipt window.");
+            }
+        }
     }
 
     private async Task<GameResponse> ObserveAsync(StrategicMemory memory, CancellationToken token, bool afterDeath)
