@@ -95,7 +95,7 @@ public sealed class StrategicGroundingTests
     }
 
     [Fact]
-    public void AutomationRatesNeedAnEnabledAssemblerRecipeAndTheFactory()
+    public void AutomationRatesNeedAnEnabledAssemblerOrFurnaceBandRecipeAndTheFactory()
     {
         var catalog = Catalogs.Early();
         var goal = Goal() with { Target = "automation-science-pack", Unit = GoalUnit.ItemsPerMinute, Quantity = 6, ObservationId = "observation" };
@@ -103,6 +103,9 @@ public sealed class StrategicGroundingTests
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog, automation: false));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "iron-plate" }, "observation", catalog, automation: true));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 601 }, "observation", catalog, automation: true));
+        // Steel is smelted from plates in furnace bands; ore smelting stays with resource cells on the patch.
+        Assert.Null(StrategicProductionController.GroundingFailure(goal with { Target = "steel-plate" }, "observation", Catalogs.Raw(), automation: true));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "iron-plate" }, "observation", Catalogs.Raw(), automation: true));
     }
 
     private static GoalProposal Goal() => new("observation", "Accumulate iron plates", GoalCategory.Production,

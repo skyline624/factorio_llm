@@ -73,20 +73,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             string chest = cell.Entities["input-chest"];
             var inChest = Items(snapshot, chest);
             foreach (var ingredient in recipe.Ingredients.Where(i => i.DeterministicItem))
-            {
-                long target = checked((long)(ingredient.Amount!.Value * bufferCrafts));
-                long need = target - inChest.GetValueOrDefault(ingredient.Name);
-                if (need <= 0) continue;
-                long give = Math.Min(need, carried.GetValueOrDefault(ingredient.Name));
-                if (give > 0)
-                {
-                    long moved = await TransferAsync("insert", chest, ingredient.Name, give);
-                    carried[ingredient.Name] = carried.GetValueOrDefault(ingredient.Name) - moved;
-                    supplied[ingredient.Name] = supplied.GetValueOrDefault(ingredient.Name) + moved;
-                    need -= moved;
-                }
-                if (need > 0) shortfall[ingredient.Name] = shortfall.GetValueOrDefault(ingredient.Name) + need;
-            }
+                await RefillAsync(chest, ingredient.Name,
+                    checked((long)(ingredient.Amount!.Value * bufferCrafts)) - inChest.GetValueOrDefault(ingredient.Name));
         }
         foreach (var cell in cells.Where(c => c.Kind == "lab"))
         {
@@ -145,11 +133,32 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + stack - loaded - give;
             powerStarved |= power;
         }
+        // Band furnaces burn from their input chest, whose inserter loads the fuel slot; they come after power and burners.
+        foreach (var (cellId, reserve) in await FurnaceBandFuel.ReservesAsync(game, catalog, cells, bufferCrafts, fuel, token))
+        {
+            string chest = cells.Single(c => c.Id == cellId).Entities["input-chest"];
+            await RefillAsync(chest, fuel, reserve - Items(snapshot, chest).GetValueOrDefault(fuel));
+        }
         var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, powerStarved, upkeep, degraded);
         await journal.AppendAsync("factory-logistics", result, token);
         return result;
 
         bool IsSciencePack(string item) => item.EndsWith("-science-pack", StringComparison.Ordinal);
+
+        // Tops a chest up from carried stock; what the actor lacks is reported as shortfall.
+        async Task RefillAsync(string chest, string item, long need)
+        {
+            if (need <= 0) return;
+            long give = Math.Min(need, carried.GetValueOrDefault(item));
+            if (give > 0)
+            {
+                long moved = await TransferAsync("insert", chest, item, give);
+                carried[item] = carried.GetValueOrDefault(item) - moved;
+                supplied[item] = supplied.GetValueOrDefault(item) + moved;
+                need -= moved;
+            }
+            if (need > 0) shortfall[item] = shortfall.GetValueOrDefault(item) + need;
+        }
 
         async Task<long> TransferAsync(string kind, string entityId, string item, long count, string inventory = "chest")
         {
@@ -174,11 +183,12 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
 
     /// <summary>
     /// Boilers and every fuelled entity of a cell (furnaces, burner drills) with the fuel they hold, by native id.
-    /// Boilers are power sources: their starvation stops every electric cell.
+    /// Boilers are power sources: their starvation stops every electric cell. Band furnaces are fuelled through their
+    /// input chest, never by hand.
     /// </summary>
     internal static IReadOnlyList<(string EntityId, long Loaded, bool PowerSource)> Burners(FactorySnapshot snapshot, IEnumerable<FactoryCell> cells)
     {
-        var cellIds = cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
+        var cellIds = cells.Where(c => c.Kind != FurnaceCellPlanner.Kind).SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
         return snapshot.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "factory"
                 && r.Data.TryGetProperty("fuelInventoryId", out _)
                 && (r.Data.GetProperty("type").GetString() == "boiler" || cellIds.Contains(r.EntityId)))

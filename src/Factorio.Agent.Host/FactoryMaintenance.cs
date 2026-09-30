@@ -69,7 +69,7 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
                 carried[item] = carried.GetValueOrDefault(item) - 1;
                 actions++;
             }
-            if (missing.Role == "machine" && missing.Cell.Recipe is not null)
+            if (missing.Role == "machine" && FactoryCellBuilder.Configured(missing.Cell.Kind, missing.Cell.Recipe))
             {
                 var configured = await controller.WorkAsync("set_recipe", new { entityId = id, recipe = missing.Cell.Recipe }, 600, token: token);
                 actions++;

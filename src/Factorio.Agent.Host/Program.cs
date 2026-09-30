@@ -30,9 +30,10 @@ try
           research --session FILE --technology NAME
           launch-rocket --session FILE --item NAME
           deploy-defense --session FILE --item NAME --quantity N
-          factory-cell --session FILE --kind assembler|lab --machine ITEM [--recipe NAME]
+          factory-cell --session FILE --kind assembler|furnace|lab --machine ITEM [--recipe NAME]
           factory-logistics --session FILE [--quantity CRAFTS]
           verify-factory-cells|verify-factory-research|verify-resource-cells|verify-power-expansion --session FILE
+          verify-furnace-bands --session FILE
           resource-cells --session FILE --item NAME --quantity PER_MINUTE
           power-expand --session FILE
           perimeter-defense --session FILE [--item WALL] [--layers 1|2]
@@ -161,6 +162,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new FactoryCellQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-furnace-bands":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new FurnaceBandQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "deploy-defense":
