@@ -23,9 +23,17 @@ public sealed record RetreatPlan(string Status, string? RefugeId = null, MapPosi
 /// <summary>Bounded local route toward observed ammunition coverage; never a guarantee of escaping faster enemies.</summary>
 public sealed class RetreatPlanner
 {
+    /// <summary>Visible enemies from which the actor stops trading health for kills.</summary>
+    public const int OutnumberedEnemies = 3;
+
+    /// <summary>
+    /// Retreat at critical health, when unarmed, or when outnumbered and already hurt: on 2026-10-01 (seed 20261002) a pack
+    /// took the actor from above 40% to 27% health within one observation and it died on its way to a turret.
+    /// </summary>
     public static bool Needed(SafetyObservation state) => state.Alive && state.ControlMode == "ai" && !state.StopUnconfirmed
         && state.Health > 0 && state.Position is not null && state.LocalEnemiesComplete && state.Enemies.Count > 0
-        && (state.MaxHealth is { } maximum && state.Health <= maximum * .4
+        && (state.MaxHealth is { } maximum && (state.Health <= maximum * .4
+                || state.Enemies.Count >= OutnumberedEnemies && state.Health <= maximum * .75)
             || !state.Weapon.Ready && EquipmentPolicy.Select(state) is null);
 
     public RetreatPlan Find(SafetyObservation state, SpatialSnapshot map, CancellationToken token = default)
