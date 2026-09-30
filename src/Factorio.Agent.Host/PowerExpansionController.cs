@@ -18,6 +18,11 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
     public const int MaximumSteps = 4;
     /// <summary>Power cells live beside the steam installation, outside any factory band.</summary>
     public const int PowerZone = 0;
+    /// <summary>
+    /// Units kept free ahead of each boiler chain for factory bands, feeders and poles. A band placed just past the next unit
+    /// blocks every later one; eight units (about 14 MW of steam) leave the factory room to grow before other energy sources.
+    /// </summary>
+    public const int ReservedUnits = 8;
     private const string Fuel = "coal";
 
     public async Task<PowerState> ObserveAsync(CancellationToken token) =>
@@ -116,12 +121,15 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         foreach (var link in plan.Links) SteamPowerController.VerifyLink(map, Id(link.Source), Id(link.Target), link.Connection);
         await journal.AppendAsync("power-fluid-links", new { plan.Links, ids, map.CollectedTick }, token);
 
-        if (ids.TryGetValue("boiler", out var boilerId)) await StartBoilerAsync(boilerId, map.Entities.Single(e => e.Id == boilerId).Position, catalog, controller, token);
+        // A completed boiler may be one an interrupted step left dry, with engines never joined: light it and join its whole chain.
+        string boilerId = ids.GetValueOrDefault("boiler", plan.BoilerId);
+        await StartBoilerAsync(boilerId, map.Entities.Single(e => e.Id == boilerId).Position, catalog, controller, token);
+        var engines = PowerExpansionPlanner.Chains(map, force).SingleOrDefault(c => c.Boiler.Id == boilerId)?.Engines.Select(e => e.Id).ToArray()
+            ?? throw new InvalidDataException("The expanded boiler's steam chain is not observed.");
         // A source that already powers the main network nearby defines the network the new engines must join.
         string reference = map.Entities.Where(e => network.Sources.Any(s => s.Id == e.Id) && !ids.ContainsValue(e.Id))
             .OrderBy(e => e.Position.DistanceTo(anchor.Position)).Select(e => e.Id).FirstOrDefault()
             ?? throw new InvalidDataException("No source of the main network is observed near the expansion.");
-        var engines = plan.Machines.Where(m => m.Role.StartsWith("engine", StringComparison.Ordinal)).Select(m => ids[m.Role]).ToArray();
         foreach (var engine in engines) await LinkAsync(engine, reference, items, catalog, controller, token);
         long tick = await ProveGenerationAsync(engines, reference, items, catalog, controller, token);
         return new(plan.Kind, plan.BoilerId, ids, engines, tick);
@@ -142,7 +150,7 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
             string force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
             var owned = map.Entities.Where(e => e.Force == force && e.Power?.NetworkId == network).Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
             var planning = await PlanningAsync(map, items, catalog, token);
-            var next = new PowerGridPlanner().Next(new PowerExpansionPlanner().ReserveGrowth(planning, items.Boiler, items.Engine, force),
+            var next = new PowerGridPlanner().Next(new PowerExpansionPlanner().ReserveGrowth(planning, items.Boiler, items.Engine, force, ReservedUnits),
                 items.Pole, target.Bounds, owned, token);
             if (next.Status is PowerGridSearchStatus.NoObservedPath) next = new PowerGridPlanner().Next(planning, items.Pole, target.Bounds, owned, token);
             await journal.AppendAsync("power-link", new { targetId, referenceId, network, next, map.CollectedTick }, token);
@@ -211,24 +219,32 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
 
     /// <summary>
     /// Gives every boiler of the network a chest and inserter feeder, reusing an observed feeder, and records it as a power cell.
-    /// Registered boilers are not revisited, so this costs a trip only for new or migrated boilers.
+    /// Registered boilers are not revisited while their feeder is observed, so this costs a trip only for new, migrated or
+    /// damaged feeders; a destroyed chest or inserter is rebuilt and the cell registered again under the same id.
     /// </summary>
     private async Task<IReadOnlyList<FactoryCell>> EnsureFeedersAsync(PowerState state, ElectricNetworkState network, ProductionCatalog catalog,
         SpatialController controller, CancellationToken token)
     {
         var registry = new FactoryRegistry(directory);
         var items = Items(catalog, state, network);
+        var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        Require(snapshot.Scope, catalog);
         foreach (var boiler in Boilers(state, network).OrderBy(b => b.Id, StringComparer.Ordinal))
         {
             var known = await registry.LoadAsync(catalog.Scope.WorldId, token);
-            if (known.Cells.Any(c => c.Kind == "power" && c.Status == "ready" && c.Entities.GetValueOrDefault("boiler") == boiler.Id)) continue;
+            if (known.Cells.FirstOrDefault(c => c.Kind == "power" && c.Status == "ready" && c.Entities.GetValueOrDefault("boiler") == boiler.Id) is { } registered)
+            {
+                var missing = FactoryLogistics.Missing(snapshot, registered);
+                if (missing.Length == 0) continue;
+                await journal.AppendAsync("power-cell-missing", new { registered.Id, missing, snapshot.CollectedTick }, token);
+            }
             await controller.TravelAsync(boiler.Position, 6, catalog, token);
             var map = await CaptureAsync(items, catalog, token);
             string force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
             long networkId = map.Entities.Where(e => boiler.GeneratorIds.Contains(e.Id)).Select(e => e.Power?.NetworkId).FirstOrDefault(n => n is not null)
                 ?? throw new InvalidDataException("The boiler's generators are not observed on a network.");
             var planning = await PlanningAsync(map, items, catalog, token);
-            var feeder = new FuelFeederPlanner().Find(new PowerExpansionPlanner().ReserveGrowth(planning, items.Boiler, items.Engine, force),
+            var feeder = new FuelFeederPlanner().Find(new PowerExpansionPlanner().ReserveGrowth(planning, items.Boiler, items.Engine, force, ReservedUnits),
                 items.Chest, items.Inserter, boiler.Id, networkId, items.Pole)
                 ?? new FuelFeederPlanner().Find(planning, items.Chest, items.Inserter, boiler.Id, networkId, items.Pole);
             if (feeder is null)
@@ -273,16 +289,34 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         return (await registry.LoadAsync(catalog.Scope.WorldId, token)).Cells.Where(c => c.Kind == "power").ToArray();
     }
 
+    private async Task<SpatialSnapshot> PlanningAsync(SpatialSnapshot map, SteamItems items, ProductionCatalog catalog, CancellationToken token) =>
+        Planning(map, (await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token)).Zones, items.Pole);
+
     /// <summary>Observed terrain for planning: the actor moves and removable obstacles are mined, but factory bands stay reserved.</summary>
-    private async Task<SpatialSnapshot> PlanningAsync(SpatialSnapshot map, SteamItems items, ProductionCatalog catalog, CancellationToken token)
+    internal static SpatialSnapshot Planning(SpatialSnapshot map, IEnumerable<FactoryZone> zones, string poleItem)
     {
         var planning = map with
         {
             Entities = map.Entities.Where(e => e.Id != map.Actor.Id && !FactoryZonePlanner.Removable.Contains(map.Prototypes[e.Name].Type)).ToArray()
         };
-        foreach (var zone in (await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token)).Zones)
-            planning = FactoryCellBuilder.ReserveZone(planning, zone, items.Pole);
+        foreach (var zone in zones) planning = FactoryCellBuilder.ReserveZone(planning, zone, poleItem);
         return planning;
+    }
+
+    /// <summary>
+    /// Marks the steam installation's future units as occupied on an observed map. They are planned on cleared terrain with the
+    /// factory bands reserved, as later expansion steps plan them, so a new band or its power link never takes their room.
+    /// </summary>
+    internal static SpatialSnapshot ReserveGrowth(SpatialSnapshot map, SteamItems steam, IEnumerable<FactoryZone> zones, string force,
+        int units = ReservedUnits) =>
+        map with { Entities = [.. map.Entities, .. new PowerExpansionPlanner().Growth(Planning(map, zones, steam.Pole), steam.Boiler, steam.Engine, force, units)] };
+
+    /// <summary>The observed steam installation's items, or null when the main network has no boiler to grow (e.g. an injected source).</summary>
+    internal async Task<SteamItems?> SteamItemsAsync(ProductionCatalog catalog, CancellationToken token)
+    {
+        var state = await ObserveAsync(token);
+        Require(state.Scope, catalog);
+        return state.Main() is { } network && Boilers(state, network).Count > 0 ? Items(catalog, state, network) : null;
     }
 
     private async Task ClearAsync(IReadOnlyList<WorldBox> boxes, SteamItems items, ProductionCatalog catalog, SpatialController controller,
@@ -318,6 +352,7 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
     internal sealed record SteamItems(string Boiler, string Engine, string Pole, string Chest, string Inserter)
     {
         public string[] All => [Boiler, Engine, Pole, Chest, Inserter];
+        public string[] Machines => [Boiler, Engine];
     }
 
     /// <summary>Expansion reuses the observed boiler and generator prototypes and the best craftable cell equipment.</summary>

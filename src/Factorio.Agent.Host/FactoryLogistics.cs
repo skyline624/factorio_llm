@@ -28,8 +28,10 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         FactorySnapshot snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
 
+        var reported = new HashSet<string>(StringComparer.Ordinal);
         foreach (var cell in cells.Where(c => c.Entities.ContainsKey("output-chest")))
         {
+            if (await MissingAsync(cell)) continue;
             string chest = cell.Entities["output-chest"];
             foreach (var (item, count) in Items(snapshot, chest).Where(p => p.Value > 0))
             {
@@ -43,6 +45,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         var carried = Carried(snapshot);
         foreach (var cell in cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest")))
         {
+            if (await MissingAsync(cell)) continue;
             NativeRecipe recipe = catalog.Recipes.Single(r => r.Name == cell.Recipe);
             string chest = cell.Entities["input-chest"];
             var inChest = Items(snapshot, chest);
@@ -64,6 +67,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         }
         foreach (var cell in cells.Where(c => c.Kind == "lab"))
         {
+            if (await MissingAsync(cell)) continue;
             string lab = cell.Entities["machine"];
             var loaded = Items(snapshot, lab);
             foreach (var pack in carried.Keys.Where(IsSciencePack).ToArray())
@@ -79,25 +83,30 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         const string fuel = "coal";
         foreach (var cell in cells.Where(c => c.Kind == "power" && c.Entities.ContainsKey("input-chest")))
         {
+            if (await MissingAsync(cell)) continue;
             string chest = cell.Entities["input-chest"];
             var inChest = Items(snapshot, chest);
-            long need = PowerFuelNeed(inChest, fuel, catalog.Items[fuel].StackSize);
+            long stack = catalog.Items[fuel].StackSize, moved = 0;
+            long need = PowerFuelNeed(inChest, fuel, stack);
             if (need == 0 && inChest.Keys.Any(k => k != fuel))
                 await journal.AppendAsync("factory-power-chest-mixed", new { cell.Id, chest, inChest }, token);
             long give = Math.Min(need, carried.GetValueOrDefault(fuel));
             if (give > 0)
             {
-                long moved = await TransferAsync("insert", chest, fuel, give);
+                moved = await TransferAsync("insert", chest, fuel, give);
                 carried[fuel] = carried.GetValueOrDefault(fuel) - moved;
                 supplied[fuel] = supplied.GetValueOrDefault(fuel) + moved;
                 need -= moved;
             }
-            if (need > 0) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + need;
+            long burning = cell.Entities.TryGetValue("boiler", out var boiler) ? Items(snapshot, boiler).GetValueOrDefault(fuel) : 0;
+            long missing = PowerFuelShortfall(need, inChest.GetValueOrDefault(fuel) + moved + burning, stack);
+            if (missing > 0) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + missing;
         }
         // Steam supply and cell furnaces stop without fuel. Keep each burner above a quarter stack of coal.
         var cellIds = cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
-        var fedBoilers = cells.Where(c => c.Kind == "power").Select(c => c.Entities.GetValueOrDefault("boiler")).OfType<string>()
-            .ToHashSet(StringComparer.Ordinal);
+        // A boiler whose feeder is gone is unfed again and falls back to the quarter-stack rule.
+        var fedBoilers = cells.Where(c => c.Kind == "power" && Missing(snapshot, c).Length == 0)
+            .Select(c => c.Entities.GetValueOrDefault("boiler")).OfType<string>().ToHashSet(StringComparer.Ordinal);
         foreach (var burner in snapshot.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "factory"
             && r.Data.TryGetProperty("fuelInventoryId", out _)
             && (r.Data.GetProperty("type").GetString() == "boiler" || cellIds.Contains(r.EntityId))))
@@ -123,6 +132,15 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
 
         bool IsSciencePack(string item) => item.EndsWith("-science-pack", StringComparison.Ordinal);
 
+        // A cell whose registered entity is gone, e.g. destroyed by enemies, is journaled once and never serviced blindly.
+        async Task<bool> MissingAsync(FactoryCell cell)
+        {
+            var missing = Missing(snapshot, cell);
+            if (missing.Length > 0 && reported.Add(cell.Id))
+                await journal.AppendAsync("factory-cell-missing", new { cell.Id, cell.Kind, missing, snapshot.CollectedTick }, token);
+            return missing.Length > 0;
+        }
+
         async Task<long> TransferAsync(string kind, string entityId, string item, long count, string inventory = "chest")
         {
             var entity = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == entityId);
@@ -143,6 +161,16 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// <summary>Fuel a feeder chest still needs to reach the target; a chest holding anything else is never topped up.</summary>
     internal static long PowerFuelNeed(IReadOnlyDictionary<string, long> chest, string fuel, long target) =>
         chest.Any(p => p.Key != fuel && p.Value > 0) ? 0 : Math.Max(0, target - chest.GetValueOrDefault(fuel));
+
+    /// <summary>
+    /// Coal worth a procurement trip for a feeder. Chests are topped up to a stack whenever coal is carried, but only a supply
+    /// below a quarter stack, chest and boiler together, is reported short: small refills must not make the actor a coal miner.
+    /// </summary>
+    internal static long PowerFuelShortfall(long need, long supply, long stack) => supply < stack / 4 ? need : 0;
+
+    /// <summary>Registered entities of a cell that the native photograph no longer shows.</summary>
+    internal static string[] Missing(FactorySnapshot snapshot, FactoryCell cell) =>
+        cell.Entities.Values.Where(id => !snapshot.Records.Any(r => r.Kind == "entity" && r.EntityId == id)).ToArray();
 
     /// <summary>A boiler with a feeder cell burns from its chest; the actor only restarts it after it ran completely dry.</summary>
     internal static bool NeedsDirectFuel(bool fedByCell, long loaded, long stack) => fedByCell ? loaded == 0 : loaded < stack / 4;

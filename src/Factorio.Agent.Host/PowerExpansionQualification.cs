@@ -6,8 +6,10 @@ namespace Factorio.Agent.Host;
 
 /// <summary>
 /// Prepared fixture: a shore, supplied steam construction items and coal, and a script-configured electric load.
-/// Proves that measured demand grows the first steam supply to several boilers and engines, that every boiler and
-/// engine produces under load, and that factory logistics refills the boiler feeder chests. Not a campaign.
+/// Proves that measured demand grows the first steam supply to several boilers and engines, that a unit interrupted
+/// after its boiler is completed with that dry boiler lit and all its engines joined, that a factory band
+/// placed beside the installation leaves its reserved growth free, that every boiler and engine produces under load,
+/// and that factory logistics refills the boiler feeder chests. Not a campaign.
 /// </summary>
 public sealed class PowerExpansionQualification(RuntimeSession session)
 {
@@ -27,10 +29,10 @@ public sealed class PowerExpansionQualification(RuntimeSession session)
         try
         {
             var mark = await game.ExecuteAsync(GameRequest.Create("mark_fixture", new
-            { reason = "Shore tiles, steam construction items, 400 coal and a configured electric load. Power expansion test, not a campaign." }), token);
+            { reason = "Shore tiles, steam and cell construction items, 400 coal and a configured electric load. Power expansion test, not a campaign." }), token);
             Require(mark.Ok, "Fixture marker rejected.");
             const string prepare = """
-                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; for _,e in pairs(s.find_entities_filtered{area={{-48,-48},{48,48}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-48,48 do for y=-48,48 do tiles[#tiles+1]={name=(y<=-9) and 'water' or 'grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({0,0})); c.health=c.max_health; c.get_main_inventory().clear(); for _,t in pairs{'steam-power','electronics','automation'} do f.technologies[t].researched=true end; for name,count in pairs{['offshore-pump']=1,boiler=3,['steam-engine']=6,['small-electric-pole']=30,inserter=6,['iron-chest']=6,coal=400} do assert(c.insert{name=name,count=count}==count) end; local load=s.create_entity{name='electric-energy-interface',position={24,20},force=f}; assert(load); load.power_production=0; load.power_usage=0; load.electric_buffer_size=0; rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,load=load.unit_number,position=load.position})
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; for _,e in pairs(s.find_entities_filtered{area={{-48,-48},{48,48}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-48,48 do for y=-48,48 do tiles[#tiles+1]={name=(y<=-9) and 'water' or 'grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({0,0})); c.health=c.max_health; c.get_main_inventory().clear(); for _,t in pairs{'steam-power','electronics','automation'} do f.technologies[t].researched=true end; for name,count in pairs{['offshore-pump']=1,boiler=3,['steam-engine']=6,['small-electric-pole']=40,inserter=6,['iron-chest']=6,['assembling-machine-1']=1,coal=400} do assert(c.insert{name=name,count=count}==count) end; local load=s.create_entity{name='electric-energy-interface',position={24,20},force=f}; assert(load); load.power_production=0; load.power_usage=0; load.electric_buffer_size=0; rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,load=load.unit_number,position=load.position})
                 """;
             using var setup = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(prepare, token));
             File.Delete(new FactoryRegistry(session.Directory).Path); // The fixture area was just emptied.
@@ -63,7 +65,23 @@ public sealed class PowerExpansionQualification(RuntimeSession session)
             Require(boilers.Length >= 2 && generators.Length >= 4, "The installation did not grow to at least two boilers and four engines.");
             Require(expansion.PowerCells.Count >= boilers.Length, "Not every boiler became a chest-fed power cell.");
 
+            // An interrupted unit: only its boiler is built, never fuelled nor fed, since no engine of it reaches the network.
+            var items = await power.ItemsAsync(token);
+            var partial = new Dictionary<string, string>(StringComparer.Ordinal);
+            await using (var controller = new SpatialController(game, journal))
+            {
+                var (map, force) = await CaptureNearAsync(controller, boilers.OrderBy(b => b.Id, StringComparer.Ordinal).First().Id, grown);
+                var zones = (await new FactoryRegistry(session.Directory).LoadAsync(catalog.Scope.WorldId, token)).Zones;
+                var unit = new PowerExpansionPlanner().Next(PowerExpansionController.Planning(map, zones, items.Pole), items.Boiler, items.Engine, force);
+                Require(unit?.Kind == "unit", "The next expansion step is not a new unit.");
+                partial["boiler"] = await new PoweredMachineController(game, journal).BuildAtAsync(unit!.Machines[0].Item, unit.Machines[0].Placement,
+                    catalog, controller, token, unit.Machines.Skip(1).Select(m => m.Placement.Position).ToArray());
+                evidence.Add(new { check = "interrupted-unit", unit, partial });
+            }
+
             // The factory director asks the same question before building cells: enough planned assemblers to pass 80 % must grow power first.
+            grown = await power.ObserveAsync(token);
+            network = grown.Main()!;
             var budget = grown.Budget(network);
             var cellMap = await new SpatialClient(game).CaptureAsync(["assembling-machine-1", "inserter"], 4, token);
             double perCell = PowerExpansionController.CellDemand(cellMap, FactoryCellBuilder.Equipment(catalog, "assembling-machine-1"), io: true);
@@ -73,12 +91,28 @@ public sealed class PowerExpansionQualification(RuntimeSession session)
             evidence.Add(new { check = "projected-cell-demand", cells, perCell, projected });
             Require(projected.Before.Exceeded(projected.AdditionalPerTick) && projected.Steps.Count >= 1 && !projected.After.Exceeded(projected.AdditionalPerTick),
                 "Projected cell demand did not grow power before the cells were built.");
+            var completed = projected.Steps[0];
+            Require(completed.Kind == "complete" && completed.AnchorBoilerId == partial["boiler"] && completed.Engines.Count == 2,
+                "The interrupted unit's dry boiler was not completed with generating engines.");
             grown = await power.ObserveAsync(token);
             network = grown.Main()!;
             generators = network.Sources.Where(s => s.Type == "generator").ToArray();
             boilers = grown.Boilers.Where(b => b.GeneratorIds.Any(id => generators.Any(g => g.Id == id))).ToArray();
             string[] chests = projected.PowerCells.Select(c => c.Entities["input-chest"]).ToArray();
             Require(chests.Length >= boilers.Length, "Not every boiler became a chest-fed power cell after projected growth.");
+
+            // A factory band placed next to the installation must leave all its reserved units buildable.
+            var cell = await new FactoryCellBuilder(game, journal, session.Directory).BuildAsync("assembler", "assembling-machine-1", "iron-gear-wheel", token);
+            await using (var controller = new SpatialController(game, journal))
+            {
+                var (map, force) = await CaptureNearAsync(controller, boilers.OrderBy(b => b.Id, StringComparer.Ordinal).First().Id, grown);
+                var zones = (await new FactoryRegistry(session.Directory).LoadAsync(catalog.Scope.WorldId, token)).Zones;
+                var growth = new PowerExpansionPlanner().Growth(PowerExpansionController.Planning(map, zones, items.Pole), items.Boiler, items.Engine, force,
+                    PowerExpansionController.ReservedUnits);
+                int units = growth.Count(e => map.Prototypes[e.Name].Type == "boiler");
+                evidence.Add(new { check = "band-leaves-steam-growth", cell, zones, units, growth = growth.Select(e => new { e.Name, e.Position, e.Direction }) });
+                Require(units == PowerExpansionController.ReservedUnits, "The factory band blocks the installation's reserved growth.");
+            }
 
             var logistics = new FactoryLogistics(game, journal, session.Directory);
             var fill = await logistics.ServiceAsync(40, token);
@@ -112,6 +146,13 @@ public sealed class PowerExpansionQualification(RuntimeSession session)
             finally { foreach (var row in rows) row.Dispose(); }
             passed = true;
             return path;
+
+            async Task<(SpatialSnapshot Map, string Force)> CaptureNearAsync(SpatialController controller, string boilerId, PowerState state)
+            {
+                await controller.TravelAsync(state.Boilers.Single(b => b.Id == boilerId).Position, 6, catalog, token);
+                var map = await new SpatialClient(game).CaptureAsync(items.All, 48, token);
+                return (map, map.Entities.Single(e => e.Id == map.Actor.Id).Force);
+            }
 
             async Task<Dictionary<string, long>> ChestsAsync()
             {

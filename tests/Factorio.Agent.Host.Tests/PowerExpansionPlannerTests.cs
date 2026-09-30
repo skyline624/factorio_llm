@@ -85,6 +85,139 @@ public sealed class PowerExpansionPlannerTests
         Assert.True(map.Entities.Single(e => e.Id == "boiler1").Bounds.Contains(feeder.Drop));
     }
 
+    [Fact]
+    public void BoilersWithoutAnObservedWaterSupplyAreNeverGrown()
+    {
+        // A stray boiler (aborted build) sorts before the installation; growing it would build engines that never run.
+        var stray = Entity("a-stray", "boiler", new(-9.5, 10), 0);
+        var map = Shore([.. CompleteSupply(), stray]);
+        Assert.Equal(["boiler1"], PowerExpansionPlanner.Chains(map, Force).Select(c => c.Boiler.Id));
+        var plan = new PowerExpansionPlanner().Next(map, "boiler", "steam-engine", Force)!;
+        Assert.Equal(("unit", "boiler1"), (plan.Kind, plan.BoilerId));
+        Assert.DoesNotContain(new PowerExpansionPlanner().Growth(map, "boiler", "steam-engine", Force, 2), e => e.Id.Contains("a-stray"));
+
+        // Without its offshore pump, even the installation's boiler receives no water.
+        var dry = Shore(CompleteSupply().Where(e => e.Id != "pump").ToArray());
+        Assert.Empty(PowerExpansionPlanner.Chains(dry, Force));
+        Assert.Null(new PowerExpansionPlanner().Next(dry, "boiler", "steam-engine", Force));
+    }
+
+    [Fact]
+    public void AnInterruptedUnitIsCompletedFromItsWateredBoiler()
+    {
+        var map = Shore(CompleteSupply());
+        var unit = new PowerExpansionPlanner().Next(map, "boiler", "steam-engine", Force)!;
+        var interrupted = Build(map, unit with { Machines = unit.Machines.Take(2).ToArray(), Links = unit.Links.Take(2).ToArray() }, "u1");
+        var plan = new PowerExpansionPlanner().Next(interrupted, "boiler", "steam-engine", Force)!;
+        Assert.Equal(("complete", "u1:boiler"), (plan.Kind, plan.BoilerId));
+        var engine = Assert.Single(plan.Machines);
+        Assert.Equal(unit.Machines[2].Placement.Position, engine.Placement.Position);
+        Assert.Equal("u1:engine-1", Assert.Single(plan.Links).Source);
+    }
+
+    [Theory]
+    [InlineData(-15)]
+    [InlineData(15)]
+    public void NewUnitsAlternateSidesWhereverTheActorStands(double actorX)
+    {
+        var map = Shore(CompleteSupply());
+        map = map with { Actor = map.Actor with { Position = new(actorX, 6) } };
+        var plan = new PowerExpansionPlanner().Next(map, "boiler", "steam-engine", Force)!;
+        // boiler1 faces east with its engines; the new boiler faces west so each engine row keeps a free neighbour row.
+        Assert.Equal((new MapPosition(0, 5.5), 12), (plan.Machines[0].Placement.Position, plan.Machines[0].Placement.Direction));
+        Assert.All(plan.Machines.Skip(1), m => Assert.True(m.Placement.Position.X < 0, m.ToString()));
+    }
+
+    [Fact]
+    public void ReservedGrowthIsTheSequenceOfUnitsLaterStepsBuild()
+    {
+        var map = Shore(CompleteSupply());
+        var planner = new PowerExpansionPlanner();
+        var growth = planner.Growth(map, "boiler", "steam-engine", Force, 3);
+        Assert.Equal(9, growth.Count);
+        for (int unit = 0; unit < 3; unit++)
+        {
+            var plan = planner.Next(map, "boiler", "steam-engine", Force)!;
+            Assert.Equal("unit", plan.Kind);
+            Assert.Equal(growth.Skip(3 * unit).Take(3).Select(e => e.Bounds), plan.Machines.Select(m => Box(map, m.Item, m.Placement)));
+            map = Build(map, plan, $"u{unit}");
+        }
+    }
+
+    [Fact]
+    public void AnUnderEquippedBoilerReservesItsMissingEnginesBeforeNewUnits()
+    {
+        var map = Shore(FirstSupply());
+        var complete = new PowerExpansionPlanner().Next(map, "boiler", "steam-engine", Force)!;
+        var growth = new PowerExpansionPlanner().Growth(map, "boiler", "steam-engine", Force, 1);
+        Assert.Equal(4, growth.Count);
+        Assert.Equal(Box(map, "steam-engine", Assert.Single(complete.Machines).Placement), growth[0].Bounds);
+    }
+
+    [Fact]
+    public void FactoryBandsLeaveRoomForSeveralFutureUnits()
+    {
+        var map = FactoryMaps.Grass(40, CompleteSupply(), (_, y) => y < 0 ? "water" : "grass");
+        var machine = map.Prototypes["assembling-machine-1"];
+        var pole = map.Entities.Single(e => e.Id == "pole").Position;
+        var planner = new PowerExpansionPlanner();
+        var next = planner.Next(map, "boiler", "steam-engine", Force)!;
+        WorldBox Band(FactoryZoneSite site) => new(site.Origin, new(site.Origin.X + site.Slots * FactoryBandPlanner.Pitch(machine),
+            site.Origin.Y + FactoryBandPlanner.BandHeight(machine)));
+        // Nearest to the network, an unreserved band lands on the only free water port.
+        var raw = new FactoryZonePlanner().Find(map, machine, pole, FactoryCellBuilder.ZoneSlots)!;
+        Assert.Contains(next.Machines, m => Box(map, m.Item, m.Placement).Overlaps(Band(raw)));
+
+        var steam = new PowerExpansionController.SteamItems("boiler", "steam-engine", "small-electric-pole", "iron-chest", "inserter");
+        const int units = 6;
+        var site = new FactoryZonePlanner().Find(PowerExpansionController.ReserveGrowth(map, steam, [], Force, units), machine, pole,
+            FactoryCellBuilder.ZoneSlots)!;
+        var zone = new FactoryZone(1, site.Origin, site.Slots, FactoryBandPlanner.Pitch(machine), FactoryBandPlanner.BandHeight(machine));
+        for (int unit = 0; unit < units; unit++)
+        {
+            var plan = planner.Next(FactoryCellBuilder.ReserveZone(map, zone, steam.Pole), "boiler", "steam-engine", Force);
+            Assert.Equal("unit", plan?.Kind);
+            Assert.DoesNotContain(plan!.Machines, m => Box(map, m.Item, m.Placement).Overlaps(Band(site)));
+            map = Build(map, plan, $"u{unit}");
+        }
+    }
+
+    [Fact]
+    public void GrowthReservedOverAnAlreadyReservedBandCountsTheBandOnce()
+    {
+        // A band's power link reserves its own band, then the steam growth planned with every registered band.
+        var map = FactoryMaps.Grass(40, CompleteSupply(), (_, y) => y < 0 ? "water" : "grass");
+        var zone = new FactoryZone(1, new(14, 1), 8, 3, 12);
+        var steam = new PowerExpansionController.SteamItems("boiler", "steam-engine", "small-electric-pole", "iron-chest", "inserter");
+        var reserved = FactoryCellBuilder.ReserveZone(map, zone, steam.Pole);
+        Assert.Same(reserved, FactoryCellBuilder.ReserveZone(reserved, zone, steam.Pole));
+        var both = PowerExpansionController.ReserveGrowth(reserved, steam, [zone], Force, 2);
+        Assert.Single(both.Entities, e => e.Id == "factory-zone-reservation:1");
+        Assert.Equal(6, both.Entities.Count - reserved.Entities.Count);
+    }
+
+    /// <summary>The observation after a plan is built: planned machines become entities whose native ports connect as planned.</summary>
+    private static SpatialSnapshot Build(SpatialSnapshot map, SteamExpansionPlan plan, string prefix)
+    {
+        var entities = map.Entities.ToList();
+        string Id(string reference) => plan.Machines.Any(m => m.Role == reference) ? $"{prefix}:{reference}" : reference;
+        foreach (var machine in plan.Machines)
+            entities.Add(Entity(Id(machine.Role), machine.Item, machine.Placement.Position, machine.Placement.Direction));
+        foreach (var (source, target, c) in plan.Links)
+        {
+            Connect(Id(source), Link(c.SourceBox, c.SourcePort, c.SourcePosition, c.TargetPosition, Id(target), c.TargetBox));
+            Connect(Id(target), Link(c.TargetBox, c.TargetPort, c.TargetPosition, c.SourcePosition, Id(source), c.SourceBox));
+        }
+        return map with { Entities = entities };
+
+        void Connect(string id, ObservedFluidConnection link)
+        {
+            int index = entities.FindIndex(e => e.Id == id);
+            var kept = (entities[index].FluidConnections ?? []).Where(c => c.Position != link.Position || c.TargetPosition != link.TargetPosition);
+            entities[index] = entities[index] with { FluidConnections = [.. kept, link] };
+        }
+    }
+
     private static void AssertBuildable(SpatialSnapshot map, SteamExpansionPlan plan)
     {
         foreach (var machine in plan.Machines)
