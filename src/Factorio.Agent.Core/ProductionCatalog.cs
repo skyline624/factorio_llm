@@ -29,7 +29,8 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
     IReadOnlyDictionary<string, NativeItem> Items, IReadOnlyDictionary<string, NativeMaterial[]> Mining,
     IReadOnlyDictionary<string, NativeFurnace> Machines, IReadOnlyDictionary<string, bool> HandCategories,
     IReadOnlyDictionary<string, NativeAssembler>? Assemblers = null,
-    IReadOnlyDictionary<string, string>? MiningSourceTypes = null, IReadOnlyDictionary<string, NativeTurret>? Turrets = null)
+    IReadOnlyDictionary<string, string>? MiningSourceTypes = null, IReadOnlyDictionary<string, NativeTurret>? Turrets = null,
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? TerrainFluids = null)
 {
     public bool CanHandCraft(NativeRecipe recipe) => !recipe.HandCraftingDisabled && HandCategories.ContainsKey(recipe.Category);
 

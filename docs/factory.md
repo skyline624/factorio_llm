@@ -96,6 +96,5 @@ La partie reste assistée : le contrôleur a été relancé à la main après le
 ## Limites connues
 
 - Les cellules sont alimentées par coffre et par un seul inserteur de base de chaque côté. Les recettes gourmandes demandent donc plusieurs cellules.
-- La logistique repose sur le personnage, sans tapis entre les cellules.
-- L'acier et les briques en bande, ainsi que la chimie pétrolière persistante, sont en cours de développement. Les recettes à fluides ne sont pas encore couvertes.
-- Le coût en trajets de la logistique croît avec le nombre de cellules. Un regroupement par proximité et des seuils de remplissage restent à ajouter.
+- La logistique repose sur le personnage, sans tapis entre les cellules. Le coût en trajets croît avec le nombre de cellules.
+- Les recettes à fluides (pétrole, chimie) restent hors des bandes : elles forment des [cellules de chimie du pétrole](oil-chemistry.md) en zone 0, avec tuyaux calculés et coffres desservis par la même logistique. Les assembleurs alimentés en fluide (processeurs, moteurs électriques, carburant de fusée, béton) et le raffinage avancé ne sont pas encore couverts.

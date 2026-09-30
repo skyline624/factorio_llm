@@ -124,6 +124,8 @@ Cette commande C# calcule les raccordements directs depuis les ports fluides nat
 
 `power-expand --session $sessionFile` ajoute une étape à cette installation : une machine à la chaudière sous-équipée, sinon une chaudière et ses machines sur un port d'eau libre. Le directeur d'usine déclenche la même extension lorsque la demande projetée dépasse 80 % de la capacité native mesurée, et chaque chaudière devient une cellule alimentée par coffre que la logistique réapprovisionne. Voir l'[extension de l'alimentation](docs/power-expansion.md) et sa qualification préparée.
 
+`automate --session $sessionFile --item plastic-bar --quantity 12` construit une chaîne persistante : chevalet sur un gisement de pétrole observé, relié au réseau électrique même lointain par des poteaux étendus depuis ce réseau, raffinerie et usine chimique raccordées par des tuyaux calculés en C#, bras et coffres que la logistique approvisionne en charbon. Le soufre suit la même voie avec une pompe d'eau construite sur la rive. `verify-oil-chemistry` le qualifie dans une **fixture** préparée. Voir la [chimie du pétrole persistante](docs/oil-chemistry.md) et ses limites.
+
 La [mémoire des ressources](docs/resource-memory.md) conserve les gisements réellement vus et les zones explorées entre les commandes. Les souvenirs restent datés et sont vérifiés localement avant extraction.
 
 La commande `assemble --session $sessionFile --item electronic-circuit --quantity 5` installe et approvisionne un assembleur alimenté. `produce` réutilise ensuite une machine déjà configurée. Voir la [production par assemblage](docs/assembly.md) pour les bilans natifs, les essais et les limites.

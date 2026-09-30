@@ -70,10 +70,10 @@ public sealed class FactoryBandPlanner
 
     private static MapPosition Tile(double x, double y) => new(x + .5, y + .5);
 
-    private static int Direction(EntityGeometry arm, MapPosition at, MapPosition from, WorldBox into) =>
+    internal static int Direction(EntityGeometry arm, MapPosition at, MapPosition from, WorldBox into) =>
         Direction(arm, at, pickup => ExtractionPlanner.DropTile(pickup) == ExtractionPlanner.DropTile(from), into.Contains);
 
-    private static int Direction(EntityGeometry arm, MapPosition at, WorldBox from, MapPosition into) =>
+    internal static int Direction(EntityGeometry arm, MapPosition at, WorldBox from, MapPosition into) =>
         Direction(arm, at, from.Contains, drop => ExtractionPlanner.DropTile(drop) == ExtractionPlanner.DropTile(into));
 
     private static int Direction(EntityGeometry arm, MapPosition at, Func<MapPosition, bool> pickup, Func<MapPosition, bool> drop)

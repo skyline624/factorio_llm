@@ -31,6 +31,8 @@ try
           launch-rocket --session FILE --item NAME
           deploy-defense --session FILE --item NAME --quantity N
           factory-cell --session FILE --kind assembler|furnace|lab --machine ITEM [--recipe NAME]
+          automate --session FILE --item NAME --quantity PER_MINUTE
+          verify-oil-chemistry --session FILE [--item plastic-bar|sulfur]
           factory-logistics --session FILE [--quantity CRAFTS]
           verify-factory-cells|verify-factory-research|verify-resource-cells|verify-power-expansion --session FILE
           verify-furnace-bands --session FILE
@@ -81,6 +83,22 @@ try
             string journalPath = Path.Combine(session.Directory, $"factory-cell-{Guid.NewGuid():N}.jsonl");
             Print(new { cell = await new FactoryCellBuilder(game, new ControllerJournal(journalPath), session.Directory)
                 .BuildAsync(Required("kind"), Required("machine"), Option("recipe"), shutdown.Token), journalPath });
+            break;
+        }
+        case "automate":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            string journalPath = Path.Combine(session.Directory, $"automate-{Guid.NewGuid():N}.jsonl");
+            Print(new { plan = await new FactoryDirector(game, new ControllerJournal(journalPath), session.Directory)
+                .AutomateAsync(Required("item"), double.Parse(Required("quantity"), CultureInfo.InvariantCulture), shutdown.Token), journalPath });
+            break;
+        }
+        case "verify-oil-chemistry":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new OilChemistryQualification(session, Option("item") ?? "plastic-bar").RunAsync(shutdown.Token) });
             break;
         }
         case "factory-logistics":

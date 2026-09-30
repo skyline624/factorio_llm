@@ -71,6 +71,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
         var carried = Carried(snapshot);
+        // Power and burners come first: recipes burning fuel only take what their thresholds leave.
+        long fuelReserve = FuelReserve(snapshot, cells, catalog.Items[Fuel].StackSize);
         var shares = CellShares(catalog, state);
         var refills = cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest")).SelectMany(cell =>
         {
@@ -87,7 +89,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         foreach (var item in refills.GroupBy(r => r.Item))
         {
             var wanting = item.Where(r => r.Loaded < r.Target).ToArray();
-            var split = PlanShares(wanting.Select(r => (r.Loaded, r.Target)).ToArray(), carried.GetValueOrDefault(item.Key));
+            long available = Math.Max(0, carried.GetValueOrDefault(item.Key) - (item.Key == Fuel ? fuelReserve : 0));
+            var split = PlanShares(wanting.Select(r => (r.Loaded, r.Target)).ToArray(), available);
             for (int index = 0; index < wanting.Length; index++) allotted[(wanting[index].Chest, item.Key)] = split[index];
         }
         foreach (var (chest, item, loaded, target) in refills.Where(r => r.Loaded < r.Target))
@@ -316,6 +319,25 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// make the actor a coal miner.
     /// </summary>
     internal static long PowerFuelShortfall(long need, long supply, long stack) => supply < stack / 4 ? need : 0;
+
+    /// <summary>
+    /// Fuel recipe chests leave to power and burners: what lifts every feeder supply, chest and boiler together, and every burner
+    /// fuelled by hand to a quarter stack. Plastic burns coal too, and a starved boiler would stop it with the whole factory.
+    /// </summary>
+    internal static long FuelReserve(FactorySnapshot snapshot, IReadOnlyList<FactoryCell> cells, long stack)
+    {
+        long threshold = stack / 4;
+        var feeders = cells.Where(c => c.Kind == "power" && c.Entities.ContainsKey("input-chest")).ToArray();
+        long reserve = feeders.Sum(c =>
+        {
+            var chest = Items(snapshot, c.Entities["input-chest"]);
+            long boiler = c.Entities.TryGetValue("boiler", out var id) ? Items(snapshot, id).GetValueOrDefault(Fuel) : 0;
+            return PowerFuelNeed(chest, Fuel, stack) == 0 ? 0 : Math.Max(0, threshold - chest.GetValueOrDefault(Fuel) - boiler);
+        });
+        var fed = cells.Where(c => c.Kind == "power").Select(c => c.Entities.GetValueOrDefault("boiler")).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        return reserve + Burners(snapshot, cells).Where(b => NeedsDirectFuel(fed.Contains(b.EntityId), b.Loaded, stack))
+            .Sum(b => Math.Max(0, threshold - b.Loaded));
+    }
 
     /// <summary>Registered entities of a cell that the native photograph no longer shows.</summary>
     internal static string[] Missing(FactorySnapshot snapshot, FactoryCell cell) =>

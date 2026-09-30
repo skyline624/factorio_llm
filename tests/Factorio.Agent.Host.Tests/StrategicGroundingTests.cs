@@ -132,6 +132,34 @@ public sealed class StrategicGroundingTests
     private static readonly IReadOnlyDictionary<string, long> Turrets = new Dictionary<string, long> { ["gun-turret"] = 32 };
     private static readonly IReadOnlyDictionary<string, long> WallsAndTurrets = new Dictionary<string, long> { ["gun-turret"] = 32, ["stone-wall"] = 40 };
 
+    [Theory]
+    [InlineData("plastic-bar", true)]
+    [InlineData("sulfur", true)]
+    [InlineData("petroleum-gas", false)]
+    [InlineData("sulfuric-acid", false)]
+    public void AutomationRatesAcceptSolidProductsOfFluidChains(string target, bool accepted)
+    {
+        // Fluid products are stocks in fluid units, not items per minute; plastic and sulfur leave their chains as items.
+        var goal = Goal() with { Target = target, Unit = GoalUnit.ItemsPerMinute, Quantity = 30, ObservationId = "observation" };
+        Assert.Equal(accepted, StrategicProductionController.GroundingFailure(goal, "observation", OilCatalogs.Oil(), automation: true) is null);
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", OilCatalogs.Oil(), automation: false));
+    }
+
+    [Theory]
+    [InlineData("processing-unit", false)]
+    [InlineData("battery", false)]
+    [InlineData("concrete", true)]
+    public void AutomationRatesRejectChainsWaitingOnDeliveredFluidsOrLockedMachines(string target, bool accepted)
+    {
+        // Sulfuric acid needs sulfur and iron delivered after the chain build; concrete only needs terrain water.
+        var catalog = OilCatalogs.Advanced();
+        var goal = Goal() with { Target = target, Unit = GoalUnit.ItemsPerMinute, Quantity = 10, ObservationId = "observation" };
+        Assert.Equal(accepted, StrategicProductionController.GroundingFailure(goal, "observation", catalog, automation: true) is null);
+        // Without researched assembling-machine-2, only the locked assembling-machine-3 could make concrete.
+        var locked = catalog with { Recipes = catalog.Recipes.Where(r => r.Name != "assembling-machine-2").ToArray() };
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", locked, automation: true));
+    }
+
     private static GoalProposal Goal() => new("observation", "Accumulate iron plates", GoalCategory.Production,
         "iron-plate", 20, GoalUnit.Items, GoalPriority.Normal, new(TimeSpan.Zero, 1, null, null, null));
     private static ProductionCatalog Catalog() => new(new("world", "session", "actor", 1, 2), 100, [],

@@ -28,6 +28,12 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     {
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         var machines = MachineItems(catalog);
+        // Recipes moving fluids chain extractor, refinery and chemical cells instead of assembler bands.
+        if (AutomationPlanner.Choose(catalog, item, machines) is null && FluidChainPlanner.Choose(catalog, item, FluidChainDirector.Machines(catalog)) is not null)
+        {
+            var chain = await new FluidChainDirector(game, journal, directory).AutomateAsync(item, perMinute, token);
+            return new(chain.Stages, chain.RawPerMinute);
+        }
         if (machines.Count == 0) throw new InvalidOperationException("No assembling machine or furnace recipe is enabled; research automation first.");
         var registry = new FactoryRegistry(directory);
         var registered = (await registry.LoadAsync(catalog.Scope.WorldId, token)).WithTarget(item, perMinute);

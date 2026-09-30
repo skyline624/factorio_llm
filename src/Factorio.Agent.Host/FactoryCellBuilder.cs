@@ -181,8 +181,11 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
 
     }
 
-    /// <summary>Protect keeps planned steam growth free when possible; links fall back to the plain reservation.</summary>
-    private sealed record BuildContext(ProductionCatalog Catalog, CellEquipment Equipment, FactoryZone Zone,
+    /// <summary>
+    /// Protect keeps planned steam growth free when possible; links fall back to the plain reservation. Cells outside
+    /// bands have no zone to reserve: their parts already stand when they are linked.
+    /// </summary>
+    internal sealed record BuildContext(ProductionCatalog Catalog, CellEquipment Equipment, FactoryZone? Zone,
         SpatialController Controller, FactoryRegistry Registry, string[] Items, Func<SpatialSnapshot, SpatialSnapshot> Protect);
 
     /// <summary>Joins unfed cell poles to a powered network, e.g. cells built before a failed link.</summary>
@@ -219,7 +222,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         return repaired;
     }
 
-    private async Task EnsureCarriedAsync(FactoryRegistry registry, ProductionCatalog catalog, string item, int count, CancellationToken token)
+    internal async Task EnsureCarriedAsync(FactoryRegistry registry, ProductionCatalog catalog, string item, int count, CancellationToken token)
     {
         var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory.GetValueOrDefault(item);
         if (carried >= count) return;
@@ -227,7 +230,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             await new ProductionGoalExecutor(game, journal).RunAsync(item, Math.Min(1000, count), token);
     }
 
-    private async Task ConnectPowerAsync(BuildContext context, string poleId, MapPosition polePosition, CancellationToken token,
+    internal async Task ConnectPowerAsync(BuildContext context, string poleId, MapPosition polePosition, CancellationToken token,
         Func<string, PlacementCandidate, Task> registerLink)
     {
         var spatial = new SpatialClient(game);
@@ -244,7 +247,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 && (map.Prototypes[e.Name].Type == "electric-pole" || IsPowerSource(map.Prototypes[e.Name].Type)))) return;
             var sources = map.Entities.Where(e => e.Force == pole.Force && e.Id != poleId
                 && (fed is null || FactoryPower.IsFed(snapshot, e.Id) == true)).Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
-            var reserved = ReserveZone(map, context.Zone, context.Equipment.Pole);
+            var reserved = context.Zone is null ? map : ReserveZone(map, context.Zone, context.Equipment.Pole);
             var next = new PowerGridPlanner().Next(context.Protect(reserved), context.Equipment.Pole, pole.Bounds, sources, token);
             if (next.Status is PowerGridSearchStatus.NoObservedPath)
                 next = new PowerGridPlanner().Next(reserved, context.Equipment.Pole, pole.Bounds, sources, token);
