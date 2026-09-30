@@ -148,6 +148,8 @@ internal static class FactoryMaps
             ["tree"] = new("tree", "tree", Box(0.4), Solid, 1, 1),
             ["gun-turret"] = new("gun-turret", "ammo-turret", Box(0.7), Solid, 2, 2),
             ["stone-wall"] = new("stone-wall", "wall", Box(0.29), Solid, 1, 1),
+            ["burner-mining-drill"] = new("burner-mining-drill", "mining-drill", Box(0.7), Solid, 2, 2),
+            ["rocket-silo"] = new("rocket-silo", "rocket-silo", Box(4.2), Solid, 9, 9),
             ["iron-ore"] = new("iron-ore", "resource", Box(0.1), new(["resource"], false, false, false), 1, 1, ResourceCategory: "basic-solid")
         };
         var items = new Dictionary<string, PlaceableItem>

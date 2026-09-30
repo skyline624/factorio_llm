@@ -5,7 +5,8 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 public sealed record LogisticsResult(IReadOnlyDictionary<string, long> Collected, IReadOnlyDictionary<string, long> Supplied,
-    IReadOnlyDictionary<string, long> Shortfall, int Actions, long Tick, MaintenanceResult? Maintenance = null);
+    IReadOnlyDictionary<string, long> Shortfall, int Actions, long Tick, MaintenanceResult? Maintenance = null,
+    IReadOnlyList<DegradedCell>? Degraded = null);
 
 /// <summary>
 /// The actor as the factory's transport: empties cell output chests, then refills input chests and laboratories
@@ -31,6 +32,9 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         Require(snapshot.Scope, catalog);
         // A cell still missing an entity waits for maintenance; its transfers would target a destroyed entity.
         var present = FactoryMaintenance.Present(snapshot);
+        var degraded = FactoryMaintenance.Degraded(cells, present);
+        foreach (var cell in degraded)
+            await journal.AppendAsync("factory-cell-degraded", new { cell.Cell, cell.Missing, rebuildable = cell.Missing.All(m => m.Item is not null) }, token);
         cells = cells.Where(c => c.Entities.Values.All(present.Contains)).ToArray();
 
         foreach (var cell in cells.Where(c => c.Entities.ContainsKey("output-chest")))
@@ -102,7 +106,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             }
             if (loaded + give < stack / 4) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + stack - loaded - give;
         }
-        var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, upkeep);
+        var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, upkeep, degraded);
         await journal.AppendAsync("factory-logistics", result, token);
         return result;
 

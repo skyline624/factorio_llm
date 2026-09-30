@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Factorio.Agent.Core;
 
 /// <summary>A turret and its outward wall shield. Box is the tile rectangle reserved by the complete shield.</summary>
@@ -15,6 +17,8 @@ public sealed record PerimeterPlan(WorldBox Protected, WorldBox Ring, IReadOnlyL
 /// Synthesizes turret nests around known industry from native geometry: turrets on a rectangle kept one walkway away
 /// from the factory, neighbours no farther apart than the native range, and walls only on each nest's outward side.
 /// Nests stay separated by open gaps, so the ring is never closed; a route proof on the planned field confirms it.
+/// Entities of an already registered ring (<c>own</c>) are reused where the plan rebuilds them and otherwise keep the
+/// same opening from every new nest, so repeating the plan never duplicates or closes the ring.
 /// </summary>
 public sealed class PerimeterPlanner
 {
@@ -25,7 +29,7 @@ public sealed class PerimeterPlanner
     private sealed record Slot((int X, int Y) Nominal, IReadOnlyList<(int X, int Y)> Normals, IReadOnlyList<(int X, int Y)> Axes);
 
     public PerimeterPlan Plan(SpatialSnapshot map, IReadOnlyList<WorldBox> protectedBoxes, string turretItem, string wallItem,
-        double range, int layers = 2, int opening = 3, CancellationToken token = default)
+        double range, int layers = 2, int opening = 3, IReadOnlySet<string>? own = null, CancellationToken token = default)
     {
         if (protectedBoxes.Count == 0) throw new ArgumentException("A perimeter needs known industry to protect.", nameof(protectedBoxes));
         if (layers is < 1 or > 2) throw new ArgumentOutOfRangeException(nameof(layers));
@@ -45,7 +49,9 @@ public sealed class PerimeterPlanner
 
         // Trees and rocks are cleared before construction, as for factory bands; everything else is a hard obstacle.
         var removable = map.Entities.Where(e => e.Id != map.Actor.Id && FactoryZonePlanner.Removable.Contains(map.Prototypes[e.Name].Type)).ToArray();
-        var field = new SpatialCollisionField(map with { Entities = map.Entities.Except(removable).ToArray() });
+        // The ring's own registered entities never block the slot they already fill, so a repeated plan is the same ring.
+        var registered = map.Entities.Where(e => own?.Contains(e.Id) == true).ToArray();
+        var field = new SpatialCollisionField(map with { Entities = map.Entities.Except(removable).Except(registered).ToArray() });
         var nests = new List<PerimeterNest>();
         var skipped = new List<MapPosition>();
         int skippedWalls = 0, maximumShift = Math.Max(1, spacing / 4);
@@ -59,11 +65,12 @@ public sealed class PerimeterPlanner
                 var box = Bounds(tiles.Append((x, y)).Append((x + tw - 1, y + th - 1)));
                 var center = new MapPosition(x + tw / 2.0, y + th / 2.0);
                 if (nests.Any(n => Gap(n.Box, box) < opening) || !field.PlacementClear(turret, center, 0)) continue;
+                if (!registered.All(e => Reproduces(e, center, tiles) || Gap(TileBox(e.Bounds), box) >= opening)) continue;
                 var walls = new List<PlannedEntity>();
                 foreach (var (wx, wy) in tiles)
                 {
                     var at = new MapPosition(wx + .5, wy + .5);
-                    if (field.PlacementClear(wall, at, 0)) walls.Add(new($"wall-{walls.Count}", wallItem, at, 0));
+                    if (field.PlacementClear(wall, at, 0)) walls.Add(new(WallRole(at), wallItem, at, 0));
                     else skippedWalls++;
                 }
                 accepted = new(nests.Count, new("turret", turretItem, center, 0), walls, box);
@@ -110,6 +117,11 @@ public sealed class PerimeterPlanner
             if (inside is null || outside is null) return (false, false, inside, outside);
             return (Route(built, inside, outside), Route(built, outside, inside), inside, outside);
         }
+
+        // A registered entity is part of this candidate only where the candidate would build the same entity.
+        bool Reproduces(SpatialEntity entity, MapPosition center, IEnumerable<(int X, int Y)> tiles) =>
+            entity.Name == turret.Name && entity.Position.DistanceTo(center) < .01
+            || entity.Name == wall.Name && tiles.Any(t => entity.Position.DistanceTo(new(t.X + .5, t.Y + .5)) < .01);
 
         bool Route(SpatialCollisionField built, MapPosition from, MapPosition to) => new RoutePlanner().Find(
             new SpatialCollisionField(built.Map with { Actor = built.Map.Actor with { Position = from } }), to, .5, 200000,
@@ -191,6 +203,9 @@ public sealed class PerimeterPlanner
         int Depth((int X, int Y) t) => Math.Max(Math.Max(x - t.X, t.X - (x + tw - 1)), Math.Max(y - t.Y, t.Y - (y + th - 1)));
         return tiles.OrderBy(Depth).ThenBy(t => t.Y).ThenBy(t => t.X).ToArray();
     }
+
+    /// <summary>Wall roles name their tile, so a replanned wall never adopts the entity registered for another tile.</summary>
+    private static string WallRole(MapPosition at) => string.Create(CultureInfo.InvariantCulture, $"wall@{at.X:0.#},{at.Y:0.#}");
 
     private static IEnumerable<PlannedEntity> Entities(PerimeterNest nest) => nest.Walls.Prepend(nest.Turret);
 

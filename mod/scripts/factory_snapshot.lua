@@ -85,6 +85,10 @@ local function capture(args)
       metadata.defenseRange = defense and defense.range
     end
     if entity.burner then metadata.burnerRemainingJoules = entity.burner.remaining_burning_fuel end
+    -- Native electric network identity lets C# verify that rebuilt poles and machines reach a generator.
+    if entity.type == "electric-pole" or entity.prototype.electric_energy_source_prototype then
+      metadata.power = {energy = entity.energy, networkId = entity.electric_network_id}
+    end
     if fuel and fuel.valid then
       local owner = fuel.entity_owner
       U.check(owner and owner.valid and fuel.index, "inventory_identity_unavailable", "Fuel inventory identity is unavailable")

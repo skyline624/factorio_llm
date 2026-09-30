@@ -331,7 +331,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 if (map.Scope != scope) throw new InvalidDataException("Actor changed before construction.");
                 RequireAi(map);
                 if (!new PlacementPlanner().PreservesExit(new(map), item, new(position, direction, 0)))
-                    throw new InvalidOperationException("Construction refused: no observed exit after placement.");
+                    throw new PlacementRefusedException("Construction refused: no observed exit after placement.");
             }
             return await ExecuteAsync(OperationSubmission.Create(map.Scope, kind, arguments,
                 map.CollectedTick + durationTicks, preconditions), token);

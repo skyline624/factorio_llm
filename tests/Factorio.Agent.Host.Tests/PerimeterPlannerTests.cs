@@ -113,6 +113,57 @@ public sealed class PerimeterPlannerTests
     }
 
     [Fact]
+    public void ARepeatedPlanReusesTheRegisteredRingInsteadOfShiftingAroundIt()
+    {
+        // An occupied nominal slot shifts one nest, so reuse must also hold for shifted nests.
+        var nominal = Plan(FactoryMaps.Grass(40));
+        var occupied = nominal.Nests[1].Turret.Position;
+        SpatialEntity[] machine = [new("machine", "assembling-machine-1", occupied, new(new(occupied.X - 1.2, occupied.Y - 1.2), new(occupied.X + 1.2, occupied.Y + 1.2)), 0, "agent")];
+        var first = Plan(FactoryMaps.Grass(40, machine));
+        Assert.DoesNotContain(first.Nests, n => n.Turret.Position == occupied);
+        // The ring was built except one refused wall; its own entities must not push the next plan aside.
+        var ring = Placed(FactoryMaps.Grass(40), first).Where(e => e.Position != first.Nests[0].Walls[0].Position).ToArray();
+        var again = new PerimeterPlanner().Plan(FactoryMaps.Grass(40, [.. machine, .. ring]), [Factory], "gun-turret", "stone-wall", Range, 2,
+            own: ring.Select(e => e.Id).ToHashSet(StringComparer.Ordinal));
+        Assert.Equal(first.Nests.Select(n => n.Turret), again.Nests.Select(n => n.Turret));
+        Assert.Equal(first.Nests.SelectMany(n => n.Walls), again.Nests.SelectMany(n => n.Walls));
+        Assert.True(again.CanLeave && again.CanEnter);
+    }
+
+    [Fact]
+    public void WallRolesNameTheirTileSoABlockedWallNeverRenamesItsNeighbours()
+    {
+        var map = FactoryMaps.Grass(40);
+        var first = Plan(map);
+        var blocked = first.Nests[0].Walls[1];
+        var ring = Placed(map, first).Where(e => e.Position != blocked.Position).ToArray();
+        var chest = new SpatialEntity("chest", "wooden-chest", blocked.Position, map.Prototypes["wooden-chest"].CollisionBox.Translate(blocked.Position), 0, "agent");
+        var again = new PerimeterPlanner().Plan(FactoryMaps.Grass(40, [.. ring, chest]), [Factory], "gun-turret", "stone-wall", Range, 2,
+            own: ring.Select(e => e.Id).ToHashSet(StringComparer.Ordinal));
+        Assert.Equal(first.Nests[0].Walls.Where(w => w != blocked), again.Nests[0].Walls);
+        Assert.Equal(first.Nests.SelectMany(n => n.Walls).Count(), first.Nests.SelectMany(n => n.Walls).Select(w => w.Role).Distinct().Count());
+    }
+
+    [Fact]
+    public void NestsForAGrownFactoryKeepTheOpeningFromRegisteredNestsTheyDoNotReuse()
+    {
+        var map = FactoryMaps.Grass(48);
+        var old = Placed(map, Plan(map));
+        var grown = new WorldBox(new(-6, -5), new(14, 5));
+        var plan = new PerimeterPlanner().Plan(FactoryMaps.Grass(48, old), [grown], "gun-turret", "stone-wall", Range, 2,
+            own: old.Select(e => e.Id).ToHashSet(StringComparer.Ordinal));
+        Assert.True(plan.CanLeave && plan.CanEnter);
+        // The unchanged west side is reused as built.
+        Assert.Contains(plan.Nests, n => old.Any(e => e.Name == "gun-turret" && e.Position == n.Turret.Position));
+        foreach (var nest in plan.Nests)
+        {
+            var mine = nest.Walls.Prepend(nest.Turret).Select(e => (e.Item, e.Position)).ToHashSet();
+            foreach (var entity in old.Where(e => !mine.Contains((e.Name, e.Position))))
+                Assert.True(Gap(Tiles(entity.Bounds), nest.Box) >= 3, $"{entity.Id} lies within the opening of the nest at {nest.Turret.Position}");
+        }
+    }
+
+    [Fact]
     public void RingBeyondTheObservedAreaIsRefused()
     {
         Assert.Throws<InvalidOperationException>(() => Plan(FactoryMaps.Grass(14)));
@@ -134,6 +185,14 @@ public sealed class PerimeterPlannerTests
         Entities = [.. map.Entities, .. plan.Nests.SelectMany(n => n.Walls.Append(n.Turret)).Select((e, i) =>
             new SpatialEntity($"planned-{i}", e.Item, e.Position, map.Prototypes[e.Item].CollisionBox.Translate(e.Position), 0, "planned"))]
     });
+
+    /// <summary>The plan as built native entities with ids, turret first in each nest.</summary>
+    private static SpatialEntity[] Placed(SpatialSnapshot map, PerimeterPlan plan) => plan.Nests.SelectMany(n => n.Walls.Prepend(n.Turret))
+        .Select((e, i) => new SpatialEntity($"ring-{i}", e.Item, e.Position, map.Prototypes[e.Item].CollisionBox.Translate(e.Position), 0, "factorio_agent"))
+        .ToArray();
+
+    private static WorldBox Tiles(WorldBox box) =>
+        new(new(Math.Floor(box.Min.X), Math.Floor(box.Min.Y)), new(Math.Ceiling(box.Max.X), Math.Ceiling(box.Max.Y)));
 
     private static IEnumerable<MapPosition> Border(WorldBox box)
     {

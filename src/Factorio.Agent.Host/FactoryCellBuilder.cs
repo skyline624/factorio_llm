@@ -46,8 +46,13 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         var planningMap = await spatial.CaptureAsync(items, 48, token);
         RequireScope(planningMap.Scope, catalog);
         CellLayout layout = new FactoryBandPlanner().Layout(planningMap, equipment, zone.Origin, cell.Slot, io, io);
-        // Recorded roles let maintenance rebuild a destroyed entity exactly where the cell expects it.
-        cell = cell with { Plan = layout.Entities.ToDictionary(e => e.Role, StringComparer.Ordinal) };
+        // Recorded roles let maintenance rebuild a destroyed entity exactly where the cell expects it; power links
+        // recorded by an interrupted run are kept.
+        cell = cell with
+        {
+            Plan = layout.Entities.Concat((cell.Plan?.Values ?? []).Where(p => layout.Entities.All(e => e.Role != p.Role)))
+                .ToDictionary(e => e.Role, StringComparer.Ordinal)
+        };
         await journal.AppendAsync("factory-cell-plan", new { cell.Id, kind, recipe, zone, layout }, token);
         await EnsureItemsAsync(layout.Entities.GroupBy(e => e.Item).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal));
 
@@ -161,11 +166,31 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 if (next.Status != PowerGridSearchStatus.Extension || next.Pole is null)
                     throw new InvalidOperationException($"The cell pole cannot join the observed network: {next.Status}.");
                 await EnsureItemsAsync(new Dictionary<string, int>(StringComparer.Ordinal) { [equipment.Pole] = 1 });
-                await new PoweredMachineController(game, journal).BuildAtAsync(equipment.Pole, next.Pole, catalog, controller, token);
+                string linkId = await new PoweredMachineController(game, journal).BuildAtAsync(equipment.Pole, next.Pole, catalog, controller, token);
+                // The link belongs to this cell so maintenance rebuilds it after an attack cuts the cell from the generators.
+                cell = WithLink(cell!, linkId, next.Pole, equipment.Pole);
+                foreach (var (role, id) in cell.Entities) ids[role] = id;
+                await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
                 await controller.TravelAsync(planned.Position, 6, catalog, token);
             }
             throw new InvalidOperationException("Joining the cell to the electric network exceeded its link budget.");
         }
+    }
+
+    /// <summary>Registers a power link pole under the next free <c>link-n</c> role, with its plan.</summary>
+    public static FactoryCell WithLink(FactoryCell cell, string id, PlacementCandidate pole, string poleItem)
+    {
+        int index = 0;
+        while (cell.Entities.ContainsKey($"link-{index}")) index++;
+        string role = $"link-{index}";
+        return cell with
+        {
+            Entities = new Dictionary<string, string>(cell.Entities, StringComparer.Ordinal) { [role] = id },
+            Plan = new Dictionary<string, PlannedEntity>(cell.Plan ?? new Dictionary<string, PlannedEntity>(), StringComparer.Ordinal)
+            {
+                [role] = new(role, poleItem, pole.Position, pole.Direction)
+            }
+        };
     }
 
     /// <summary>Marks the whole band as occupied so power links never take a future cell's slot.</summary>

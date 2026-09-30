@@ -80,14 +80,21 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         }
         RequireScope(current.Scope, catalog);
         MapPosition approach = new PlacementPlanner().FindApproach(new(current), item, candidate, remainingTargets)
-            ?? throw new InvalidOperationException("No reachable approach outside the planned footprint.");
+            ?? throw new PlacementRefusedException("No reachable approach outside the planned footprint.");
         await controller.NavigateAsync(approach, .2, token);
         var validation = await spatial.ValidateAsync(catalog.Scope, item, [candidate], token);
         if (!validation.Candidates[0].Allowed || !validation.Candidates[0].InReach)
-            throw new InvalidOperationException("The engine refused the calculated powered-machine placement.");
-        var built = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction }, 600, token: token);
-        Completed(built);
-        return built.Effects.GetProperty("entityId").GetString()!;
+            throw new PlacementRefusedException("The engine refused the calculated powered-machine placement.");
+        return BuiltEntity(await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction }, 600, token: token));
+    }
+
+    /// <summary>The native id of a completed build; a native placement refusal is told apart from shortages and other failures.</summary>
+    public static string BuiltEntity(OperationReceipt receipt)
+    {
+        if (receipt.Status != "completed" && receipt.Error?.Code is "placement_blocked" or "out_of_reach")
+            throw new PlacementRefusedException($"Construction ended with {receipt.Status}: {receipt.Error.Code}.");
+        Completed(receipt);
+        return receipt.Effects.GetProperty("entityId").GetString()!;
     }
 
     public async Task MaintainFuelAsync(string machineId, double expectedEnergy, ProductionCatalog catalog,

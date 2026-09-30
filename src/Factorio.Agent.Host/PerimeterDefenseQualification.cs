@@ -54,6 +54,13 @@ public sealed class PerimeterDefenseQualification(RuntimeSession session)
             Require(result.Walls == plannedWalls && plannedWalls > 0 && walls.All(c => c.Entities.Count == c.Plan!.Count),
                 "Not every planned wall was built and registered.");
 
+            // The model may propose the perimeter again: the complete ring must be recognized and left untouched.
+            var repeat = await new PerimeterDefenseController(game, journal, session.Directory).RunAsync("stone-wall", "gun-turret", layers, token);
+            var repeated = await new FactoryRegistry(session.Directory).LoadAsync(catalog.Scope.WorldId, token);
+            evidence.Add(new { check = "perimeter-repeat", repeat, before = Defenses(state), after = Defenses(repeated) });
+            Require(repeat.AlreadyComplete && repeat.Built == 0 && repeat.Refused == 0 && repeat.Nests == result.Nests && Defenses(repeated) == Defenses(state),
+                "Repeating the perimeter changed or duplicated the complete ring.");
+
             // Attack: small biters appear beyond turret range north of the ring and are ordered onto the factory.
             var turretPositions = turrets.Select(c => c.Plan!["turret"].Position).ToArray();
             var factory = state.Zones.Single().Box;
@@ -81,33 +88,52 @@ public sealed class PerimeterDefenseQualification(RuntimeSession session)
             Require(kills == Biters && forceKills == Biters, "The perimeter turrets did not account for every spawned biter.");
             Require(consumed > 0 && after.GetProperty("actorRounds").GetInt64() == 0, "Turret ammunition use was not measured or the actor could have fired.");
 
-            // Damage: destroy one turret and one wall natively, then let one logistics round rebuild and rearm them.
+            // A registry written before plans were recorded: the gear cell loses its plan, and one logistics round
+            // must recover exactly the plan the builder had recorded from the native entities.
+            var registry = new FactoryRegistry(session.Directory);
+            state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            var original = state.Cells.Single(c => c.Id == gears.Id);
+            await registry.SaveAsync(state.With(original with { Plan = null }), token);
+            var recovery = await new FactoryLogistics(game, journal, session.Directory).ServiceAsync(40, token);
+            var recovered = (await registry.LoadAsync(catalog.Scope.WorldId, token)).Cells.Single(c => c.Id == gears.Id);
+            evidence.Add(new { check = "legacy-plan-recovered", recovery.Maintenance?.RecoveredPlans, original = original.Plan, recovered = recovered.Plan });
+            Require(recovery.Maintenance?.RecoveredPlans.Contains(gears.Id) == true && recovered.Plan is { } plan && plan.Count == original.Plan!.Count
+                && original.Plan.All(p => plan.TryGetValue(p.Key, out var value) && value == p.Value), "The legacy cell plan was not recovered exactly.");
+
+            // Damage: destroy one turret, one wall and the gear cell pole natively, then let one logistics round rebuild them,
+            // rearm the turret and prove the rebuilt pole is back on the generator network.
             var victimTurret = turrets.OrderBy(c => c.Id, StringComparer.Ordinal).First();
             var victimWall = walls.OrderBy(c => c.Id, StringComparer.Ordinal).First();
             var wallRole = victimWall.Entities.Keys.Order(StringComparer.Ordinal).First();
+            string victimPole = recovered.Entities["pole"];
             var destroyed = await CommandAsync($$"""
-                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local wanted={[{{Quote(victimTurret.Entities["turret"])}}]=true,[{{Quote(victimWall.Entities[wallRole])}}]=true}; local killed={}; for _,e in pairs(s.find_entities_filtered{force=f,type={'ammo-turret','wall'},area={ {-96,-96},{96,96} } }) do if wanted[tostring(e.unit_number)] then killed[#killed+1]={id=tostring(e.unit_number),name=e.name,position=e.position}; assert(e.die('enemy')) end end; rcon.print(helpers.table_to_json{tick=game.tick,killed=killed})
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local wanted={[{{Quote(victimTurret.Entities["turret"])}}]=true,[{{Quote(victimWall.Entities[wallRole])}}]=true,[{{Quote(victimPole)}}]=true}; local killed={}; for _,e in pairs(s.find_entities_filtered{force=f,type={'ammo-turret','wall','electric-pole'},area={ {-96,-96},{96,96} } }) do if wanted[tostring(e.unit_number)] then killed[#killed+1]={id=tostring(e.unit_number),name=e.name,position=e.position}; assert(e.die('enemy')) end end; rcon.print(helpers.table_to_json{tick=game.tick,killed=killed})
                 """);
-            Require(destroyed.GetProperty("killed").GetArrayLength() == 2, "The fixture could not destroy the chosen turret and wall.");
+            Require(destroyed.GetProperty("killed").GetArrayLength() == 3, "The fixture could not destroy the chosen turret, wall and pole.");
             var service = await new FactoryLogistics(game, journal, session.Directory).ServiceAsync(40, token);
-            state = await new FactoryRegistry(session.Directory).LoadAsync(catalog.Scope.WorldId, token);
+            state = await registry.LoadAsync(catalog.Scope.WorldId, token);
             string newTurret = state.Cells.Single(c => c.Id == victimTurret.Id).Entities["turret"];
             string newWall = state.Cells.Single(c => c.Id == victimWall.Id).Entities[wallRole];
+            string newPole = state.Cells.Single(c => c.Id == gears.Id).Entities["pole"];
             var rebuilt = await CommandAsync($$"""
-                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local wanted={[{{Quote(newTurret)}}]=true,[{{Quote(newWall)}}]=true}; local found={}; local function rounds(inv) local n=0; for i=1,#inv do local a=inv[i]; if a.valid_for_read and a.prototype.type=='ammo' then n=n+(a.count-1)*a.prototype.magazine_size+a.ammo end end; return n end; for _,e in pairs(s.find_entities_filtered{force=f,type={'ammo-turret','wall'},area={ {-96,-96},{96,96} } }) do if wanted[tostring(e.unit_number)] then found[#found+1]={id=tostring(e.unit_number),name=e.name,position=e.position,rounds=e.type=='ammo-turret' and rounds(e.get_inventory(defines.inventory.turret_ammo)) or nil} end end; rcon.print(helpers.table_to_json{tick=game.tick,found=found})
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local wanted={[{{Quote(newTurret)}}]=true,[{{Quote(newWall)}}]=true,[{{Quote(newPole)}}]=true}; local found={}; local function rounds(inv) local n=0; for i=1,#inv do local a=inv[i]; if a.valid_for_read and a.prototype.type=='ammo' then n=n+(a.count-1)*a.prototype.magazine_size+a.ammo end end; return n end; for _,e in pairs(s.find_entities_filtered{force=f,type={'ammo-turret','wall','electric-pole'},area={ {-96,-96},{96,96} } }) do if wanted[tostring(e.unit_number)] then found[#found+1]={id=tostring(e.unit_number),name=e.name,position=e.position,rounds=e.type=='ammo-turret' and rounds(e.get_inventory(defines.inventory.turret_ammo)) or nil,network=e.type=='electric-pole' and e.electric_network_id or nil} end end; local source=s.find_entities_filtered{name='electric-energy-interface',force=f}[1]; rcon.print(helpers.table_to_json{tick=game.tick,found=found,sourceNetwork=source and source.electric_network_id})
                 """);
-            evidence.Add(new { check = "rebuilt-after-attack", destroyed, service.Maintenance, rebuilt });
+            evidence.Add(new { check = "rebuilt-after-attack", destroyed, service.Maintenance, service.Degraded, rebuilt });
             var found = rebuilt.GetProperty("found").EnumerateArray().ToArray();
-            Require(newTurret != victimTurret.Entities["turret"] && newWall != victimWall.Entities[wallRole] && found.Length == 2,
-                "The destroyed turret and wall were not rebuilt and re-registered.");
+            Require(newTurret != victimTurret.Entities["turret"] && newWall != victimWall.Entities[wallRole] && newPole != victimPole && found.Length == 3,
+                "The destroyed turret, wall and pole were not rebuilt and re-registered.");
             foreach (var entity in found)
             {
-                var recorded = entity.GetProperty("id").GetString() == newTurret ? victimTurret.Plan!["turret"] : victimWall.Plan![wallRole];
+                string id = entity.GetProperty("id").GetString()!;
+                var recorded = id == newTurret ? victimTurret.Plan!["turret"] : id == newWall ? victimWall.Plan![wallRole] : recovered.Plan!["pole"];
                 Require(entity.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!.DistanceTo(recorded.Position) < .01,
                     "A rebuilt entity is not at its recorded position.");
             }
-            Require(found.Single(e => e.GetProperty("id").GetString() == newTurret).GetProperty("rounds").GetInt64() >= DefenseDeploymentPlanner.ReserveRounds,
-                "The rebuilt turret was not rearmed to the reserve.");
+            // The native reading comes after the rest of the logistics round; a loaded turret may already have fired,
+            // so the reserve itself is proven by the native insert receipts below.
+            Require(found.Single(e => e.GetProperty("id").GetString() == newTurret).GetProperty("rounds").GetInt64() > 0, "The rebuilt turret holds no ammunition.");
+            Require(found.Single(e => e.GetProperty("id").GetString() == newPole).GetProperty("network").GetInt64() == rebuilt.GetProperty("sourceNetwork").GetInt64()
+                && service.Maintenance?.Unpowered.Count == 0, "The rebuilt pole is not on the generator network, or maintenance reported a power fault.");
 
             var rows = (await File.ReadAllLinesAsync(journalPath, token)).Select(l => JsonDocument.Parse(l)).ToArray();
             try
@@ -115,8 +141,14 @@ public sealed class PerimeterDefenseQualification(RuntimeSession session)
                 string Type(JsonDocument row) => row.RootElement.GetProperty("type").GetString()!;
                 var kinds = rows.Where(r => Type(r) == "submission").Select(r => r.RootElement.GetProperty("data").GetProperty("kind").GetString()).ToArray();
                 int rebuilds = rows.Count(r => Type(r) == "factory-rebuild");
-                evidence.Add(new { check = "journal", rebuilds, crafts = kinds.Count(k => k == "craft"), mines = kinds.Count(k => k == "mine"), builds = kinds.Count(k => k == "build") });
-                Require(rebuilds == 2 && !kinds.Contains("craft") && !kinds.Contains("mine"), "Rebuilds were not journaled or supplied items were hand-made.");
+                long rearmed = rows.Where(r => Type(r) == "receipt").Select(r => r.RootElement.GetProperty("data"))
+                    .Where(d => d.GetProperty("kind").GetString() == "insert" && d.GetProperty("status").GetString() is "completed" or "partial"
+                        && d.GetProperty("effects").GetProperty("targetId").GetString() == newTurret && d.GetProperty("effects").GetProperty("inventory").GetString() == "ammo"
+                        && d.GetProperty("effects").GetProperty("item").GetString() == "firearm-magazine" && d.GetProperty("effects").GetProperty("direction").GetString() == "from_actor")
+                    .Sum(d => d.GetProperty("effects").GetProperty("transferred").GetInt64()) * catalog.Items["firearm-magazine"].MagazineSize!.Value;
+                evidence.Add(new { check = "journal", rebuilds, rearmedRounds = rearmed, crafts = kinds.Count(k => k == "craft"), mines = kinds.Count(k => k == "mine"), builds = kinds.Count(k => k == "build") });
+                Require(rebuilds == 3 && !kinds.Contains("craft") && !kinds.Contains("mine"), "Rebuilds were not journaled or supplied items were hand-made.");
+                Require(rearmed >= DefenseDeploymentPlanner.ReserveRounds, "The rebuilt turret was not rearmed to the reserve by native transfers.");
             }
             finally { foreach (var row in rows) row.Dispose(); }
             passed = true;
@@ -142,6 +174,11 @@ public sealed class PerimeterDefenseQualification(RuntimeSession session)
             /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; local turrets={{turretIds}}; local biters={{biterIds}}; local function rounds(inv) local n=0; for i=1,#inv do local a=inv[i]; if a.valid_for_read and a.prototype.type=='ammo' then n=n+(a.count-1)*a.prototype.magazine_size+a.ammo end end; return n end; local kills,total,alive=0,0,0; for _,t in pairs(s.find_entities_filtered{type='ammo-turret',force=f,area={ {-96,-96},{96,96} } }) do if turrets[tostring(t.unit_number)] then kills=kills+t.kills; total=total+rounds(t.get_inventory(defines.inventory.turret_ammo)) end end; for _,b in pairs(s.find_entities_filtered{name='small-biter',force='enemy',area={ {-160,-160},{160,160} } }) do if biters[tostring(b.unit_number)] then alive=alive+1 end end; local stats=f.get_kill_count_statistics(s); rcon.print(helpers.table_to_json{tick=game.tick,turretKills=kills,rounds=total,biters=alive,forceKills=stats.input_counts['small-biter'] or 0,actorHealth=c and c.health,actorRounds=c and rounds(c.get_inventory(defines.inventory.character_ammo)) or 0})
             """);
     }
+
+    /// <summary>Registered defense cells and their native ids, to prove a repeated run changed nothing.</summary>
+    private static string Defenses(FactoryState state) => string.Join(";", state.Cells.Where(c => c.Kind is "turret" or "wall")
+        .OrderBy(c => c.Id, StringComparer.Ordinal).Select(c => c.Id + ":" + c.Status + ":" + string.Join(",", c.Entities
+            .OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => e.Key + "=" + e.Value))));
 
     private static string Quote(string value) => "'" + value.Replace("'", "", StringComparison.Ordinal) + "'";
     private static string Lua(IEnumerable<string> ids) => "{" + string.Join(",", ids.Select(id => $"[{Quote(id)}]=true")) + "}";

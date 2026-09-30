@@ -5,13 +5,18 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 public sealed record MissingEntity(FactoryCell Cell, string Role, string PreviousId, PlannedEntity Plan);
+public sealed record DegradedEntity(string Role, string PreviousId, string? Item);
+public sealed record DegradedCell(string Cell, IReadOnlyList<DegradedEntity> Missing);
 public sealed record MaintenanceResult(IReadOnlyList<string> Rebuilt, IReadOnlyList<string> Blocked,
-    IReadOnlyDictionary<string, long> Supplied, IReadOnlyDictionary<string, long> Shortfall, int Actions, long Tick);
+    IReadOnlyDictionary<string, long> Supplied, IReadOnlyDictionary<string, long> Shortfall, int Actions, long Tick,
+    IReadOnlyList<string> Unpowered, IReadOnlyList<string> RecoveredPlans);
 
 /// <summary>
 /// Keeps registered factory entities in service after attacks: rebuilds destroyed ones at their recorded positions,
-/// defenses first, then rearms registered turrets to the deployment reserve. It only uses carried items; anything
-/// missing is reported as shortfall for the production path, so a logistics round never starts a long production.
+/// defenses first, reports registered electric entities off every powered network, then rearms registered turrets to
+/// the deployment reserve. It only uses carried items; anything missing is reported as shortfall for the production
+/// path, so a logistics round never starts a long production. Cells registered before plans were recorded recover
+/// theirs from the native entities while all of them are still present.
 /// </summary>
 public sealed class FactoryMaintenance(IGameClient game, IControllerJournal journal, string directory)
 {
@@ -26,6 +31,13 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         int actions = 0;
         var snapshot = await CaptureAsync();
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        var recovered = RecoverPlans(state, snapshot, catalog);
+        if (recovered.Count > 0)
+        {
+            state = recovered.Aggregate(state, (current, cell) => current.With(cell));
+            await registry.SaveAsync(state, token);
+            foreach (var cell in recovered) await journal.AppendAsync("factory-cell-plan-recovered", new { cell.Id, cell.Kind, cell.Plan }, token);
+        }
         var carried = FactoryLogistics.Carried(snapshot);
         var registered = state.Cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
         foreach (var missing in Missing(state, Present(snapshot)))
@@ -46,9 +58,10 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
                     id = await new PoweredMachineController(game, journal).BuildAtAsync(item,
                         new(missing.Plan.Position, missing.Plan.Direction, 0), catalog, controller, token);
                 }
-                catch (InvalidOperationException error)
+                catch (PlacementRefusedException error)
                 {
                     // A refused placement changed nothing; the next round observes again rather than retrying blindly.
+                    // Manual control, lease loss and receipt failures are not refusals and stop the round.
                     blocked.Add(missing.PreviousId);
                     await journal.AppendAsync("factory-rebuild-blocked", new { cell = missing.Cell.Id, missing.Role, missing.PreviousId, missing.Plan, error.Message }, token);
                     continue;
@@ -77,6 +90,10 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         if (rebuilt.Count > 0) snapshot = await CaptureAsync();
         carried = FactoryLogistics.Carried(snapshot);
         state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        // Every registered pole and machine, rebuilt or not, must reach a generator: one lost link pole silences whole cells.
+        var unpowered = Unpowered(snapshot, state.Cells.Where(c => c.Status == "ready").SelectMany(c => c.Entities.Values));
+        foreach (var id in unpowered)
+            await journal.AppendAsync("factory-power-fault", new { entityId = id, rebuilt = rebuilt.Contains(id), snapshot.CollectedTick }, token);
         var turretIds = state.Cells.Where(c => c.Kind == "turret" && c.Status == "ready").SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
         foreach (var turret in DefenseFactoryState.Read(snapshot, catalog).Turrets.Where(t => t.Active && turretIds.Contains(t.Id))
             .OrderBy(t => t.Id, StringComparer.Ordinal))
@@ -101,7 +118,8 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
             }
             if (need > 0) shortfall[ammunition] = shortfall.GetValueOrDefault(ammunition) + need;
         }
-        var result = new MaintenanceResult(rebuilt, blocked, supplied, shortfall, actions, snapshot.CollectedTick);
+        var result = new MaintenanceResult(rebuilt, blocked, supplied, shortfall, actions, snapshot.CollectedTick, unpowered,
+            recovered.Select(c => c.Id).ToArray());
         await journal.AppendAsync("factory-maintenance", result, token);
         return result;
 
@@ -149,6 +167,52 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
             .Select(e => new MissingEntity(c, e.Key, e.Value, c.Plan![e.Key])))
         .OrderBy(m => m.Cell.Kind switch { "turret" => 0, "wall" => 1, _ => 2 })
         .ThenBy(m => m.Cell.Id, StringComparer.Ordinal).ThenBy(m => m.Role, StringComparer.Ordinal).ToArray();
+
+    /// <summary>
+    /// Plans for ready cells registered without one, read while every entity is present: the item placing the observed
+    /// entity (the cell's machine item first) and its native position and direction.
+    /// </summary>
+    public static IReadOnlyList<FactoryCell> RecoverPlans(FactoryState state, FactorySnapshot snapshot, ProductionCatalog catalog)
+    {
+        var entities = snapshot.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "factory")
+            .ToDictionary(r => r.EntityId, StringComparer.Ordinal);
+        var recovered = new List<FactoryCell>();
+        foreach (var cell in state.Cells.Where(c => c.Status == "ready" && c.Plan is null && c.Entities.Count > 0 && c.Entities.Values.All(entities.ContainsKey)))
+        {
+            var plan = new Dictionary<string, PlannedEntity>(StringComparer.Ordinal);
+            foreach (var (role, id) in cell.Entities)
+            {
+                var record = entities[id];
+                string? item = catalog.Items.Where(p => p.Value.PlaceEntity == record.Name).Select(p => p.Key)
+                    .OrderBy(k => k != cell.MachineItem).ThenBy(k => k, StringComparer.Ordinal).FirstOrDefault();
+                if (item is null) break;
+                plan[role] = new(role, item, record.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!,
+                    record.Data.GetProperty("direction").GetInt32());
+            }
+            if (plan.Count == cell.Entities.Count) recovered.Add(cell with { Plan = plan });
+        }
+        return recovered;
+    }
+
+    /// <summary>Electric entities among the given ones whose native network holds no known power source.</summary>
+    public static IReadOnlyList<string> Unpowered(FactorySnapshot snapshot, IEnumerable<string> ids)
+    {
+        var entities = snapshot.Records.Where(r => r.Kind == "entity").ToDictionary(r => r.EntityId, StringComparer.Ordinal);
+        static bool Electric(FactoryRecord record) => record.Data.TryGetProperty("power", out var power) && power.ValueKind == JsonValueKind.Object;
+        static long? Network(FactoryRecord record) => record.Data.GetProperty("power").TryGetProperty("networkId", out var id)
+            && id.ValueKind == JsonValueKind.Number ? id.GetInt64() : null;
+        var powered = entities.Values.Where(r => Electric(r) && FactoryCellBuilder.IsPowerSource(r.Data.GetProperty("type").GetString()!))
+            .Select(Network).OfType<long>().ToHashSet();
+        return ids.Where(id => entities.TryGetValue(id, out var record) && Electric(record) && !(Network(record) is { } network && powered.Contains(network)))
+            .ToArray();
+    }
+
+    /// <summary>Ready cells with registered entities that are gone; the item is known only when the cell recorded a plan.</summary>
+    public static IReadOnlyList<DegradedCell> Degraded(IEnumerable<FactoryCell> cells, IReadOnlySet<string> present) => cells
+        .Where(c => c.Status == "ready")
+        .Select(c => new DegradedCell(c.Id, c.Entities.Where(e => !present.Contains(e.Value))
+            .Select(e => new DegradedEntity(e.Key, e.Value, c.Plan?.GetValueOrDefault(e.Key)?.Item)).ToArray()))
+        .Where(d => d.Missing.Count > 0).ToArray();
 
     /// <summary>Whole magazines that restore the deployment reserve, measured in remaining rounds.</summary>
     public static int Magazines(long rounds, int magazineSize) =>
