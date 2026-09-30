@@ -1,10 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Text.Json;
 
 namespace Factorio.Agent.Ollama;
 
-/// <summary>Validated strategic proposals through the local Ollama gateway. Never executes game actions.</summary>
+/// <summary>Validated proposals through the local gateway or direct Ollama Cloud API. Never executes game actions.</summary>
 public sealed class OllamaStrategicPlanner : IStrategicPlanner
 {
     private const int MaxResponseBytes = 2 * 1024 * 1024;
@@ -42,7 +43,7 @@ public sealed class OllamaStrategicPlanner : IStrategicPlanner
                 {
                     Content = JsonContent.Create(new
                     {
-                        model = _options.Model,
+                        model = _options.RequestModel,
                         stream = false,
                         think = _options.ThinkingEffort,
                         messages = new[]
@@ -53,6 +54,8 @@ public sealed class OllamaStrategicPlanner : IStrategicPlanner
                         tools = new[] { GoalContract.ToolSchema }
                     }, options: Json)
                 };
+                if (_options.IsDirectCloud)
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
                 using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linked.Token)
                     .ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
@@ -118,7 +121,9 @@ public sealed class OllamaStrategicPlanner : IStrategicPlanner
         var (kind, message) = response.StatusCode switch
         {
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
-                (PlannerErrorKind.Authentication, "Ollama Cloud authentication was refused. Check the account signed in to the Ollama gateway."),
+                (PlannerErrorKind.Authentication, _options.IsDirectCloud
+                    ? "Ollama Cloud authentication was refused. Check Ollama.ApiKey or OLLAMA_API_KEY."
+                    : "Ollama Cloud authentication was refused. Check the account signed in to the Ollama gateway."),
             HttpStatusCode.NotFound =>
                 (PlannerErrorKind.MissingModel, $"The selected model {_options.Model} is unavailable; no substitute was selected."),
             HttpStatusCode.TooManyRequests =>

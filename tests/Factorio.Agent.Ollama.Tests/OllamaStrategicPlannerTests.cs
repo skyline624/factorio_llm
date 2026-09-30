@@ -16,6 +16,82 @@ public sealed class OllamaStrategicPlannerTests
     private static OllamaOptions FastOptions => new() { MaxAttempts = 1, InitialRetryDelay = TimeSpan.Zero };
 
     [Fact]
+    public async Task DirectCloudUsesBearerAndHostedModelWithoutLeakingKeyToLocalRequests()
+    {
+        const string key = "synthetic-api-key";
+        using var handler = new ControlledHandler((request, _) =>
+        {
+            if (request.RequestUri!.Host == "ollama.com")
+            {
+                Assert.Equal("https://ollama.com/api/chat", request.RequestUri.AbsoluteUri);
+                Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+                Assert.Equal(key, request.Headers.Authorization?.Parameter);
+            }
+            else Assert.Null(request.Headers.Authorization);
+            return Task.FromResult(JsonResponse(ValidResponse()));
+        });
+        using var http = new HttpClient(handler);
+        var options = FastOptions with { BaseUrl = OllamaOptions.CloudBaseUrl, ApiKey = key };
+        await new OllamaStrategicPlanner(http, options).ProposeAsync(Context);
+        using var sent = JsonDocument.Parse(handler.Bodies[0]);
+        Assert.Equal("glm-5.3-flash", sent.RootElement.GetProperty("model").GetString());
+        Assert.DoesNotContain(key, handler.Bodies[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(key, JsonSerializer.Serialize(options), StringComparison.Ordinal);
+        Assert.DoesNotContain(key, options.ToString(), StringComparison.Ordinal);
+        Assert.Null(http.DefaultRequestHeaders.Authorization);
+        await new OllamaStrategicPlanner(http, FastOptions).ProposeAsync(Context);
+        Assert.Equal(2, handler.Calls);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("key\r\ninjected")]
+    [InlineData("key with space")]
+    public void DirectCloudRejectsMissingOrMalformedKeyBeforeAnyRequest(string? key)
+    {
+        using var http = new HttpClient();
+        Assert.Throws<ArgumentException>(() => new OllamaStrategicPlanner(http,
+            FastOptions with { BaseUrl = OllamaOptions.CloudBaseUrl, ApiKey = key }));
+    }
+
+    [Theory]
+    [InlineData("http://ollama.com/")]
+    [InlineData("https://ollama.com:444/")]
+    [InlineData("https://ollama.com.evil.example/")]
+    [InlineData("https://other.example/")]
+    [InlineData("https://ollama.com/api/")]
+    [InlineData("https://ollama.com/?key=secret")]
+    [InlineData("http://localhost:11434/")]
+    public void ApiKeyCannotBeSentToOtherEndpoints(string url)
+    {
+        using var http = new HttpClient();
+        Assert.Throws<ArgumentException>(() => new OllamaStrategicPlanner(http,
+            FastOptions with { BaseUrl = new Uri(url), ApiKey = "synthetic-api-key" }));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, PlannerErrorKind.Authentication)]
+    [InlineData(HttpStatusCode.Forbidden, PlannerErrorKind.Authentication)]
+    [InlineData(HttpStatusCode.NotFound, PlannerErrorKind.MissingModel)]
+    [InlineData(HttpStatusCode.Redirect, PlannerErrorKind.RequestRejected)]
+    public async Task DirectCloudFailuresNeverFallbackOrExposeProviderBody(HttpStatusCode status, PlannerErrorKind kind)
+    {
+        using var handler = new ControlledHandler((_, _) => Task.FromResult(new HttpResponseMessage(status)
+        {
+            Content = new StringContent("synthetic-api-key"),
+            Headers = { Location = new Uri("https://other.example/") }
+        }));
+        using var http = new HttpClient(handler);
+        var error = await Assert.ThrowsAsync<PlannerException>(() => new OllamaStrategicPlanner(http,
+            FastOptions with { BaseUrl = OllamaOptions.CloudBaseUrl, ApiKey = "synthetic-api-key", MaxAttempts = 3 }).ProposeAsync(Context));
+        Assert.Equal(kind, error.Kind);
+        Assert.Equal(1, handler.Calls);
+        Assert.DoesNotContain("synthetic-api-key", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SendsCloudToolContractAndAcceptsNovelSemanticGoal()
     {
         using var handler = new ControlledHandler((_, _) => Task.FromResult(JsonResponse(ValidResponse())));

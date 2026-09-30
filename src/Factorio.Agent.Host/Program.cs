@@ -21,8 +21,8 @@ try
           build --session FILE --item NAME --x N --y N
           produce --session FILE --item NAME --quantity N
           automate-smelting --session FILE --item NAME --quantity N
-          run-goal --session FILE
-          run-campaign --session FILE [--max-goals N]
+          run-goal --session FILE [--config FILE] [--ollama-cloud]
+          run-campaign --session FILE [--max-goals N] [--minutes N] [--config FILE] [--ollama-cloud]
           reconcile-campaign --session FILE --journal FILE
           steam-power --session FILE [--plan FILE]
           research-plan --session FILE --technology NAME
@@ -55,6 +55,7 @@ try
           submit --session FILE --kind KIND --json-file FILE [--ticks N]
           defend --session FILE [--seconds N]
           verify-native|verify-defense|verify-factory|verify-spatial|verify-crafting --session FILE
+          verify-navigation-flow --session FILE
           verify-pilot --session FILE --phase manual|ai|standalone
           stop --session FILE
         """);
@@ -378,24 +379,44 @@ try
         case "run-goal":
         case "run-campaign":
         {
+            double? runMinutes = Option("minutes") is { } minutesText
+                ? double.Parse(minutesText, CultureInfo.InvariantCulture) : null;
+            if (runMinutes is { } minutes && (!double.IsFinite(minutes) || minutes <= 0 || minutes > 1440))
+                throw new ArgumentOutOfRangeException("minutes", "The wall-clock budget must be greater than zero and at most 1440 minutes.");
+            using var runDeadline = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+            if (runMinutes is { } duration) runDeadline.CancelAfter(TimeSpan.FromMinutes(duration));
+            DateTime startedUtc = DateTime.UtcNow;
+            bool directCloud = options.ContainsKey("ollama-cloud");
+            var plannerOptions = await OllamaConfiguration.LoadAsync(Option("config"), directCloud,
+                Environment.GetEnvironmentVariable("OLLAMA_API_KEY"), shutdown.Token);
+            using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
+            var planner = new OllamaStrategicPlanner(http, plannerOptions);
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             using var lease = ActorControlLease.Acquire(session.Directory);
             await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"strategic-production-{Guid.NewGuid():N}.jsonl");
-            using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-            var planner = new OllamaStrategicPlanner(http, new OllamaOptions { MaxAttempts = 1 });
             using var campaignJournal = args[0] == "run-campaign" ? new CampaignJournal(journalPath) : null;
             IControllerJournal journal = campaignJournal is null ? new ControllerJournal(journalPath) : campaignJournal;
             var controller = new StrategicProductionController(game, planner, journal);
             if (args[0] == "run-campaign")
             {
                 string memoryPath = Path.Combine(session.Directory, "strategic-memory.json");
-                int maxGoals = int.Parse(Option("max-goals") ?? "10", CultureInfo.InvariantCulture);
-                var result = await new StrategicCampaignController(game, controller, memoryPath, journalPath, campaignJournal: campaignJournal)
-                    .RunAsync(maxGoals, shutdown.Token);
-                Print(new { result, journalPath, memoryPath, journalLayout = "per-goal" });
+                int maxGoals = int.Parse(Option("max-goals") ?? (runMinutes is null ? "10" : "10000"), CultureInfo.InvariantCulture);
+                try
+                {
+                    var result = await new StrategicCampaignController(game, controller, memoryPath, journalPath, campaignJournal: campaignJournal)
+                        .RunAsync(maxGoals, runDeadline.Token);
+                    Print(new { result, journalPath, memoryPath, journalLayout = "per-goal", startedUtc, runMinutes });
+                }
+                catch (OperationCanceledException) when (runDeadline.IsCancellationRequested && !shutdown.IsCancellationRequested)
+                {
+                    // Executors unwind their owned actions with independent cleanup budgets. Pending
+                    // strategic memory is deliberately preserved for receipt reconciliation on resume.
+                    Print(new { stopReason = "wall-clock-budget", startedUtc, endedUtc = DateTime.UtcNow,
+                        runMinutes, journalPath, memoryPath, requiresReconciliation = true });
+                }
             }
-            else Print(new { result = await controller.RunOnceAsync(shutdown.Token), journalPath });
+            else Print(new { result = await controller.RunOnceAsync(runDeadline.Token), journalPath });
             break;
         }
         case "automate-smelting":
@@ -458,6 +479,12 @@ try
             Print(new { report = await new SpatialQualification(session).RunAsync(shutdown.Token) });
             break;
         }
+        case "verify-navigation-flow":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new NavigationFlowQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
         case "stop":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
@@ -514,7 +541,7 @@ static Dictionary<string, string> Parse(string[] values)
         string value = values[index];
         if (!value.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException($"Expected option, got {value}.");
         string name = value[2..];
-        string contents = name is "fixture" or "stationary-threat" or "reuse" or "recovery-death" ? "true" : ++index < values.Length ? values[index] : throw new ArgumentException($"Missing value for {value}.");
+        string contents = name is "fixture" or "stationary-threat" or "reuse" or "recovery-death" or "ollama-cloud" ? "true" : ++index < values.Length ? values[index] : throw new ArgumentException($"Missing value for {value}.");
         if (!options.TryAdd(name, contents)) throw new ArgumentException($"Duplicate option {value}.");
     }
     return options;

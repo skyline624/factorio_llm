@@ -183,6 +183,26 @@ public sealed class SpatialPlannerTests
         Assert.NotNull(new PlacementPlanner().FindApproach(new(map), "chest", new(new(3.5, .5), 0, 0), [target]));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LastBuildingCannotClosePocketEvenWhenNextMachineRemainsWithinReach(bool remaining)
+    {
+        var map = Map([
+            new("west", "wall", new(-2, 0), new(new(-2.5, -2.5), new(-1.5, 2.5)), 0, "agent"),
+            new("north", "wall", new(0, -2), new(new(-2.5, -2.5), new(2.5, -1.5)), 0, "agent"),
+            new("south", "wall", new(0, 2), new(new(-2.5, 1.5), new(2.5, 2.5)), 0, "agent"),
+            new("east-top", "wall", new(2, -1.5), new(new(1.5, -2.5), new(2.5, -.7)), 0, "agent"),
+            new("east-bottom", "wall", new(2, 1.5), new(new(1.5, .7), new(2.5, 2.5)), 0, "agent")]);
+        var placement = new PlacementCandidate(new(2, 0), 0, 0);
+        var planner = new PlacementPlanner();
+        Assert.False(planner.PreservesExit(new(map), "furnace", placement));
+        var approach = planner.FindApproach(new(map), "furnace", placement, remaining ? [new(0, 2)] : null);
+        Assert.NotNull(approach);
+        Assert.False(new WorldBox(new(-2.5, -2.5), new(2.5, 2.5)).Contains(approach));
+        Assert.True(planner.PreservesExit(new(map with { Actor = map.Actor with { Position = approach } }), "furnace", placement));
+    }
+
     internal static SpatialSnapshot Map(IReadOnlyList<SpatialEntity> entities)
     {
         var prototypes = new Dictionary<string, EntityGeometry>

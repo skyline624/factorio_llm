@@ -29,7 +29,20 @@ Ces commandes et la [CI](.github/workflows/ci.yml) ne doivent lancer ni Factorio
 
 ## Configuration du modèle
 
-Installer Ollama, puis s'y authentifier pour l'accès cloud. Le service local par défaut est `http://localhost:11434` ; le modèle choisi est exactement `glm-5.3-flash:cloud`. L'inférence est distante : les observations et l'historique sélectionnés par l'application sont transmis au service Ollama Cloud. Aucun modèle de remplacement n'est sélectionné silencieusement.
+Deux accès sont disponibles : la passerelle Ollama locale (par défaut) et l'API Ollama Cloud directe. Avec la passerelle, installer Ollama puis s'y authentifier ; son adresse par défaut est `http://localhost:11434`. Le modèle choisi reste `glm-5.3-flash:cloud`. L'API directe emploie le nom natif du même modèle, `glm-5.3-flash`, sans le suffixe de passerelle. Les observations et l'historique sélectionnés sont transmis à Ollama Cloud. Aucun modèle ni transport de remplacement n'est sélectionné silencieusement.
+
+Pour l'accès direct, créer une [clé API Ollama](https://ollama.com/settings/keys), copier le profil cloud puis renseigner `Ollama.ApiKey` dans le fichier local ignoré par Git. Aucun service Ollama local n'est nécessaire :
+
+```powershell
+Copy-Item config/appsettings.cloud.example.json config/appsettings.local.json
+# Renseigner Ollama.ApiKey dans config/appsettings.local.json avant de lancer.
+$hostDll = 'src/Factorio.Agent.Host/bin/Release/net10.0/Factorio.Agent.Host.dll'
+dotnet $hostDll run-campaign --session $sessionFile --max-goals 3
+```
+
+`$sessionFile` désigne le manifeste d'une session démarrée ou reprise, comme décrit plus bas. `run-goal` et `run-campaign` chargent automatiquement `config/appsettings.local.json` depuis la racine du dépôt. `--config FILE` permet de choisir un autre profil ; un fichier explicitement demandé mais absent est refusé. `BaseUrl` sélectionne le transport : `https://ollama.com/` pour l'accès direct, `http://localhost:11434` pour la passerelle. Sans fichier ni drapeau, la passerelle reste le défaut. `--ollama-cloud` force l'URL directe. La clé du fichier est prioritaire ; `OLLAMA_API_KEY` sert de repli si elle est vide. Aucune clé n'est transmise à la passerelle locale.
+
+Une clé manquante ou mal formée est refusée avant toute connexion au jeu. L'authentification utilise un en-tête Bearer vers `https://ollama.com/api/chat` ; les redirections HTTP sont désactivées par le host. Garder la clé uniquement dans le fichier local privé ou l'environnement, jamais dans les profils exemples, les arguments CLI, les journaux ou Git. Voir la [documentation d'authentification Ollama](https://docs.ollama.com/api/authentication).
 
 Le [profil exemple](config/appsettings.example.json) décrit les paramètres de l'application. Il ne constitue pas une requête HTTP à envoyer telle quelle au modèle. Pour préparer un profil local ignoré par Git :
 
@@ -37,7 +50,7 @@ Le [profil exemple](config/appsettings.example.json) décrit les paramètres de 
 Copy-Item config/appsettings.example.json config/appsettings.local.json
 ```
 
-L'adaptateur a réussi un appel réel avec l'effort `low` sur un contexte synthétique, puis a été relié à une première boucle de production dans le jeu. La présence de JSON ou d'arguments d'outils ne garantit jamais leur validité : syntaxe, schéma et corrélation sont contrôlés. La traduction actuelle accepte des objectifs de stock d’objets solides, de fluides, de recherche, de lancement et de déploiement de tourelles identifiés dans le catalogue natif, sous les limites documentées des exécuteurs. C# résout les prérequis scientifiques, fabrique les packs solides pris en charge et vérifie chaque déblocage dans le moteur. Les autres objectifs restent des propositions non exécutables. Le profil ne contient aucun secret et son chargement par une commande de campagne complète reste à développer.
+L'adaptateur via passerelle a réussi un appel réel avec l'effort `low` sur un contexte synthétique, puis a été relié à une première boucle de production dans le jeu. L'accès direct nécessite une qualification cloud distincte. La présence de JSON ou d'arguments d'outils ne garantit jamais leur validité : syntaxe, schéma et corrélation sont contrôlés. La traduction actuelle accepte des objectifs de stock d’objets solides, de fluides, de recherche, de lancement et de déploiement de tourelles identifiés dans le catalogue natif, sous les limites documentées des exécuteurs. C# résout les prérequis scientifiques, fabrique les packs solides pris en charge et vérifie chaque déblocage dans le moteur. Les autres objectifs restent des propositions non exécutables. Les profils exemples ne contiennent aucun secret ; seul le profil local privé peut contenir la clé.
 
 ## Essais avec Factorio
 
@@ -142,6 +155,8 @@ La commande `transport --session FILE --source ID --target ID --item NAME --quan
 Le code original du projet est sous [licence MIT](LICENSE), copyright skyline624. Cette licence ne couvre pas Factorio, ses assets, ni les composants tiers éventuellement utilisés, qui conservent leurs propres licences. Les références étudiées ne sont pas automatiquement des dépendances incorporées. Le projet n'est pas affilié à Wube Software.
 
 La commande `run-campaign --session FILE --max-goals 10` ajoute une [continuité stratégique avec mémoire persistante](docs/strategic-campaign.md). Ses arrêts de budget ou de réconciliation ne sont pas des réussites de campagne. Deux objectifs successifs ont été exécutés avec le modèle réel dans une fixture : recherche des foreuses électriques, puis stock de 50 packs rouges.
+
+`run-campaign --session FILE --minutes 120` borne l'exécution à deux heures réelles, indépendamment de la vitesse du jeu. Avec `--minutes`, la limite secondaire par défaut est de 10 000 tentatives d'objectifs ; `--max-goals` permet de la réduire. Les blocages de réconciliation et répétitions d'objectifs peuvent arrêter la commande plus tôt. À l'échéance, le contrôleur annule son travail et rend `wall-clock-budget` ; les nettoyages bornés peuvent prendre quelques secondes supplémentaires. La mémoire d'un objectif interrompu reste à réconcilier. La commande `stop --session FILE` doit ensuite sauvegarder et arrêter le serveur ; l'expiration du contrôleur seule n'arrête pas le monde.
 
 La recherche prend également en charge le [déblocage du raffinage par extraction électrique native](docs/resource-research.md), qualifié dans une fixture avec un chevalet placé et alimenté par C#. Les réseaux distants et la progression pétrolière complète en économie normale restent à qualifier.
 

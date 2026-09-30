@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using System.Text.Json;
 using Factorio.Agent.Core;
 using Factorio.Agent.Infrastructure;
 
@@ -7,7 +8,7 @@ namespace Factorio.Agent.Host;
 public sealed record ExplorationWaypoint(MapPosition Position, long CollectedTick);
 
 /// <summary>Executes C# spatial plans while yielding actor operations to the deterministic defense loop.</summary>
-public sealed class SpatialController(IGameClient game, IControllerJournal journal) : IAsyncDisposable
+public sealed class SpatialController(IGameClient game, IControllerJournal journal, int maximumMoveDistance = 24) : IAsyncDisposable
 {
     private readonly SpatialClient spatial = new(game);
     private readonly OperationClient operations = new(game);
@@ -107,11 +108,12 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             }
             if (route.Status != RouteStatus.Found || route.Waypoints.Count == 0)
                 throw new NavigationPlanningException(route.Status, $"{route.Status}: no executable route under the current snapshot and search budget.");
-            MapPosition waypoint = SelectWaypoint(field, route);
+            MapPosition waypoint = SelectWaypoint(field, route, maximumMoveDistance);
             remaining = route.Waypoints.SkipWhile(p => p != waypoint).Skip(1).ToList();
             var submission = OperationSubmission.Create(map.Scope, "move", new { position = waypoint, tolerance = 0.15 },
                 map.CollectedTick + 1800, new { position = map.Actor.Position, positionTolerance = 0.5 });
-            OperationReceipt receipt = await ExecuteAsync(submission, deadline.Token);
+            OperationReceipt receipt = await ExecuteAsync(submission, deadline.Token,
+                map.Actor.Position.DistanceTo(waypoint) > 8 ? waypoint : null);
             receipts.Add(receipt);
             if (receipt.Status != "completed") remaining.Clear();
             if (receipt.Status != "completed" && receipt.Error?.Code is not ("path_blocked" or "deadline_exceeded" or "cancelled" or "actor_dead" or "stale_scope" or "position_precondition"))
@@ -195,8 +197,9 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         return true;
     }
 
-    public static MapPosition SelectWaypoint(SpatialCollisionField field, RoutePlan route)
+    public static MapPosition SelectWaypoint(SpatialCollisionField field, RoutePlan route, int maximumMoveDistance = 24)
     {
+        if (maximumMoveDistance is < 1 or > 24) throw new ArgumentOutOfRangeException(nameof(maximumMoveDistance));
         MapPosition start = field.Map.Actor.Position;
         int index = 0;
         while (index < route.Waypoints.Count && start.DistanceTo(route.Waypoints[index]) <= 0.15) index++;
@@ -207,11 +210,11 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         if (index > 0 && !field.SegmentClear(start, next, 0))
             throw new NavigationPlanningException(RouteStatus.StartBlocked, "The reached corner cannot safely connect to the next segment.");
         // A clear straight line alone does not bound the native eight-direction pursuit trajectory.
-        // Combine only short waypoints whose whole steering rectangle is known clear; retain tight corners otherwise.
+        // Combine bounded waypoints whose whole steering rectangle is known clear; retain tight corners otherwise.
         for (int candidate = index + 1; candidate < route.Waypoints.Count; candidate++)
         {
             var point = route.Waypoints[candidate];
-            if (start.DistanceTo(point) > 8 || !field.SteeringRegionClear(start, point)) break;
+            if (start.DistanceTo(point) > maximumMoveDistance || !field.SteeringRegionClear(start, point)) break;
             next = point;
         }
         return next;
@@ -239,19 +242,18 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             PlacementValidation validation = await spatial.ValidateAsync(map.Scope, item, candidates, deadline.Token);
             ValidatedPlacement? selected = validation.Candidates.FirstOrDefault(c => c.Allowed && c.InReach);
             if (selected is null) throw new InvalidOperationException($"No native-valid placement among the {candidates.Count} candidates tested.");
+            var placement = new PlacementCandidate(selected.Position, selected.Direction, 0);
+            var approach = new PlacementPlanner().FindApproach(new(map), item, placement)
+                ?? throw new InvalidOperationException("Construction would leave no reachable exit.");
+            await NavigateAsync(approach, .2, deadline.Token);
             await journal.AppendAsync("placement-plan", new { map.Scope, map.CollectedTick, item, preferredPosition, selected }, deadline.Token);
-            var submission = OperationSubmission.Create(map.Scope, "build", new { item, position = selected.Position, direction = selected.Direction },
-                validation.CollectedTick + 600, new
-                {
-                    inventory = new Dictionary<string, int> { [item] = 1 },
-                    position = map.Actor.Position,
-                    positionTolerance = 0.5
-                });
-            return await ExecuteAsync(submission, deadline.Token);
+            return await WorkAsync("build", new { item, position = selected.Position, direction = selected.Direction },
+                600, token: deadline.Token);
         }
     }
 
-    private async Task<OperationReceipt> ExecuteAsync(OperationSubmission submission, CancellationToken token)
+    private async Task<OperationReceipt> ExecuteAsync(OperationSubmission submission, CancellationToken token,
+        MapPosition? watchedDestination = null)
     {
         await journal.AppendAsync("submission", submission, token);
         ownedOperation = submission.OperationId;
@@ -268,10 +270,32 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             }, token);
             receipt = await QueryKnownAsync(submission.OperationId, token);
         }
+        long lastTerrainTick = receipt.AcceptedTick ?? receipt.UpdatedTick;
         while (!receipt.IsTerminal)
         {
             await DefenseStepAsync(token);
             receipt = await QueryKnownAsync(submission.OperationId, token);
+            // Longer open-terrain moves avoid intermediate stops. Revalidate while walking,
+            // without extending the native deadline or dispatching a competing movement.
+            if (!receipt.IsTerminal && watchedDestination is not null && receipt.UpdatedTick - lastTerrainTick >= 30)
+            {
+                SpatialSnapshot current = await spatial.CaptureAsync(cancellationToken: token);
+                lastTerrainTick = current.CollectedTick;
+                bool valid = current.Scope == submission.Scope && current.Actor.ControlMode == "ai"
+                    && new SpatialCollisionField(current).SteeringRegionClear(current.Actor.Position, watchedDestination);
+                await journal.AppendAsync("movement-terrain-check", new { submission.OperationId, current.Scope,
+                    current.CollectedTick, current.Actor.Position, destination = watchedDestination, valid }, token);
+                if (!valid)
+                {
+                    await journal.AppendAsync("cancel-intent", new { submission.OperationId,
+                        reason = "The observed movement corridor or actor scope changed." }, token);
+                    try { receipt = await operations.CancelAsync(submission.OperationId, token); }
+                    catch (OperationOutcomeUnknownException) { receipt = await QueryKnownAsync(submission.OperationId, token); }
+                    if (!receipt.IsTerminal || receipt.Error?.Code == "stop_unconfirmed")
+                        throw new InvalidDataException("Changed movement corridor requires a confirmed native stop.");
+                    await journal.AppendAsync("cancel-receipt", receipt, token);
+                }
+            }
             if (!receipt.IsTerminal) await Task.Delay(100, token);
         }
         await journal.AppendAsync("receipt", receipt, token);
@@ -297,6 +321,18 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             SpatialSnapshot map = await spatial.CaptureAsync(cancellationToken: token);
             if (map.Scope != scope) throw new InvalidDataException("Actor scope changed before work submission; reconcile the previous intent.");
             RequireAi(map);
+            if (kind == "build")
+            {
+                var json = JsonSerializer.SerializeToElement(arguments, Protocol.Json);
+                string item = json.GetProperty("item").GetString()!;
+                var position = json.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+                int direction = json.TryGetProperty("direction", out var value) ? value.GetInt32() : 0;
+                map = await spatial.CaptureAsync([item], cancellationToken: token);
+                if (map.Scope != scope) throw new InvalidDataException("Actor changed before construction.");
+                RequireAi(map);
+                if (!new PlacementPlanner().PreservesExit(new(map), item, new(position, direction, 0)))
+                    throw new InvalidOperationException("Construction refused: no observed exit after placement.");
+            }
             return await ExecuteAsync(OperationSubmission.Create(map.Scope, kind, arguments,
                 map.CollectedTick + durationTicks, preconditions), token);
         }

@@ -50,15 +50,55 @@ public sealed class PlacementPlanner
 
         bool PreservesAccess(MapPosition approach)
         {
-            if (remainingTargets is null || remainingTargets.Count == 0) return true;
             var after = new SpatialCollisionField(field.Map with
             {
                 Actor = field.Map.Actor with { Position = approach },
                 Entities = futureEntities
             });
+            if (!CanEscape(after, futureBounds)) return false;
+            if (remainingTargets is null || remainingTargets.Count == 0) return true;
             double radius = Math.Max(.2, reach);
             return remainingTargets.All(target => new RoutePlanner().Find(after, target, radius).Status == RouteStatus.Found);
         }
+    }
+
+    public bool PreservesExit(SpatialCollisionField field, string item, PlacementCandidate placement)
+    {
+        EntityGeometry building = field.Map.Prototypes[field.Map.Items[item].EntityName];
+        WorldBox footprint = building.Type == "pipe"
+            ? new(new(placement.Position.X - .5, placement.Position.Y - .5), new(placement.Position.X + .5, placement.Position.Y + .5))
+            : building.CollisionBox.Rotate(placement.Direction).Translate(placement.Position);
+        return CanEscape(new(field.Map with { Entities = field.Map.Entities.Append(new SpatialEntity(
+            "planned-construction", building.Name, placement.Position, footprint, placement.Direction, "planned")).ToArray() }), footprint);
+    }
+
+    // Prove a continuous, body-sized exit beyond the construction neighbourhood. Merely being
+    // within interaction reach of another machine does not prove the actor can leave a pocket.
+    private static bool CanEscape(SpatialCollisionField field, WorldBox footprint)
+    {
+        var neighbourhood = new WorldBox(new(footprint.Min.X - 4, footprint.Min.Y - 4),
+            new(footprint.Max.X + 4, footprint.Max.Y + 4));
+        MapPosition start = field.Map.Actor.Position;
+        if (!field.Walkable(start, 0)) return false;
+        if (!neighbourhood.Contains(start)) return true;
+        var queue = new Queue<MapPosition>();
+        var seen = new HashSet<MapPosition>();
+        for (double x = Math.Floor(start.X * 2) / 2; x <= Math.Ceiling(start.X * 2) / 2; x += .5)
+            for (double y = Math.Floor(start.Y * 2) / 2; y <= Math.Ceiling(start.Y * 2) / 2; y += .5)
+            {
+                var point = new MapPosition(x, y);
+                if (field.Walkable(point) && field.SegmentClear(start, point, 0) && seen.Add(point)) queue.Enqueue(point);
+            }
+        while (queue.TryDequeue(out var point) && seen.Count <= 4096)
+        {
+            if (!neighbourhood.Contains(point)) return true;
+            foreach (var (dx, dy) in new (double, double)[] { (.5, 0), (-.5, 0), (0, .5), (0, -.5) })
+            {
+                var next = new MapPosition(point.X + dx, point.Y + dy);
+                if (!seen.Contains(next) && field.SegmentClear(point, next)) { seen.Add(next); queue.Enqueue(next); }
+            }
+        }
+        return false;
     }
 
     private static bool CanStop(SpatialCollisionField field, MapPosition position)

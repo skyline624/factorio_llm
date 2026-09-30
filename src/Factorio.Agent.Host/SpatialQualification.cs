@@ -37,9 +37,11 @@ public sealed class SpatialQualification(RuntimeSession session)
             SpatialNativeState arrived = await ReadNativeAsync(token);
             Require(arrived.Position.DistanceTo(new(20, 0)) <= 0.4 && arrived.Tick - before.Tick >= 100
                 && arrived.Walls == 18 && arrived.WaterTiles == 28, "Native movement did not reach the goal around preserved obstacles.");
-            Require(changingWorld.InjectedTick is not null && navigation.Receipts.Any(r => r.Error?.Code == "path_blocked"),
-                "The obstacle added during movement did not produce an observed native blockage.");
-            Require(navigation.Receipts.Count >= 3 && navigation.Receipts.All(r => (r.Status == "completed" || r.Error?.Code == "path_blocked")
+            Require(changingWorld.InjectedTick is not null && navigation.Receipts.Any(r => r.Error?.Code == "path_blocked"
+                || r.Status == "cancelled" && r.AcceptedTick == changingWorld.InjectedTick),
+                "The obstacle added during movement did not produce a native blockage or cancellation of the affected move.");
+            Require(navigation.Receipts.Count >= 3 && navigation.Receipts.All(r => (r.Status == "completed" || r.Error?.Code == "path_blocked"
+                || r.Status == "cancelled" && r.AcceptedTick == changingWorld.InjectedTick)
                 && r.Effects.GetProperty("elapsedTicks").GetInt64() > 0), "Native route segments lack completion or blockage evidence.");
             Require(arrived.CharacterId == before.CharacterId && arrived.CharacterCount == 1
                 && (arrived.ConnectedPlayers == 0 || arrived.PilotCharacterId == arrived.CharacterId),

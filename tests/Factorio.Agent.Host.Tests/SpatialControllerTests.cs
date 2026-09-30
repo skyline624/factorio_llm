@@ -54,12 +54,28 @@ public sealed class SpatialControllerTests
     }
 
     [Fact]
-    public void CombinedMoveRemainsWithinEightTiles()
+    public void OpenCorridorNoLongerStopsAtEightTiles()
     {
         var field = new SpatialCollisionField(SpatialPlannerTests.Map([]));
         var points = SpatialController.Subdivide(field.Map.Actor.Position, [new(12, 0)]);
         var chosen = SpatialController.SelectWaypoint(field, new(RouteStatus.Found, points, 0, 12));
-        Assert.InRange(chosen.DistanceTo(field.Map.Actor.Position), 7, 8);
+        Assert.Equal(new MapPosition(12, 0), chosen);
+        var baseline = SpatialController.SelectWaypoint(field, new(RouteStatus.Found, points, 0, 12), 8);
+        Assert.InRange(baseline.DistanceTo(field.Map.Actor.Position), 7, 8);
+    }
+
+    [Fact]
+    public void LongerMovesRemainBoundedToTwentyFourKnownClearTiles()
+    {
+        var map = SpatialPlannerTests.Map([]) with
+        {
+            Bounds = new(new(-32, -32), new(33, 33)),
+            Rows = Enumerable.Range(-32, 65).Select(y => new TileRun(-32, y, 65, "grass")).ToArray()
+        };
+        var field = new SpatialCollisionField(map);
+        var points = SpatialController.Subdivide(map.Actor.Position, [new(30, 0)]);
+        var chosen = SpatialController.SelectWaypoint(field, new(RouteStatus.Found, points, 0, 30));
+        Assert.InRange(chosen.DistanceTo(map.Actor.Position), 23, 24);
     }
 
     [Fact]
@@ -119,6 +135,91 @@ public sealed class SpatialControllerTests
             Types.Add(type);
             return Task.CompletedTask;
         }
+    }
+
+    [Theory]
+    [InlineData("obstacle", false)]
+    [InlineData("obstacle", true)]
+    [InlineData("scope", false)]
+    [InlineData("manual", false)]
+    [InlineData("threat", false)]
+    public async Task LongMovementRechecksTheWorldAndStopsOnceWhenItsCorridorChanges(string change, bool loseCancellation)
+    {
+        using var interruption = new CancellationTokenSource();
+        var game = new ChangingCorridorGame(change, loseCancellation, interruption);
+        var journal = new Journal();
+        await using (var controller = new SpatialController(game, journal))
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => controller.NavigateAsync(new(12, 0), cancellationToken: interruption.Token));
+        Assert.Equal(1, game.Submissions);
+        Assert.Equal(1, game.Cancellations);
+        Assert.True(game.InFlightSpatialReads > 0);
+        Assert.Contains("movement-terrain-check", journal.Types);
+        Assert.Contains("final-receipt", journal.Types);
+        Assert.Equal("cancelled", game.Status);
+    }
+
+    private sealed class ChangingCorridorGame(string change, bool loseCancellation, CancellationTokenSource interruption) : IGameClient
+    {
+        private long tick = 100;
+        private string? operationId;
+        public string Status { get; private set; } = "running";
+        public int Submissions { get; private set; }
+        public int Cancellations { get; private set; }
+        public int InFlightSpatialReads { get; private set; }
+
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var map = SpatialPlannerTests.Map([]) with { CollectedTick = tick };
+            object data;
+            switch (request.Action)
+            {
+                case "spatial":
+                    if (operationId is not null)
+                    {
+                        InFlightSpatialReads++;
+                        map = change switch
+                        {
+                            "obstacle" => map with { Entities = [new("new-wall", "wall", new(6, 0), new(new(5.5, -.5), new(6.5, .5)), 0, "own")] },
+                            "scope" => map with { Scope = map.Scope with { Generation = map.Scope.Generation + 1 } },
+                            "manual" => map with { Actor = map.Actor with { ControlMode = "manual" } },
+                            "threat" => map with { StationaryThreats = [new("worm", new(12, 5), 7, tick)] },
+                            _ => throw new InvalidOperationException(change)
+                        };
+                    }
+                    data = map;
+                    break;
+                case "observe":
+                    data = new
+                    {
+                        map.Scope, collectedTick = tick,
+                        coverage = new { atomic = true, collectionStartTick = tick, collectionEndTick = tick,
+                            enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
+                        agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = map.Actor.Position,
+                            health = 250, weapon = new { ready = false, rounds = 0, range = 0 } },
+                        enemies = Array.Empty<object>()
+                    };
+                    break;
+                case "submit":
+                    operationId = request.Arguments.GetProperty("operationId").GetString();
+                    Submissions++;
+                    data = Receipt();
+                    break;
+                case "operation": tick += 40; data = Receipt(); break;
+                case "cancel":
+                    Assert.Equal(operationId, request.Arguments.GetProperty("operationId").GetString());
+                    Cancellations++;
+                    Status = "cancelled";
+                    interruption.Cancel();
+                    if (loseCancellation) throw new IOException("Cancellation accepted, reply lost.");
+                    data = Receipt();
+                    break;
+                default: throw new InvalidOperationException(request.Action);
+            }
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(data)));
+        }
+
+        private object Receipt() => new { operationId, kind = "move", status = Status, acceptedTick = 100, updatedTick = tick, effects = new { } };
     }
 
     private sealed class RespawningGame(bool duringObservation) : IGameClient

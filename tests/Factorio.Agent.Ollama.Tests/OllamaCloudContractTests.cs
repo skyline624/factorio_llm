@@ -18,9 +18,12 @@ public sealed class OllamaCloudContractTests(ITestOutputHelper output)
             "An accessible iron ore patch is known. There is no sustained plate production yet. " +
             "No research is complete. Hidden areas and hidden enemies are unknown.",
             "Launch a rocket using ordinary resources and verified production while surviving attacks.");
-        using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        bool directCloud = Environment.GetEnvironmentVariable("FACTORIO_OLLAMA_DIRECT") == "1";
+        using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
         var planner = new OllamaStrategicPlanner(http, new OllamaOptions
         {
+            BaseUrl = directCloud ? OllamaOptions.CloudBaseUrl : new Uri("http://localhost:11434/"),
+            ApiKey = directCloud ? Environment.GetEnvironmentVariable("OLLAMA_API_KEY") : null,
             Model = OllamaOptions.DefaultModel,
             ThinkingEffort = "low",
             RequestTimeout = TimeSpan.FromSeconds(90),
@@ -35,6 +38,7 @@ public sealed class OllamaCloudContractTests(ITestOutputHelper output)
             output.WriteLine("LIVE_CLOUD_CONTRACT " + JsonSerializer.Serialize(new
             {
                 model = OllamaOptions.DefaultModel,
+                transport = directCloud ? "direct-cloud" : "local-gateway",
                 fixture = "synthetic-no-game-connection",
                 goal
             }, json));
