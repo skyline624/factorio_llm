@@ -20,6 +20,7 @@ public sealed class RawCapacityGrowth(long persistentTicks = 3600, int persisten
     private sealed record Streak(long FirstTick, long LastTick, int Rounds, long Delivered);
     private readonly Dictionary<string, Streak> streaks = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> failed = new(StringComparer.Ordinal);
+    private readonly HashSet<string> procured = new(StringComparer.Ordinal);
 
     /// <summary>A short item extends its streak with what cells delivered since it began; any other item ends its streak.</summary>
     public void Observe(LogisticsResult round)
@@ -44,14 +45,26 @@ public sealed class RawCapacityGrowth(long persistentTicks = 3600, int persisten
     public double Demand(string item, double planned, double capacity)
     {
         double baseline = planned > 0 ? planned : DefaultPerMinute;
-        return capacity > 0 && Delivered(item) >= SaturatedShare * capacity ? Math.Max(baseline, capacity + DefaultPerMinute) : baseline;
+        bool beyondCells = Delivered(item) >= SaturatedShare * capacity || procured.Contains(item);
+        return capacity > 0 && beyondCells ? Math.Max(baseline, capacity + DefaultPerMinute) : baseline;
     }
+
+    /// <summary>
+    /// The actor had to procure the item: its ready cells, saturated, idle or starved alike, did not cover the factory. On
+    /// 2026-10-01 (seed 20261002) the only coal miner ran out of its own coal, delivered nothing and never looked saturated.
+    /// </summary>
+    public void Procured(string item) => procured.Add(item);
 
     public bool Due(string item, int cells, double capacity, double demand) => cells < maximumCells
         && capacity < demand - 1e-9 && streaks.TryGetValue(item, out var streak) && !HasFailed(item, streak.LastTick)
         && streak.Rounds >= persistentRounds && streak.LastTick - streak.FirstTick >= persistentTicks;
 
-    public void Grew(string item) => streaks.Remove(item); // The new cell must deliver before another shortfall counts.
+    public void Grew(string item)
+    {
+        // The new cell must deliver before another shortfall or procurement counts.
+        streaks.Remove(item);
+        procured.Remove(item);
+    }
 
     public void Failed(string item, long tick) => failed[item] = tick;
 

@@ -111,6 +111,22 @@ public sealed class ResourceCellSupplyTests
     }
 
     [Fact]
+    public void AnItemTheActorHadToProcureGrowsPastItsCapacityEvenFromStarvedCells()
+    {
+        // Campaign 2026-10-01 (seed 20261002): the only coal miner ran out of its own coal, delivered nothing, never looked
+        // saturated, and the actor spent twenty minutes extracting 245 coal by hand-fed drill.
+        var growth = new RawCapacityGrowth();
+        growth.Observe(Round(0, ["coal"]));
+        growth.Observe(Round(3600, ["coal"]));
+        Assert.Equal(RawCapacityGrowth.DefaultPerMinute, growth.Demand("coal", planned: 0, capacity: 15));
+        growth.Procured("coal");
+        Assert.Equal(15 + RawCapacityGrowth.DefaultPerMinute, growth.Demand("coal", planned: 0, capacity: 15));
+        Assert.True(growth.Due("coal", 1, 15, growth.Demand("coal", 0, 15)));
+        growth.Grew("coal"); // The new cell must deliver before procurement counts again.
+        Assert.Equal(RawCapacityGrowth.DefaultPerMinute, growth.Demand("coal", planned: 0, capacity: 45));
+    }
+
+    [Fact]
     public void RawSupplyFactsShowReadyCapacityDepletionAndDrillsPerItem()
     {
         // The planner never saw its raw bottleneck: two depleted iron cells looked like any other factory state.

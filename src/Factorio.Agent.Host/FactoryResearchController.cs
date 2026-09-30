@@ -83,6 +83,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
                 using (ProductionReservations.EnterFactory(await new FactoryRegistry(directory).LoadAsync(observation.Scope.WorldId, token)))
                     stock = await executor.RunAsync(item, target, token);
                 procured[item] = procured.GetValueOrDefault(item) + Math.Max(0, stock.FinalStock - stock.InitialStock);
+                if (raw) growth.Procured(item);
                 procuredAny = true;
             }
             if (procuredAny || grew) continue;
