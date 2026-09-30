@@ -40,6 +40,57 @@ public sealed class FluidCellBuilderTests
         Assert.Equal("pumpjack", plan["drill"].Item);
     }
 
+    [Fact]
+    public void InterruptedFluidCellsResumeWithinTheirAttemptBudgetAndAreAbandonedAfterIt()
+    {
+        var plan = new Dictionary<string, PlannedEntity> { ["drill"] = new("drill", "pumpjack", new(8.5, .5), 0) };
+        var worn = Extractor("jack-1") with { Id = "worn", Status = "building", Attempts = ResourceCellBuilder.MaximumAttempts, Plan = plan };
+        var fresh = Extractor("jack-2") with { Id = "fresh", Status = "building", Attempts = 1, Plan = plan };
+        var other = fresh with { Id = "sulfur", Kind = FluidCellBuilder.MachineKind, Recipe = "sulfur" };
+        var state = new FactoryState(1, "world", [], [worn, fresh, other]);
+        var (resume, abandoned) = FluidCellBuilder.Interrupted(state, c => c.Kind == FluidCellBuilder.ExtractorKind && c.Recipe == "crude-oil");
+        Assert.Equal(fresh with { Attempts = 2 }, resume);
+        Assert.Equal([worn with { Status = ResourceCellBuilder.Abandoned }], abandoned);
+        // A cell registered before attempts were counted resumes as its first attempt.
+        var legacy = FluidCellBuilder.Interrupted(state with { Cells = [fresh with { Attempts = 0 }] }, _ => true);
+        Assert.Equal(1, legacy.Resume!.Attempts);
+    }
+
+    [Fact]
+    public void AResumedCellBuildsItsLostPartsAgainAtTheirPlanPartsFirst()
+    {
+        var plan = new[] { "machine", "pole", "input-chest", "pipe-0", "pipe-1", "pump", "link-0" }
+            .ToDictionary(r => r, r => new PlannedEntity(r, "item", new(0, 0), 0));
+        var cell = new FactoryCell("cell", 0, new(0, 0, true), FluidCellBuilder.MachineKind, "chemical-plant", "sulfur",
+            new Dictionary<string, string> { ["machine"] = "1", ["pole"] = "2", ["pipe-0"] = "3", ["pipe-1"] = "4", ["link-0"] = "5" },
+            "building", 1, Attempts: 1, Plan: plan);
+        // Pipe 4 and link 5 were destroyed while the build was interrupted.
+        var standing = FluidCellBuilder.Standing(cell, new HashSet<string> { "1", "2", "3" });
+        Assert.Equal(["machine", "pipe-0", "pole"], standing.Entities.Keys.Order());
+        Assert.Same(cell.Plan, standing.Plan);
+        Assert.Equal(["input-chest", "link-0", "pipe-1", "pump"], FluidCellBuilder.Unbuilt(standing));
+    }
+
+    [Fact]
+    public void BuiltPipesAreRegisteredFromTheFactoryPhotographHoweverFarTheRouteRuns()
+    {
+        // The first pipes of a 70-tile route lie beyond the capture around the actor at its end; the photograph lists them all.
+        var cell = new FactoryCell("cell", 0, new(0, 0, true), FluidCellBuilder.MachineKind, "chemical-plant", "sulfur",
+            new Dictionary<string, string> { ["machine"] = "plant", ["pipe-0"] = "earlier" }, "building", 1, Attempts: 1,
+            Plan: new Dictionary<string, PlannedEntity> { ["pipe-0"] = new("pipe-0", "pipe", new(9.5, .5), 0) });
+        var scope = new ActorScope("world", "session", "actor", 1, 1);
+        var snapshot = new FactorySnapshot("snapshot", scope, 100, 200, Protocol.ToElement(new { }), [
+            Pipe("far", new(-60.5, .5)), Pipe("near", new(10.5, .5))]);
+        var piped = FluidCellBuilder.WithPipes(cell, snapshot, ["near", "far"], "pipe");
+        Assert.Equal(("far", new MapPosition(-60.5, .5)), (piped.Entities["pipe-1"], piped.Plan!["pipe-1"].Position));
+        Assert.Equal(("near", new MapPosition(10.5, .5)), (piped.Entities["pipe-2"], piped.Plan!["pipe-2"].Position));
+        Assert.Equal("earlier", piped.Entities["pipe-0"]);
+        Assert.Throws<InvalidDataException>(() => FluidCellBuilder.WithPipes(cell, snapshot, ["near", "lost"], "pipe"));
+
+        static FactoryRecord Pipe(string id, MapPosition position) =>
+            new(id, "entity", id, "pipe", Protocol.ToElement(new { role = "factory", type = "pipe", position }));
+    }
+
     private static FactoryCell Extractor(string drill) => new("cell", 0, new(0, 0, true), FluidCellBuilder.ExtractorKind, "pumpjack", "crude-oil",
         new Dictionary<string, string> { ["drill"] = drill }, "ready", 1);
 }

@@ -15,12 +15,9 @@ public sealed class FluidChainDirector(IGameClient game, IControllerJournal jour
     public async Task<FluidChainPlan> AutomateAsync(string item, double perMinute, CancellationToken token)
     {
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
-        var plan = FluidChainPlanner.Plan(catalog, item, perMinute)
-            ?? throw new InvalidOperationException($"{item} has no enabled recipe chain through fluid machines.");
         var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
-        string[] locked = plan.Stages.Select(s => s.MachineItem).Distinct(StringComparer.Ordinal)
-            .Where(m => !FactoryDirector.Enabled(catalog, m) && carried.GetValueOrDefault(m) == 0).ToArray();
-        if (locked.Length > 0) throw new InvalidOperationException($"Research the recipes of {string.Join(", ", locked)} before automating {item}.");
+        var plan = FluidChainPlanner.Plan(catalog, item, perMinute, Machines(catalog, carried))
+            ?? throw new InvalidOperationException($"{item} has no enabled recipe chain through researched or carried fluid machines.");
         await journal.AppendAsync("fluid-chain-plan", new { item, perMinute, plan }, token);
         var builder = new FluidCellBuilder(game, journal, directory);
         var power = new PowerExpansionController(game, journal, directory);
@@ -51,6 +48,11 @@ public sealed class FluidChainDirector(IGameClient game, IControllerJournal jour
         }
         return plan;
     }
+
+    /// <summary>Machines a chain may use, those with fluid boxes among them: craftable from an enabled recipe, or already carried.</summary>
+    public static IReadOnlySet<string> Machines(ProductionCatalog catalog, IReadOnlyDictionary<string, long>? carried = null) =>
+        (catalog.Assemblers ?? new Dictionary<string, NativeAssembler>()).Keys
+            .Where(m => FactoryDirector.Enabled(catalog, m) || carried?.GetValueOrDefault(m) > 0).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>
     /// The next build of a stage fed by extractors, one extractor per machine: nothing once the machines and the extracted

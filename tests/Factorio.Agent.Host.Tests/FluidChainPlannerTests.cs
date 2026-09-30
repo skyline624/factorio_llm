@@ -9,7 +9,7 @@ public sealed class FluidChainPlannerTests
     public void PlasticChainsAChemicalStageToRefiningAndCrudeExtraction()
     {
         // 30 plastic per minute: 15 crafts, 300 gas, 6.67 refinery cycles, 666.7 crude; coal stays raw for logistics.
-        var plan = FluidChainPlanner.Plan(OilCatalogs.Oil(), "plastic-bar", 30)!;
+        var plan = OilCatalogs.Plan(OilCatalogs.Oil(), "plastic-bar", 30)!;
         Assert.Equal(["basic-oil-processing", "plastic-bar"], plan.Stages.Select(s => s.Recipe));
         var refinery = plan.Stages[0];
         var chemical = plan.Stages[1];
@@ -27,7 +27,7 @@ public sealed class FluidChainPlannerTests
     public void InserterThroughputBoundsChemicalCellsBeforeCraftingSpeed()
     {
         // Two plastic bars leave per craft: one basic inserter carries 48 per minute, so 60 plastic need two cells.
-        var plan = FluidChainPlanner.Plan(OilCatalogs.Oil(), "plastic-bar", 60)!;
+        var plan = OilCatalogs.Plan(OilCatalogs.Oil(), "plastic-bar", 60)!;
         Assert.Equal(2, plan.Stages.Single(s => s.Recipe == "plastic-bar").Machines);
     }
 
@@ -35,7 +35,7 @@ public sealed class FluidChainPlannerTests
     public void SulfurDrawsWaterFromTerrainAndSizesRefineriesByCraftingSpeed()
     {
         // 60 sulfur: 30 crafts, 900 gas = 20 refinery cycles against 12 per refinery and minute.
-        var plan = FluidChainPlanner.Plan(OilCatalogs.Oil(), "sulfur", 60)!;
+        var plan = OilCatalogs.Plan(OilCatalogs.Oil(), "sulfur", 60)!;
         Assert.Equal(2, plan.Stages.Single(s => s.Recipe == "basic-oil-processing").Machines);
         var water = plan.Sources.Single(s => s.Fluid == "water");
         Assert.Null(water.Resource);
@@ -46,7 +46,7 @@ public sealed class FluidChainPlannerTests
     [Fact]
     public void SulfuricAcidChainsSulfurAsASolidStageDeliveredByTheActor()
     {
-        var plan = FluidChainPlanner.Plan(OilCatalogs.Oil(), "sulfuric-acid", 500)!;
+        var plan = OilCatalogs.Plan(OilCatalogs.Oil(), "sulfuric-acid", 500)!;
         Assert.Equal(["basic-oil-processing", "sulfur", "sulfuric-acid"], plan.Stages.Select(s => s.Recipe));
         Assert.Equal(25, plan.Stages.Single(s => s.Recipe == "sulfur").CraftsPerMinute, 6);
         Assert.Equal(10, plan.RawPerMinute["iron-plate"], 6);
@@ -60,7 +60,32 @@ public sealed class FluidChainPlannerTests
         var catalog = OilCatalogs.Oil();
         catalog = catalog with { Recipes = [.. catalog.Recipes, new("light-oil-cracking", true, "chemistry", 2,
             [OilCatalogs.Fluid("light-oil", 40), OilCatalogs.Fluid("water", 30)], [OilCatalogs.Fluid("petroleum-gas", 20)], false)] };
-        Assert.Equal("basic-oil-processing", FluidChainPlanner.Choose(catalog, "petroleum-gas")!.Value.Recipe.Name);
+        Assert.Equal("basic-oil-processing", OilCatalogs.Choose(catalog, "petroleum-gas")!.Value.Recipe.Name);
+    }
+
+    [Theory]
+    [InlineData("processing-unit")]
+    [InlineData("battery")]
+    public void AFluidMadeFromDeliveredSolidsDoesNotFeedAChain(string target)
+    {
+        // recipe.lua: processing units and batteries consume sulfuric acid, which a chemical cell makes from sulfur and iron.
+        // Those solids arrive with the next logistics round, after the chain build that waits for the acid.
+        var catalog = OilCatalogs.Advanced();
+        Assert.Null(OilCatalogs.Choose(catalog, target));
+        Assert.Null(OilCatalogs.Plan(catalog, target, 10));
+        Assert.Equal("sulfuric-acid", OilCatalogs.Choose(catalog, "sulfuric-acid")!.Value.Recipe.Name);
+    }
+
+    [Fact]
+    public void OnlyObtainableMachinesServeAChain()
+    {
+        // assembling-machine-3 is faster but its recipe is not researched: concrete goes to the enabled assembling-machine-2.
+        var catalog = OilCatalogs.Advanced();
+        Assert.Equal(["assembling-machine-1", "assembling-machine-2", "chemical-plant", "oil-refinery"], FluidChainDirector.Machines(catalog).Order());
+        Assert.Equal("assembling-machine-2", OilCatalogs.Choose(catalog, "concrete")!.Value.MachineItem);
+        var carried = new Dictionary<string, long> { ["assembling-machine-3"] = 1 };
+        Assert.Equal("assembling-machine-3", FluidChainPlanner.Choose(catalog, "concrete", FluidChainDirector.Machines(catalog, carried))!.Value.MachineItem);
+        Assert.Null(FluidChainPlanner.Choose(catalog, "plastic-bar", new HashSet<string> { "oil-refinery" }));
     }
 
     [Theory]
@@ -76,7 +101,7 @@ public sealed class FluidChainPlannerTests
         if (target == "no-chemical-plant")
             catalog = catalog with { Assemblers = catalog.Assemblers!.Where(p => p.Key != "chemical-plant").ToDictionary(p => p.Key, p => p.Value) };
         string item = target is "disabled-plastic" or "no-chemical-plant" ? "plastic-bar" : target;
-        Assert.Null(FluidChainPlanner.Plan(catalog, item, 10));
+        Assert.Null(OilCatalogs.Plan(catalog, item, 10));
     }
 
     [Theory]
@@ -93,8 +118,8 @@ public sealed class FluidChainPlannerTests
         var catalog = OilCatalogs.Oil();
         catalog = catalog with { Recipes = [.. catalog.Recipes, new("empty-water-barrel", true, "crafting-with-fluid", 0.2,
             [new("water-barrel", "item", 1)], [OilCatalogs.Fluid("water", 50), new("barrel", "item", 1)], false)] };
-        Assert.Equal("sulfur", FluidChainPlanner.Choose(catalog, "sulfur")!.Value.Recipe.Name);
-        Assert.Null(FluidChainPlanner.Choose(catalog with { TerrainFluids = null }, "sulfur"));
+        Assert.Equal("sulfur", OilCatalogs.Choose(catalog, "sulfur")!.Value.Recipe.Name);
+        Assert.Null(OilCatalogs.Choose(catalog with { TerrainFluids = null }, "sulfur"));
     }
 
     [Theory]
@@ -129,6 +154,13 @@ internal static class OilCatalogs
     private static NativeMaterial Item(string name, double amount) => new(name, "item", amount);
     private static NativeItem Placed(string name, string type, int stack = 50) => new(0, stack, PlaceEntity: name, PlaceEntityType: type);
 
+    /// <summary>The chain with the machines the catalog enables, as the director plans it.</summary>
+    public static FluidChainPlan? Plan(ProductionCatalog catalog, string item, double perMinute) =>
+        FluidChainPlanner.Plan(catalog, item, perMinute, FluidChainDirector.Machines(catalog));
+
+    public static (NativeRecipe Recipe, string MachineItem)? Choose(ProductionCatalog catalog, string item) =>
+        FluidChainPlanner.Choose(catalog, item, FluidChainDirector.Machines(catalog));
+
     /// <summary>Raw catalog plus base-game oil processing: recipe.lua amounts, entities.lua crafting speeds.</summary>
     public static ProductionCatalog Oil()
     {
@@ -136,6 +168,9 @@ internal static class OilCatalogs
         return raw with
         {
             Recipes = [.. raw.Recipes,
+                // Unlocked by oil-processing in technology.lua; ingredients are irrelevant here.
+                new("oil-refinery", true, "crafting", 8, [Item("steel-plate", 15)], [Item("oil-refinery", 1)], false),
+                new("chemical-plant", true, "crafting", 5, [Item("steel-plate", 5)], [Item("chemical-plant", 1)], false),
                 new("basic-oil-processing", true, "oil-processing", 5, [Fluid("crude-oil", 100)], [Fluid("petroleum-gas", 45)], false),
                 new("advanced-oil-processing", true, "oil-processing", 5, [Fluid("water", 50), Fluid("crude-oil", 100)],
                     [Fluid("heavy-oil", 25), Fluid("light-oil", 45), Fluid("petroleum-gas", 55)], false),
@@ -157,6 +192,39 @@ internal static class OilCatalogs
                     FluidInputCount: 2, FluidOutputCount: 3),
                 ["chemical-plant"] = new("chemical-plant", new Dictionary<string, bool> { ["chemistry"] = true }, 1, 3500, 255,
                     FluidInputCount: 2, FluidOutputCount: 2)
+            }
+        };
+    }
+
+    /// <summary>
+    /// Oil catalog plus recipe.lua consumers of sulfuric acid and water, with assembling-machine-2 researched and
+    /// assembling-machine-3 not: entities.lua gives both one fluid input and one fluid output box.
+    /// </summary>
+    public static ProductionCatalog Advanced()
+    {
+        var oil = Oil();
+        var fluidCrafting = new Dictionary<string, bool> { ["crafting"] = true, ["crafting-with-fluid"] = true };
+        return oil with
+        {
+            Recipes = [.. oil.Recipes,
+                new("assembling-machine-2", true, "crafting", 0.5, [Item("steel-plate", 2)], [Item("assembling-machine-2", 1)], false),
+                new("assembling-machine-3", false, "crafting", 0.5, [Item("steel-plate", 2)], [Item("assembling-machine-3", 1)], false),
+                new("processing-unit", true, "crafting-with-fluid", 10, [Item("electronic-circuit", 20), Item("advanced-circuit", 2),
+                    Fluid("sulfuric-acid", 5)], [Item("processing-unit", 1)], false),
+                new("battery", true, "chemistry", 4, [Fluid("sulfuric-acid", 20), Item("iron-plate", 1), Item("copper-plate", 1)],
+                    [Item("battery", 1)], false),
+                new("concrete", true, "crafting-with-fluid", 10, [Item("stone-brick", 5), Item("iron-ore", 1), Fluid("water", 100)],
+                    [Item("concrete", 10)], false)],
+            Items = new Dictionary<string, NativeItem>(oil.Items)
+            {
+                ["processing-unit"] = new(0, 100), ["battery"] = new(0, 200), ["concrete"] = new(0, 100), ["advanced-circuit"] = new(0, 200),
+                ["assembling-machine-2"] = Placed("assembling-machine-2", "assembling-machine"),
+                ["assembling-machine-3"] = Placed("assembling-machine-3", "assembling-machine")
+            },
+            Assemblers = new Dictionary<string, NativeAssembler>(oil.Assemblers!)
+            {
+                ["assembling-machine-2"] = new("assembling-machine-2", fluidCrafting, 0.75, 2500, 255, FluidInputCount: 1, FluidOutputCount: 1),
+                ["assembling-machine-3"] = new("assembling-machine-3", fluidCrafting, 1.25, 6250, 255, FluidInputCount: 1, FluidOutputCount: 1)
             }
         };
     }

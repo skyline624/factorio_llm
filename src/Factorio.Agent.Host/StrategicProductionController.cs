@@ -197,7 +197,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             var machines = FactoryDirector.MachinePreference.Where(m => FactoryDirector.Enabled(catalog, m)).ToHashSet(StringComparer.Ordinal);
             // Solid products of fluid chains (plastic, sulfur) are automated through extractor, refinery and chemical cells.
             return AutomationPlanner.Choose(catalog, goal.Target, machines) is null
-                && FluidChainPlanner.Choose(catalog, goal.Target) is not { Recipe.Products: [{ DeterministicItem: true }] }
+                && FluidChainPlanner.Choose(catalog, goal.Target, FluidChainDirector.Machines(catalog)) is not { Recipe.Products: [{ DeterministicItem: true }] }
                 ? "The target has no enabled solid assembler recipe or fluid chain with a solid product; smelted, mined and fluid products are supplied otherwise." : null;
         }
         if (goal.Category == GoalCategory.Defense)

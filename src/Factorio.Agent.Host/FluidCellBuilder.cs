@@ -7,8 +7,10 @@ namespace Factorio.Agent.Host;
 /// <summary>
 /// Builds persistent fluid cells outside factory bands: extractors on fluid deposits, and fluid machines with their pole,
 /// chest-fed inserters when the recipe moves solids, C#-routed pipes and power links. Every id comes from a build receipt and
-/// every role keeps its planned position, so maintenance can rebuild it; an interrupted cell resumes with what already stands.
-/// An extractor feeds exactly one machine, so each new machine consuming an extracted fluid is paired with a free extractor.
+/// every role keeps its planned position, so maintenance can rebuild it. Sites, pipes, pumps and links keep off the ground
+/// reserved for bands, resource rows and steam growth, and poles are linked outward from the fed network wherever it stands.
+/// An interrupted cell resumes where it stands, its lost parts rebuilt at their plan, and is abandoned once its build attempts
+/// are spent. An extractor feeds exactly one machine, so each new machine consuming an extracted fluid is paired with a free one.
 /// </summary>
 public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journal, string directory)
 {
@@ -30,21 +32,22 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         if (drills.Length is 0 or > 16) throw new InvalidOperationException("No bounded native drill catalog is available.");
         // Only the pole of this equipment matters until the site chooses the drill.
         var template = FactoryCellBuilder.Equipment(catalog, drills[0]);
-        string[] items = [.. drills, template.Pole, pipeItem];
+        var ground = await GroundAsync(registry, catalog, token);
         await using var controller = new SpatialController(game, journal);
-        var cell = (await registry.LoadAsync(catalog.Scope.WorldId, token)).Cells.FirstOrDefault(c =>
-            c.Kind == ExtractorKind && c.Status == "building" && c.Recipe == product && c.Plan is not null);
+        var cell = await ResumeAsync(c => c.Kind == ExtractorKind && c.Recipe == product, "drill", registry, catalog, controller, token);
         if (cell is null)
         {
-            var (site, drillItem, tick) = await FindExtractorAsync(resource, template, pipeItem, items, catalog, controller, token);
+            var (site, drillItem, tick) = await FindExtractorAsync(resource, template, pipeItem, [.. drills, template.Pole, pipeItem], ground,
+                catalog, controller, token);
+            await RequireFedPoleAsync(site.Layout, catalog, token);
             cell = new($"fluid-{Guid.NewGuid():N}", 0, new(0, 0, true), ExtractorKind, drillItem, product, new Dictionary<string, string>(),
-                "building", tick, Plan: Roles(site.Layout, "drill"));
+                "building", tick, Attempts: 1, Plan: Roles(site.Layout, "drill"));
             await SaveAsync(registry, catalog, cell, token);
             await journal.AppendAsync("fluid-extractor-plan", new { cell.Id, resource, product, site, tick }, token);
         }
         var equipment = FactoryCellBuilder.Equipment(catalog, cell.MachineItem);
-        cell = await PlaceAsync(cell, registry, catalog, controller, items, token);
-        cell = await PowerAsync(cell, registry, catalog, equipment, controller, items, token);
+        cell = await PlaceAsync(cell, registry, catalog, controller, token);
+        cell = await PowerAsync(cell, registry, catalog, equipment, ground, controller, token);
         // Native stock at the extractor proves power, deposit and port before any machine is planned against it.
         await WaitForStockAsync(product, cell.Entities["drill"], controller, catalog, token);
         return await ReadyAsync(registry, catalog, cell, token);
@@ -71,11 +74,12 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
         string[] pumps = catalog.Items.Where(p => p.Value.PlaceEntityType == "offshore-pump"
             && (carried.GetValueOrDefault(p.Key) > 0 || FactoryDirector.Enabled(catalog, p.Key))).Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
-        string[] items = [machineItem, equipment.Inserter, equipment.Chest, equipment.Pole, pipeItem, .. pumps];
         var registry = new FactoryRegistry(directory);
+        var ground = await GroundAsync(registry, catalog, token);
+        string[] items = [machineItem, equipment.Inserter, equipment.Chest, equipment.Pole, pipeItem, .. pumps, .. ground.Items];
         await using var controller = new SpatialController(game, journal);
-        var cell = (await registry.LoadAsync(catalog.Scope.WorldId, token)).Cells.FirstOrDefault(c => c.Kind == MachineKind
-            && c.Status == "building" && c.MachineItem == machineItem && c.Recipe == recipeName && c.Plan is not null);
+        var cell = await ResumeAsync(c => c.Kind == MachineKind && c.MachineItem == machineItem && c.Recipe == recipeName, "machine",
+            registry, catalog, controller, token);
         if (cell is null)
         {
             var sources = new Dictionary<string, string?>(StringComparer.Ordinal);
@@ -101,6 +105,8 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
             }
             var stock = await SnapshotAsync(catalog, token);
             string force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
+            // Bands, resource rows and steam growth stay free of the machine, its parts, its pipes and a new pump.
+            var planning = FactoryGround.Reserve(map, ground.Boxes(map), pipeItem);
             FluidSupplyRoute? Route(SpatialSnapshot current, string fluid)
             {
                 if (sources.GetValueOrDefault(fluid) is { } source)
@@ -111,18 +117,19 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
                         .FirstOrDefault(p => p is not null) is { } offshore ? new("planned:offshore-supply", offshore.Route) : null;
                 return new FluidSupplyPlanner().Find(current, stock, pipeItem, FluidCellPlanner.PlannedId, fluid);
             }
-            var site = await ControllerPlanning.RunAsync(t => new FluidCellPlanner().Find(map, force, equipment, pipeItem, anchor, input, output,
+            var site = await ControllerPlanning.RunAsync(t => new FluidCellPlanner().Find(planning, force, equipment, pipeItem, anchor, input, output,
                     fluids, Route, cancellationToken: t), controller, TimeSpan.FromMinutes(5), token)
                 ?? throw new InvalidOperationException($"No clear site near the {string.Join(", ", fluids)} supply routes every port assignment of {recipeName}.");
+            await RequireFedPoleAsync(site.Layout, catalog, token);
             cell = new($"fluid-{Guid.NewGuid():N}", 0, new(0, 0, true), MachineKind, machineItem, recipeName, new Dictionary<string, string>(),
-                "building", map.CollectedTick, Plan: Roles(site.Layout, "machine"));
+                "building", map.CollectedTick, Attempts: 1, Plan: Roles(site.Layout, "machine"));
             await SaveAsync(registry, catalog, cell, token);
             await journal.AppendAsync("fluid-cell-plan", new { cell.Id, recipe = recipeName, sources, pumped, anchor, site, map.CollectedTick }, token);
         }
-        cell = await PlaceAsync(cell, registry, catalog, controller, items, token);
+        cell = await PlaceAsync(cell, registry, catalog, controller, token);
         await ConfigureAsync(cell.Entities["machine"], cell.Plan!["machine"].Position, recipeName, catalog, controller, token);
-        cell = await ConnectFluidsAsync(cell, fluids, registry, catalog, controller, pipeItem, token);
-        cell = await PowerAsync(cell, registry, catalog, equipment, controller, items, token);
+        cell = await ConnectFluidsAsync(cell, fluids, ground, registry, catalog, controller, pipeItem, token);
+        cell = await PowerAsync(cell, registry, catalog, equipment, ground, controller, token);
         var snapshot = await SnapshotAsync(catalog, token);
         if (FactoryPower.IsFed(snapshot, cell.Entities["machine"]) == false)
             throw new InvalidOperationException("The fluid machine's network has no power source.");
@@ -167,18 +174,20 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
     }
 
     private async Task<(ExtractorSite Site, string Item, long Tick)> FindExtractorAsync(string resource, CellEquipment template, string pipeItem,
-        string[] items, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
+        string[] items, FactoryGround ground, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
     {
         var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
         var visited = new HashSet<string>(StringComparer.Ordinal);
         for (int attempt = 0; attempt < 5; attempt++)
         {
-            var map = await CaptureAsync(items, catalog, token);
+            var map = await CaptureAsync([.. items, .. ground.Items], catalog, token);
+            // A deposit under a band, a resource row or steam growth stays free for them.
+            var planning = FactoryGround.Reserve(map, ground.Boxes(map), pipeItem);
             foreach (string item in items.Where(i => map.Items.TryGetValue(i, out var placeable)
                 && map.Prototypes[placeable.EntityName] is { Type: "mining-drill", IsElectric: true } drill
                 && drill.FluidBoxes?.Any(b => b.ProductionType == "output") == true
                 && (carried.GetValueOrDefault(i) > 0 || FactoryDirector.Enabled(catalog, i))))
-                if (new FluidCellPlanner().FindExtractor(map, template with { Machine = item }, resource, pipeItem) is { } site)
+                if (new FluidCellPlanner().FindExtractor(planning, template with { Machine = item }, resource, pipeItem) is { } site)
                     return (site, item, map.CollectedTick);
             // Remembered deposits only guide travel; geometry and amounts are observed again on arrival.
             var remembered = game is IResourceMemoryReader reader
@@ -265,46 +274,58 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
 
     /// <summary>
     /// Pipes every fluid input still unconnected: extracted fluids from the paired extractor, the others jointly from the nearest
-    /// stocks, with a new offshore pump for a terrain fluid nothing supplies yet. Built pipes and pumps become cell roles.
+    /// stocks, with a new offshore pump for a terrain fluid nothing supplies yet. Routes and pumps keep off the ground reserved
+    /// around the machine. Built pipes and pumps become cell roles.
     /// </summary>
-    private async Task<FactoryCell> ConnectFluidsAsync(FactoryCell cell, IReadOnlyList<string> fluids, FactoryRegistry registry,
+    private async Task<FactoryCell> ConnectFluidsAsync(FactoryCell cell, IReadOnlyList<string> fluids, FactoryGround ground, FactoryRegistry registry,
         ProductionCatalog catalog, SpatialController controller, string pipeItem, CancellationToken token)
     {
         string machineId = cell.Entities["machine"];
         var machinePosition = cell.Plan!["machine"].Position;
-        var map = await CaptureAsync([pipeItem], catalog, token);
-        bool Connected(SpatialSnapshot current, string fluid) => current.Entities.Single(e => e.Id == machineId).FluidConnections?
-            .Any(p => p.Filter == fluid && p.FlowDirection is "input" or "input-output" && p.TargetEntityId is not null) == true;
-        var pending = fluids.Where(f => !Connected(map, f)).ToList();
+        string[] items = [pipeItem, .. ground.Items];
+        var map = await CaptureAsync(items, catalog, token);
+        if (map.Entities.All(e => e.Id != machineId))
+        {
+            // A resumed cell may lie beyond the capture around the actor.
+            await controller.TravelAsync(machinePosition, 8, catalog, token);
+            map = await CaptureAsync(items, catalog, token);
+        }
+        var machine = map.Entities.SingleOrDefault(e => e.Id == machineId)
+            ?? throw new InvalidOperationException($"The fluid machine {machineId} is not observed at its planned position.");
+        var reserved = ground.Boxes(map);
+        SpatialSnapshot Keep(SpatialSnapshot current) => FactoryGround.Reserve(current, reserved, pipeItem);
+        var pending = fluids.Where(f => machine.FluidConnections?.Any(p => p.Filter == f && p.FlowDirection is "input" or "input-output"
+            && p.TargetEntityId is not null) != true).ToList();
         foreach (string fluid in pending.Where(f => FluidChainPlanner.Resource(catalog, f) is not null).ToArray())
         {
             if (await FreeExtractorAsync(fluid, machinePosition, catalog, controller, token) is not { } source) continue;
-            cell = await RecordPipesAsync(cell, await new PipeConnectionController(game, journal).RunAsync(source, machineId, fluid, token),
+            cell = await RecordPipesAsync(cell, await new PipeConnectionController(game, journal).RunAsync(source, machineId, fluid, token, Keep),
                 registry, catalog, pipeItem, token);
             pending.Remove(fluid);
         }
         if (pending.Count == 0) return cell;
         await controller.ApproachEntityAsync(machineId, machinePosition, catalog, token);
-        map = await CaptureAsync([pipeItem], catalog, token);
+        map = Keep(await CaptureAsync([pipeItem], catalog, token));
         var stock = await SnapshotAsync(catalog, token);
         foreach (string terrain in pending.Where(f => FluidChainPlanner.Terrain(catalog, f)
             && new FluidSupplyPlanner().Find(map, stock, pipeItem, machineId, f, token) is null).ToArray())
         {
-            string pump = await new OffshoreSupplyController(game, journal).PrepareJointSourceAsync(machineId, terrain, pending, catalog, controller, token)
+            string pump = await new OffshoreSupplyController(game, journal).PrepareJointSourceAsync(machineId, terrain, pending, catalog, controller,
+                    token, Keep)
                 ?? throw new InvalidOperationException($"No observed shore supports a {terrain} pump with every route of the machine.");
             var built = (await CaptureAsync([pipeItem], catalog, token)).Entities.Single(e => e.Id == pump);
             string item = catalog.Items.Where(p => p.Value.PlaceEntity == built.Name).Select(p => p.Key).Order(StringComparer.Ordinal).First();
             cell = WithRole(cell, "pump", pump, new("pump", item, built.Position, built.Direction));
             await SaveAsync(registry, catalog, cell, token);
         }
-        map = await CaptureAsync([pipeItem], catalog, token);
+        map = Keep(await CaptureAsync([pipeItem], catalog, token));
         stock = await SnapshotAsync(catalog, token);
         var routes = new MultiFluidSupplyPlanner().Find(map, stock, pipeItem, machineId, pending, token)
             ?? throw new InvalidOperationException($"The fluid machine has no joint route for {string.Join(", ", pending)}.");
         await journal.AppendAsync("fluid-cell-routes", new { cell.Id, machineId, routes, stock.CollectedTick }, token);
         foreach (var route in routes)
-            cell = await RecordPipesAsync(cell, await new PipeConnectionController(game, journal).RunAsync(route.Supply.SourceId, machineId, route.Fluid, token),
-                registry, catalog, pipeItem, token);
+            cell = await RecordPipesAsync(cell, await new PipeConnectionController(game, journal).RunAsync(route.Supply.SourceId, machineId, route.Fluid,
+                token, Keep), registry, catalog, pipeItem, token);
         return cell;
     }
 
@@ -312,34 +333,51 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         ProductionCatalog catalog, string pipeItem, CancellationToken token)
     {
         if (result.BuiltPipeIds.Count == 0) return cell;
-        var map = await CaptureAsync([pipeItem], catalog, token);
-        int index = 0;
-        foreach (var pipe in map.Entities.Where(e => result.BuiltPipeIds.Contains(e.Id)).OrderBy(e => e.Id, StringComparer.Ordinal))
-        {
-            while (cell.Entities.ContainsKey($"pipe-{index}")) index++;
-            cell = WithRole(cell, $"pipe-{index}", pipe.Id, new($"pipe-{index}", pipeItem, pipe.Position, 0));
-        }
-        if (cell.Entities.Values.Intersect(result.BuiltPipeIds).Count() != result.BuiltPipeIds.Count)
-            throw new InvalidDataException("A built pipe is not observed; reconcile the route before registering the cell.");
+        cell = WithPipes(cell, await SnapshotAsync(catalog, token), result.BuiltPipeIds, pipeItem);
         await SaveAsync(registry, catalog, cell, token);
         await journal.AppendAsync("fluid-cell-pipes", new { cell.Id, result.SourceId, result.TargetId, result.Fluid, result.BuiltPipeIds }, token);
         return cell;
     }
 
+    /// <summary>
+    /// The interrupted cell to finish, if any. Cells whose attempts are spent are abandoned first; the resumed one records its
+    /// attempt, the actor walks back to it, and recorded parts that no longer stand are forgotten so their plan builds them again.
+    /// </summary>
+    private async Task<FactoryCell?> ResumeAsync(Func<FactoryCell, bool> match, string machineRole, FactoryRegistry registry,
+        ProductionCatalog catalog, SpatialController controller, CancellationToken token)
+    {
+        var (cell, spent) = Interrupted(await registry.LoadAsync(catalog.Scope.WorldId, token), match);
+        foreach (var worn in spent)
+        {
+            await SaveAsync(registry, catalog, worn, token);
+            await journal.AppendAsync("fluid-cell-abandoned", new { worn.Id, worn.Kind, worn.Recipe, worn.Entities, worn.Attempts }, token);
+        }
+        if (cell is null) return null;
+        await SaveAsync(registry, catalog, cell, token);
+        // Every capture covers 48 tiles around the actor, which may have left the cell since the interruption.
+        await controller.TravelAsync(cell.Plan![machineRole].Position, 8, catalog, token);
+        var standing = Standing(cell, FactoryMaintenance.Present(await SnapshotAsync(catalog, token)));
+        await journal.AppendAsync("fluid-cell-resume", new { cell.Id, cell.Kind, cell.Recipe, cell.Attempts,
+            lost = cell.Entities.Where(p => !standing.Entities.ContainsKey(p.Key)), unbuilt = Unbuilt(standing) }, token);
+        if (standing.Entities.Count < cell.Entities.Count) await SaveAsync(registry, catalog, standing, token);
+        return standing;
+    }
+
+    /// <summary>Builds every planned role without a standing entity, adopting one the engine already placed at its plan.</summary>
     private async Task<FactoryCell> PlaceAsync(FactoryCell cell, FactoryRegistry registry, ProductionCatalog catalog, SpatialController controller,
-        string[] items, CancellationToken token)
+        CancellationToken token)
     {
         var plan = cell.Plan!;
-        string[] parts = PartOrder.Where(plan.ContainsKey).ToArray();
+        var roles = Unbuilt(cell);
+        string[] items = plan.Values.Select(p => p.Item).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var builder = new FactoryCellBuilder(game, journal, directory);
         // Every missing part is carried first, so no production trip interrupts construction.
-        foreach (var group in parts.Where(r => !cell.Entities.ContainsKey(r)).GroupBy(r => plan[r].Item))
+        foreach (var group in roles.GroupBy(r => plan[r].Item))
             await builder.EnsureCarriedAsync(registry, catalog, group.Key, group.Count(), token);
-        for (int index = 0; index < parts.Length; index++)
+        for (int index = 0; index < roles.Count; index++)
         {
-            if (cell.Entities.ContainsKey(parts[index])) continue;
-            var planned = plan[parts[index]];
-            var remaining = parts.Skip(index + 1).Where(r => !cell.Entities.ContainsKey(r)).Select(r => plan[r].Position).ToArray();
+            var planned = plan[roles[index]];
+            var remaining = roles.Skip(index + 1).Select(r => plan[r].Position).ToArray();
             var map = await CaptureAsync(items, catalog, token);
             string entityName = map.Items[planned.Item].EntityName;
             // Built before an interruption: the receipt was applied but not recorded.
@@ -353,20 +391,25 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         return cell;
     }
 
+    /// <summary>
+    /// Links the cell pole outward from the fed network. Links keep off bands, rows and steam growth, giving up steam growth
+    /// before the link itself, and become the cell's link-n roles so maintenance rebuilds them.
+    /// </summary>
     private async Task<FactoryCell> PowerAsync(FactoryCell cell, FactoryRegistry registry, ProductionCatalog catalog, CellEquipment equipment,
-        SpatialController controller, string[] items, CancellationToken token)
+        FactoryGround ground, SpatialController controller, CancellationToken token)
     {
-        var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
-        var zones = (await registry.LoadAsync(catalog.Scope.WorldId, token)).Zones;
-        var context = new FactoryCellBuilder.BuildContext(catalog, equipment, null, controller, registry, items, map => steam is null ? map
-            : PowerExpansionController.ReserveGrowth(map, steam, zones, map.Entities.Single(e => e.Id == map.Actor.Id).Force));
-        await new FactoryCellBuilder(game, journal, directory).ConnectPowerAsync(context, cell.Entities["pole"], cell.Plan!["pole"].Position, token,
+        var bare = ground with { Steam = null };
+        var builder = new FactoryCellBuilder(game, journal, directory);
+        await new CellPowerLinker(game, journal).ConnectAsync(cell.Entities["pole"], cell.Plan!["pole"].Position, equipment.Pole,
+            [.. new[] { equipment.Pole }.Concat(ground.Items).Distinct(StringComparer.Ordinal)], catalog, controller,
+            [map => FactoryGround.Reserve(map, ground.Boxes(map), equipment.Pole), map => FactoryGround.Reserve(map, bare.Boxes(map), equipment.Pole)],
+            count => builder.EnsureCarriedAsync(registry, catalog, equipment.Pole, count, token),
             async (linkId, link) =>
             {
                 // The link belongs to this cell so maintenance rebuilds it when an attack cuts the cell off.
                 cell = FactoryCellBuilder.WithLink(cell, linkId, link, equipment.Pole);
                 await SaveAsync(registry, catalog, cell, token);
-            });
+            }, token);
         return cell;
     }
 
@@ -376,6 +419,64 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         cell = cell with { Status = "ready", Tick = snapshot.CollectedTick };
         await SaveAsync(registry, catalog, cell, token);
         await journal.AppendAsync("fluid-cell-ready", cell, token);
+        return cell;
+    }
+
+    /// <summary>A new cell is only registered when a fed pole is known to link its pole from, however far away it stands.</summary>
+    private async Task RequireFedPoleAsync(CellLayout layout, ProductionCatalog catalog, CancellationToken token)
+    {
+        if (CellPowerLinker.NearestFedPole(await SnapshotAsync(catalog, token), layout.Role("pole")!.Position) is null)
+            throw new InvalidOperationException("No fed electric pole is known to link a fluid cell from; build power first.");
+    }
+
+    private async Task<FactoryGround> GroundAsync(FactoryRegistry registry, ProductionCatalog catalog, CancellationToken token) =>
+        new(await registry.LoadAsync(catalog.Scope.WorldId, token),
+            await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token));
+
+    /// <summary>
+    /// The interrupted fluid cell to resume, counting one more build attempt, and the interrupted ones whose attempts are spent:
+    /// those are abandoned where they stand, as resource cells are. A cell registered before attempts were counted resumes as its first.
+    /// </summary>
+    internal static (FactoryCell? Resume, IReadOnlyList<FactoryCell> Abandoned) Interrupted(FactoryState state, Func<FactoryCell, bool> match)
+    {
+        var interrupted = state.Cells.Where(c => c.Kind is ExtractorKind or MachineKind && c.Status == "building" && c.Plan is not null && match(c)).ToArray();
+        var resume = interrupted.FirstOrDefault(c => c.Attempts < ResourceCellBuilder.MaximumAttempts);
+        return (resume is null ? null : resume with { Attempts = resume.Attempts + 1 },
+            interrupted.Where(c => c.Attempts >= ResourceCellBuilder.MaximumAttempts).Select(c => c with { Status = ResourceCellBuilder.Abandoned }).ToArray());
+    }
+
+    /// <summary>The cell without the recorded parts that no longer stand; their plan stays, so they are built again where the cell expects them.</summary>
+    internal static FactoryCell Standing(FactoryCell cell, IReadOnlySet<string> present) => cell with
+    {
+        Entities = cell.Entities.Where(p => present.Contains(p.Value)).ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal)
+    };
+
+    /// <summary>Planned roles without a standing entity: cell parts in build order first, then links, pipes and pumps by name and number.</summary>
+    internal static IReadOnlyList<string> Unbuilt(FactoryCell cell) => (cell.Plan?.Keys ?? []).Where(r => !cell.Entities.ContainsKey(r))
+        .OrderBy(r => PartOrder.Contains(r) ? Array.IndexOf(PartOrder, r) : PartOrder.Length)
+        .ThenBy(r => Numbered(r).Prefix, StringComparer.Ordinal).ThenBy(r => Numbered(r).Index).ToArray();
+
+    // link-10 follows link-9, so a chain is rebuilt in the order it was laid.
+    private static (string Prefix, int Index) Numbered(string role)
+    {
+        int dash = role.LastIndexOf('-');
+        return dash > 0 && int.TryParse(role.AsSpan(dash + 1), out int index) ? (role[..dash], index) : (role, -1);
+    }
+
+    /// <summary>
+    /// The cell with a route's built pipes as its next pipe-n roles, placed from the whole-factory photograph, so a route
+    /// reaching beyond one capture around the actor is registered whole.
+    /// </summary>
+    internal static FactoryCell WithPipes(FactoryCell cell, FactorySnapshot snapshot, IReadOnlyCollection<string> built, string pipeItem)
+    {
+        if (!built.All(FactoryMaintenance.Present(snapshot).Contains))
+            throw new InvalidDataException("A built pipe is not known to the factory; reconcile the route before registering the cell.");
+        int index = 0;
+        foreach (string id in built.Order(StringComparer.Ordinal))
+        {
+            while (cell.Entities.ContainsKey($"pipe-{index}")) index++;
+            cell = WithRole(cell, $"pipe-{index}", id, new($"pipe-{index}", pipeItem, Position(snapshot, id), 0));
+        }
         return cell;
     }
 
@@ -410,7 +511,10 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
 
     private async Task<SpatialSnapshot> CaptureAsync(IReadOnlyList<string> items, ProductionCatalog catalog, CancellationToken token)
     {
-        var map = await new SpatialClient(game).CaptureAsync(items, 48, token);
+        string[] requested = items.Distinct(StringComparer.Ordinal).ToArray();
+        // One native observation carries the geometry of at most sixteen items.
+        if (requested.Length > 16) throw new InvalidOperationException("Too many cell and reserved-ground items for one native observation.");
+        var map = await new SpatialClient(game).CaptureAsync(requested, 48, token);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor identity changed while building a fluid cell; reconcile partial construction.");
         return map;
     }

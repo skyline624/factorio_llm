@@ -9,7 +9,9 @@ public sealed record PipeConnectionResult(string SourceId, string TargetId, stri
 /// <summary>Builds a C# route and requires its complete native connection graph before reporting success.</summary>
 public sealed class PipeConnectionController(IGameClient game, IControllerJournal journal)
 {
-    public async Task<PipeConnectionResult> RunAsync(string sourceId, string targetId, string fluid, CancellationToken token = default)
+    /// <param name="ground">Reserves ground the route must keep off; only the plan sees it, the safety and proof checks read the engine.</param>
+    public async Task<PipeConnectionResult> RunAsync(string sourceId, string targetId, string fluid, CancellationToken token = default,
+        Func<SpatialSnapshot, SpatialSnapshot>? ground = null)
     {
         if (sourceId == targetId) throw new ArgumentException("Fluid routing requires distinct source and target entities.");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -23,7 +25,7 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
             .Select(p => p.Key).FirstOrDefault() ?? throw new InvalidOperationException("No ordinary pipe item is available.");
         var spatial = new SpatialClient(game);
         SpatialSnapshot initial = await MapAsync();
-        var plan = new PipeRoutePlanner().Find(initial, pipeItem, sourceId, targetId, fluid, cancellationToken: token);
+        var plan = new PipeRoutePlanner().Find(ground?.Invoke(initial) ?? initial, pipeItem, sourceId, targetId, fluid, cancellationToken: token);
         await journal.AppendAsync("pipe-route-plan", new { initial.Scope, initial.CollectedTick, sourceId, targetId, fluid, pipeItem, plan }, token);
         if (plan.Status != PipeRouteStatus.Found || plan.Source is null || plan.Target is null)
             throw new InvalidOperationException($"Fluid routing ended with {plan.Status}; no route is executed.");

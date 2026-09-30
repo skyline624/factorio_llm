@@ -17,10 +17,11 @@ public sealed record FluidChainPlan(string Item, double PerMinute, IReadOnlyList
 /// </summary>
 public static class FluidChainPlanner
 {
-    public static FluidChainPlan? Plan(ProductionCatalog catalog, string item, double perMinute, int maximumMachinesPerStage = 8)
+    public static FluidChainPlan? Plan(ProductionCatalog catalog, string item, double perMinute, IReadOnlySet<string> machineItems,
+        int maximumMachinesPerStage = 8)
     {
         if (!double.IsFinite(perMinute) || perMinute <= 0 || perMinute > 100000) throw new ArgumentOutOfRangeException(nameof(perMinute));
-        if (Choose(catalog, item) is null) return null;
+        if (Choose(catalog, item, machineItems) is null) return null;
         var crafts = new Dictionary<string, (NativeRecipe Recipe, string Machine, double Crafts)>(StringComparer.Ordinal);
         var order = new List<string>();
         var sources = new Dictionary<string, (string? Resource, double Units)>(StringComparer.Ordinal);
@@ -44,7 +45,7 @@ public static class FluidChainPlanner
         void Add(string name, double rate, IReadOnlyList<string> path)
         {
             if (path.Contains(name)) throw new InvalidOperationException("Fluid chain recipes form a cycle: " + string.Join(" -> ", path.Append(name)));
-            var choice = Choose(catalog, name);
+            var choice = Choose(catalog, name, machineItems);
             if (choice is null)
             {
                 if (IsFluid(catalog, name))
@@ -63,17 +64,18 @@ public static class FluidChainPlanner
     }
 
     /// <summary>
-    /// The enabled single-product recipe of a product that moves fluids, with the fastest fluid machine accepting it, whose
-    /// every fluid ingredient can itself be supplied. Solid-only recipes are left to the assembler planner.
+    /// The enabled single-product recipe of a product that moves fluids, with the fastest of the given fluid machines accepting
+    /// it, whose every fluid ingredient can itself be supplied. Solid-only recipes are left to the assembler planner.
     /// </summary>
-    public static (NativeRecipe Recipe, string MachineItem)? Choose(ProductionCatalog catalog, string product) =>
-        Choose(catalog, product, []);
+    public static (NativeRecipe Recipe, string MachineItem)? Choose(ProductionCatalog catalog, string product, IReadOnlySet<string> machineItems) =>
+        Choose(catalog, product, machineItems, []);
 
-    private static (NativeRecipe Recipe, string MachineItem)? Choose(ProductionCatalog catalog, string product, IReadOnlyList<string> path)
+    private static (NativeRecipe Recipe, string MachineItem)? Choose(ProductionCatalog catalog, string product, IReadOnlySet<string> machineItems,
+        IReadOnlyList<string> path)
     {
         if (path.Contains(product) || path.Count > 16) return null;
         var machines = (catalog.Assemblers ?? new Dictionary<string, NativeAssembler>())
-            .Where(p => p.Value.FixedRecipe is null && (p.Value.FluidInputCount > 0 || p.Value.FluidOutputCount > 0))
+            .Where(p => machineItems.Contains(p.Key) && p.Value.FixedRecipe is null && (p.Value.FluidInputCount > 0 || p.Value.FluidOutputCount > 0))
             .OrderByDescending(p => p.Value.CraftingSpeed).ThenBy(p => p.Key, StringComparer.Ordinal).ToArray();
         foreach (var recipe in catalog.Recipes.Where(r => r.Enabled && r.Products.Count == 1 && r.Products[0].Name == product
                 && (r.Products[0].DeterministicItem || r.Products[0].DeterministicFluid) && r.Ingredients.Count > 0
@@ -84,8 +86,10 @@ public static class FluidChainPlanner
         {
             var machine = machines.FirstOrDefault(p => p.Value.Accepts(recipe));
             if (machine.Key is null) continue;
-            if (recipe.Ingredients.Where(i => i.DeterministicFluid).All(i => Resource(catalog, i.Name) is not null
-                || Choose(catalog, i.Name, [.. path, product]) is not null || Terrain(catalog, i.Name)))
+            // A fluid made from solids (sulfuric acid) waits for a logistics round that only follows the chain build: its
+            // consumers are not chained. Extraction, terrain and solid-free stages such as oil processing flow on their own.
+            if (recipe.Ingredients.Where(i => i.DeterministicFluid).All(i => Resource(catalog, i.Name) is not null || Terrain(catalog, i.Name)
+                || Choose(catalog, i.Name, machineItems, [.. path, product]) is { } supplier && supplier.Recipe.Ingredients.All(s => !s.DeterministicItem)))
                 return (recipe, machine.Key);
         }
         return null;
