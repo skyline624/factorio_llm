@@ -7,6 +7,9 @@ namespace Factorio.Agent.Host;
 /// <summary>Early solid production from observed resources and native recipes, with no injected stock.</summary>
 public sealed class ProductionController(IGameClient game, IControllerJournal journal)
 {
+    /// <summary>Own entities one observation may return; beyond it production reports an incomplete view instead of guessing.</summary>
+    public const int MaximumOwnEntities = 5000;
+
     public Task<ProductionResult> ProduceAsync(string item, int targetStock, CancellationToken token = default,
         IReadOnlySet<string>? reservedEntityIds = null) => RunAsync(item, targetStock, token, reservedEntityIds, existingStockOnly: false);
 
@@ -281,7 +284,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
 
     internal async Task<ProductionState> ObserveAsync(CancellationToken token)
     {
-        GameResponse response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 64, limit = 200 }), token);
+        // Every known own entity is needed for exact stock; the 2026-09-30 campaign (seed 20261002) outgrew the 200-entity
+        // default and every production step failed on an incomplete observation.
+        GameResponse response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 64, limit = 200, entityLimit = MaximumOwnEntities }), token);
         if (!response.Ok) throw new GameRpcException(response.Error!);
         JsonElement data = response.Data, agent = data.GetProperty("agent");
         if (!agent.GetProperty("alive").GetBoolean()) throw new InvalidOperationException("The actor died; production requires recovery.");

@@ -63,6 +63,8 @@ function M.observe(args)
   end
   local radius = U.number(args.radius, "radius", 1, 64, 32)
   local limit = U.number(args.limit, "limit", 1, 200, 100, true)
+  -- Own entities have their own bound: production needs every known own inventory once the factory outgrows 200 entities.
+  local entity_limit = U.number(args.entityLimit, "entityLimit", 1, 5000, limit, true)
   s.snapshotSequence = s.snapshotSequence + 1
   local result = {scope = Actor.scope(), snapshotId = s.snapshotSequence, collectedTick = game.tick,
     agent = {alive = c ~= nil, controlMode = s.controlMode, deaths = s.deaths, respawnTick = s.respawnTick,
@@ -70,7 +72,7 @@ function M.observe(args)
       pilotIndex = s.pilotIndex, pilotError = s.pilotError, stopUnconfirmed = s.stopUnconfirmed == true,
       respawnError = s.respawnError},
     operation = Operations.last_receipt(), entities = {}, resources = {}, enemies = {}, players = {}, defenses = {},
-    coverage = {radius = radius, limit = limit, atomic = true, collectionStartTick = game.tick,
+    coverage = {radius = radius, limit = limit, entityLimit = entity_limit, atomic = true, collectionStartTick = game.tick,
       collectionEndTick = game.tick, factoryComplete = false, transitComplete = false,
       fluidsAggregateSafe = false, enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility", enemyComplete = false},
     goal = {rocketsLaunched = Actor.force() and Actor.force().rockets_launched or 0,
@@ -144,9 +146,9 @@ function M.observe(args)
     if entity.valid and entity.force == c.force then ids[#ids + 1] = id else s.known[id] = nil end
   end
   table.sort(ids)
-  for index = 1, math.min(#ids, limit) do result.entities[#result.entities + 1] = M.entity(s.known[ids[index]], true) end
+  for index = 1, math.min(#ids, entity_limit) do result.entities[#result.entities + 1] = M.entity(s.known[ids[index]], true) end
   result.coverage.knownEntityCount, result.coverage.returnedEntityCount = #ids, #result.entities
-  result.coverage.knownInventoriesComplete = #ids <= limit
+  result.coverage.knownInventoriesComplete = #ids <= entity_limit
   result.coverage.resourcesTruncated = resource_count > limit or #found == 10000
   result.coverage.enemiesTruncated = enemy_count > limit or #found == 10000
   result.coverage.resourceDiscovery = "local-radius-only"
