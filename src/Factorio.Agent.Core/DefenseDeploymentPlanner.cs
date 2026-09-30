@@ -8,7 +8,12 @@ public sealed record InstalledTurret(string Id, string Name, MapPosition Positio
     bool Active, double? Range, string? Ammunition);
 public sealed record DefenseFactoryState(int SurfaceIndex, IReadOnlyList<DefenseAnchor> Anchors, IReadOnlyList<InstalledTurret> Turrets)
 {
-    private static readonly HashSet<string> Industry = ["mining-drill", "furnace", "assembling-machine", "lab", "boiler", "generator", "rocket-silo", "container", "storage-tank"];
+    /// <summary>Native types of own industry worth defending; deployed turrets and perimeters share it.</summary>
+    public static readonly IReadOnlySet<string> Industry = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "mining-drill", "furnace", "assembling-machine", "lab", "boiler", "generator", "rocket-silo", "container", "storage-tank",
+        "offshore-pump", "electric-energy-interface", "solar-panel", "burner-generator"
+    };
     public static DefenseFactoryState Read(FactorySnapshot snapshot, ProductionCatalog catalog)
     {
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Defense stock belongs to another actor scope.");

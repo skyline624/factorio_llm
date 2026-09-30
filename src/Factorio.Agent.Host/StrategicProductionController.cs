@@ -6,7 +6,7 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null, FluidProductionResult? Fluid = null, RocketLaunchResult? Rocket = null, DefenseDeploymentResult? Defense = null,
-    AutomationPlan? Automation = null, LogisticsResult? Logistics = null);
+    AutomationPlan? Automation = null, LogisticsResult? Logistics = null, PerimeterDefenseResult? Perimeter = null);
 
 /// <summary>Grounds semantic production or research goals into verified native execution.</summary>
 public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal,
@@ -78,6 +78,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 "Fluid production goals use category production, unit fluid_units and an exact native fluid identifier, up to 100000 units in the known factory. C# supports native refinery configuration and ordinary pipe routes in the observed construction area. Compatible chemical recipes may combine deterministic solid and fluid inputs, including sulfuric acid output, with finite fluid preparation and native pipe connections. Observed solid producer outputs can supply assemblers through calculated belts and inserters. Long-distance fluid networks, temperature-constrained chemistry, complete factory logistics and automatic relocation after resource depletion remain incomplete. " +
                 "Launch goals use category launch, unit completion, quantity 1 and an exact native rocket-silo item identifier. Research the silo and rocket-part recipes first. C# reuses or installs a silo, supplies bounded batches from native requirements and verifies the engine launch counter. Local powered placement and existing production capabilities still bound execution. " +
                 "Defense goals use category defense, unit items, quantity 1 to 32 and a native supported turret item. Completion means at least that many active installed turrets on the actor's surface, each with at least 100 observed rounds. C# services existing turrets first, produces supplies, calculates placements near exposed known industry and reports measured coverage. This is a finite deployment and replenishment goal, not a guarantee of continuous perimeter coverage. " +
+                "Perimeter goals use category defense, unit completion, quantity 1 and a native wall item such as stone-wall. C# rings the known factory core within one observed area with turret nests spaced by native range, outward wall shields and open gaps, loads turret reserves, and registers them so factory logistics rebuilds destroyed defenses and rearms turrets from carried magazines. " +
                 "Automation goals use category production, unit items_per_minute, quantity up to 600 and an exact native item crafted in assemblers. C# builds persistent chest-fed assembler cells for the item and its assembler-made intermediates in a factory band beside the power network, then restocks them; plates and coal are supplied by the actor. When automation is available, research goals also build science cells and laboratories instead of hand-crafting packs. Prefer automation over repeated hand-crafted batches. " +
                 "Choose an unmet useful goal toward the rocket. Other meaningful goals remain permissible proposals with explicit unsupported results.",
             automatedFactory = new
@@ -86,10 +87,13 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 assemblerCells = cells.Where(c => c.Kind == "assembler").GroupBy(c => c.Recipe!).OrderBy(g => g.Key, StringComparer.Ordinal)
                     .Select(g => new { recipe = g.Key, cells = g.Count() }).ToArray(),
                 laboratories = cells.Count(c => c.Kind == "lab"),
+                perimeterTurrets = cells.Where(c => c.Kind == "turret").Sum(c => c.Entities.Count),
+                perimeterWalls = cells.Where(c => c.Kind == "wall").Sum(c => c.Entities.Count),
                 interpretation = "Persistent chest-fed cells keep producing while inputs last; the actor restocks them between goals."
             },
             nativeSiloItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "rocket-silo").Select(p => p.Key).ToArray(),
             nativeDefenseItems = catalog.Turrets?.Keys.Order(StringComparer.Ordinal).ToArray() ?? [],
+            nativeWallItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "wall").Select(p => p.Key).Order(StringComparer.Ordinal).ToArray(),
             scope = "Local observed resources; known own buildings; exact actor inventory at observedTick. Hidden areas and enemies are unknown."
         }, Protocol.Json);
         var context = new StrategicContext(observationId, facts,
@@ -118,7 +122,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         }
         await journal.AppendAsync("strategic-goal", goal, token);
         if (shadow is not null) await ShadowAsync(facts, previousResult, goal, token);
-        string? reason = GroundingFailure(goal, observationId, catalog, science.Technologies, automation);
+        string? reason = GroundingFailure(goal, observationId, catalog, science.Technologies, automation, factoryDirectory is not null);
         if (reason is not null)
         {
             await journal.AppendAsync("grounding-unsupported", new { goal, reason }, token);
@@ -140,6 +144,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             return new(goal, Research: await new ResearchGoalExecutor(game, journal, factoryDirectory: factoryDirectory).RunAsync(goal.Target, token));
         if (goal.Category == GoalCategory.Launch)
             return new(goal, Rocket: await new RocketLaunchController(game, journal).RunAsync(goal.Target, token));
+        if (goal.Category == GoalCategory.Defense && catalog.Items[goal.Target].PlaceEntityType == "wall")
+            return new(goal, Perimeter: await new PerimeterDefenseController(game, journal, factoryDirectory!).RunAsync(goal.Target, token: token));
         if (goal.Category == GoalCategory.Defense)
             return new(goal, Defense: await new DefenseDeploymentController(game, journal).RunAsync(goal.Target, (int)goal.Quantity, token));
         return new(goal, Production: await new ProductionGoalExecutor(game, journal).RunAsync(goal.Target, (int)goal.Quantity, token));
@@ -178,7 +184,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
     }
 
     public static string? GroundingFailure(GoalProposal goal, string observationId, ProductionCatalog catalog,
-        IReadOnlyDictionary<string, NativeTechnology>? technologies = null, bool automation = false)
+        IReadOnlyDictionary<string, NativeTechnology>? technologies = null, bool automation = false, bool factory = false)
     {
         if (goal.ObservationId != observationId) return "The proposal references a different observation.";
         if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.ItemsPerMinute)
@@ -191,6 +197,13 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         }
         if (goal.Category == GoalCategory.Defense)
         {
+            if (catalog.Items.TryGetValue(goal.Target, out var wall) && wall.PlaceEntityType == "wall")
+            {
+                if (goal.Unit != GoalUnit.Completion || goal.Quantity != 1)
+                    return "Perimeter walls use a completion goal with quantity 1; C# sizes turrets and walls from known industry.";
+                if (!factory) return "Perimeter walls need the persistent factory registry.";
+                return catalog.Turrets is { Count: > 0 } ? null : "Perimeter walls need a supported native ammunition turret.";
+            }
             if (goal.Unit != GoalUnit.Items || goal.Quantity is < 1 or > 32 || decimal.Truncate(goal.Quantity) != goal.Quantity)
                 return "Defense requires 1 to 32 whole installed ammunition turrets, unit items.";
             return catalog.Items.TryGetValue(goal.Target, out var turret) && turret.PlaceEntityType == "ammo-turret"

@@ -49,6 +49,13 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         var planningMap = await spatial.CaptureAsync(items, 48, token);
         RequireScope(planningMap.Scope, catalog);
         CellLayout layout = new FactoryBandPlanner().Layout(planningMap, equipment, zone.Origin, cell.Slot, io, io);
+        // Recorded roles let maintenance rebuild a destroyed entity exactly where the cell expects it; power links
+        // recorded by an interrupted run are kept.
+        cell = cell with
+        {
+            Plan = layout.Entities.Concat((cell.Plan?.Values ?? []).Where(p => layout.Entities.All(e => e.Role != p.Role)))
+                .ToDictionary(e => e.Role, StringComparer.Ordinal)
+        };
         await journal.AppendAsync("factory-cell-plan", new { cell.Id, kind, recipe, zone, layout }, token);
         await EnsureItemsAsync(layout.Entities.GroupBy(e => e.Item).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal));
 
@@ -69,7 +76,14 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
             }
             // Also on resume: a pole placed before an interrupted link may still be an unfed island.
-            if (planned.Role == "pole") await ConnectPowerAsync(context, ids["pole"], planned.Position, token);
+            if (planned.Role == "pole")
+                await ConnectPowerAsync(context, ids["pole"], planned.Position, token, async (linkId, link) =>
+                {
+                    // The link belongs to this cell so maintenance rebuilds it after an attack cuts the cell from the generators.
+                    cell = WithLink(cell!, linkId, link, equipment.Pole);
+                    foreach (var (role, id) in cell.Entities) ids[role] = id;
+                    await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
+                });
         }
         if (recipe is not null)
         {
@@ -188,7 +202,12 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 [cell.MachineItem, equipment.Inserter, equipment.Chest, equipment.Pole, .. steam?.Machines ?? []],
                 map => steam is null ? map : PowerExpansionController.ReserveGrowth(map, steam, state.Zones,
                     map.Entities.Single(e => e.Id == map.Actor.Id).Force));
-            await ConnectPowerAsync(context, cell.Entities["pole"], position, token);
+            var repairedCell = cell;
+            await ConnectPowerAsync(context, cell.Entities["pole"], position, token, async (linkId, link) =>
+            {
+                repairedCell = WithLink(repairedCell, linkId, link, equipment.Pole);
+                await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(repairedCell), token);
+            });
             snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
             repaired++;
         }
@@ -204,7 +223,8 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             await new ProductionGoalExecutor(game, journal).RunAsync(item, Math.Min(1000, count), token);
     }
 
-    private async Task ConnectPowerAsync(BuildContext context, string poleId, MapPosition polePosition, CancellationToken token)
+    private async Task ConnectPowerAsync(BuildContext context, string poleId, MapPosition polePosition, CancellationToken token,
+        Func<string, PlacementCandidate, Task> registerLink)
     {
         var spatial = new SpatialClient(game);
         for (int link = 0; link < 24; link++)
@@ -230,10 +250,27 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 throw new InvalidOperationException($"The cell pole cannot join a powered network: {next.Status}.");
             // Link poles come from the carried stock for the whole planned chain; the cell's placed pole never stands in for them.
             await EnsureCarriedAsync(context.Registry, context.Catalog, context.Equipment.Pole, PowerGridPlanner.ChainPoles(next), token);
-            await new PoweredMachineController(game, journal).BuildAtAsync(context.Equipment.Pole, next.Pole, context.Catalog, context.Controller, token);
+            string linkId = await new PoweredMachineController(game, journal).BuildAtAsync(context.Equipment.Pole, next.Pole, context.Catalog, context.Controller, token);
+            await registerLink(linkId, next.Pole);
             await context.Controller.TravelAsync(polePosition, 6, context.Catalog, token);
         }
         throw new InvalidOperationException("Joining the cell to the electric network exceeded its link budget.");
+    }
+
+    /// <summary>Registers a power link pole under the next free <c>link-n</c> role, with its plan.</summary>
+    public static FactoryCell WithLink(FactoryCell cell, string id, PlacementCandidate pole, string poleItem)
+    {
+        int index = 0;
+        while (cell.Entities.ContainsKey($"link-{index}")) index++;
+        string role = $"link-{index}";
+        return cell with
+        {
+            Entities = new Dictionary<string, string>(cell.Entities, StringComparer.Ordinal) { [role] = id },
+            Plan = new Dictionary<string, PlannedEntity>(cell.Plan ?? new Dictionary<string, PlannedEntity>(), StringComparer.Ordinal)
+            {
+                [role] = new(role, poleItem, pole.Position, pole.Direction)
+            }
+        };
     }
 
     /// <summary>Marks the whole band as occupied so power links never take a future cell's slot. A band is reserved once.</summary>
@@ -242,6 +279,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         const string name = "factory-zone-reservation";
         if (map.Entities.Any(e => e.Id == $"{name}:{zone.Id}")) return map;
         var box = new WorldBox(zone.Origin, new(zone.Origin.X + zone.Slots * zone.Pitch, zone.Origin.Y + zone.BandHeight));
+
         var pole = map.Prototypes[map.Items[poleItem].EntityName];
         return map with
         {

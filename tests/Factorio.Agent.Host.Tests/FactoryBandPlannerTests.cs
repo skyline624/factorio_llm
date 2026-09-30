@@ -195,7 +195,10 @@ internal static class FactoryMaps
                 new(["is_lower_object", "is_object", "object", "train"], false, false, false), 1, 1, FluidSourceOffset: new(0, -1),
                 FluidBoxes: [new(1, "output", [Port(1, 8, "output", new(0, 0), new(0, 0), new(0, 0), new(0, 0))])],
                 TileBuildability: [new(Box(0.3984375), new(["water_tile"], false, false, false), Ground),
-                    new(new(new(-1, -2), new(1, -1)), new([], false, false, false), new(["water_tile"], false, false, false))])
+                    new(new(new(-1, -2), new(1, -1)), new([], false, false, false), new(["water_tile"], false, false, false))]),
+            ["gun-turret"] = new("gun-turret", "ammo-turret", Box(0.7), Solid, 2, 2),
+            ["stone-wall"] = new("stone-wall", "wall", Box(0.29), Solid, 1, 1),
+            ["rocket-silo"] = new("rocket-silo", "rocket-silo", Box(4.2), Solid, 9, 9)
         };
         var items = new Dictionary<string, PlaceableItem>
         {
@@ -210,7 +213,9 @@ internal static class FactoryMaps
             ["burner-mining-drill"] = new("burner-mining-drill", 50),
             ["boiler"] = new("boiler", 50),
             ["steam-engine"] = new("steam-engine", 10),
-            ["offshore-pump"] = new("offshore-pump", 20)
+            ["offshore-pump"] = new("offshore-pump", 20),
+            ["gun-turret"] = new("gun-turret", 10),
+            ["stone-wall"] = new("stone-wall", 100)
         };
         var rows = new List<TileRun>();
         for (int y = -half; y < half; y++)

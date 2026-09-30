@@ -24,6 +24,29 @@ public sealed class StrategicGroundingTests
     }
 
     [Fact]
+    public void PerimeterWallsNeedTheFactoryRegistryASupportedTurretAndASingleCompletion()
+    {
+        var catalog = Catalog() with
+        {
+            Items = new Dictionary<string, NativeItem>(Catalog().Items)
+            {
+                ["stone-wall"] = new(0, 100, PlaceEntity: "stone-wall", PlaceEntityType: "wall"),
+                ["gun-turret"] = new(0, 50, PlaceEntity: "gun-turret", PlaceEntityType: "ammo-turret")
+            },
+            Turrets = new Dictionary<string, NativeTurret> { ["gun-turret"] = new("gun-turret", 18, ["bullet"]) }
+        };
+        var goal = Goal() with { Category = GoalCategory.Defense, Target = "stone-wall", Unit = GoalUnit.Completion, Quantity = 1 };
+        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", catalog, factory: true));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Unit = GoalUnit.Items, Quantity = 40 }, "observation", catalog, factory: true));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog with { Turrets = null }, factory: true));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "iron-plate" }, "observation", catalog, factory: true));
+        // Turret deployment keeps its item semantics next to perimeter walls.
+        Assert.Null(StrategicProductionController.GroundingFailure(goal with { Target = "gun-turret", Unit = GoalUnit.Items, Quantity = 4 },
+            "observation", catalog, factory: true));
+    }
+
+    [Fact]
     public void LaunchRequiresNativeSiloAndSingleCompletion()
     {
         var catalog = Catalog() with { Items = new Dictionary<string, NativeItem>(Catalog().Items)

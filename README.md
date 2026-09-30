@@ -84,6 +84,8 @@ dotnet $hostDll defend --session $sessionFile --seconds 60
 
 Elle observe les ennemis visibles dans la portée de l'arme à balles équipée, interrompt le travail en cours avec confirmation, puis tire sans appel au LLM. Elle prend le contrôle exclusif des commandes host ; le bouton manuel conserve la priorité du pilote. Elle ne réalise pas encore la fuite, le réapprovisionnement ou la protection de toute l'usine. `verify-defense --session $sessionFile` vérifie la préemption et le combat dans une **fixture** en injectant équipement et attaquant ; ce test fonctionne sans client et avec le pilote connecté. Voir le [contrôleur de défense](docs/defense.md).
 
+`perimeter-defense --session $sessionFile` entoure le cœur connu de l'usine de nids de tourelles espacés selon la portée native, protégés par des murs extérieurs, avec des ouvertures dont la traversée est prouvée ; chaque tour de logistique reconstruit ensuite les défenses détruites et réarme les tourelles. `verify-perimeter` le qualifie en headless dans une **fixture** préparée, avec une attaque réelle de petits biteurs. Voir le [périmètre défensif](docs/perimeter-defense.md) et ses limites.
+
 Pour lire une photographie complète des inventaires et du transit de l'usine **connue**, collectée à un tick unique :
 
 ```powershell

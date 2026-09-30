@@ -1,15 +1,22 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Factorio.Agent.Core;
 
 namespace Factorio.Agent.Host;
 
-public sealed record FactoryZone(int Id, MapPosition Origin, int Slots, int Pitch, int BandHeight);
+public sealed record FactoryZone(int Id, MapPosition Origin, int Slots, int Pitch, int BandHeight)
+{
+    /// <summary>The whole band, including slots not built yet.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public WorldBox Box => new(Origin, new(Origin.X + Slots * Pitch, Origin.Y + BandHeight));
+}
 /// <summary>
 /// A persistent automated cell. Entity identities are native ids proven by build receipts. Attempts counts the builds
 /// of a resource cell since it last stood complete, so a cell that keeps failing is abandoned instead of resumed forever.
+/// Plan records each role's item, position and direction so maintenance can rebuild it; older registries load without it.
 /// </summary>
 public sealed record FactoryCell(string Id, int Zone, CellSlot Slot, string Kind, string MachineItem, string? Recipe,
-    IReadOnlyDictionary<string, string> Entities, string Status, long Tick, int Attempts = 0)
+    IReadOnlyDictionary<string, string> Entities, string Status, long Tick, int Attempts = 0,
+    IReadOnlyDictionary<string, PlannedEntity>? Plan = null)
 {
     /// <summary>Resource, power and defense cells all live outside bands (zone 0); only the kind tells them apart.</summary>
     [System.Text.Json.Serialization.JsonIgnore]

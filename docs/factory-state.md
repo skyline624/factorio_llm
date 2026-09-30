@@ -25,7 +25,7 @@ Chaque enregistrement possède `id`, `kind`, `entityId`, `name` et `data`.
 
 | Kind | Contenu | Agrégation |
 |---|---|---|
-| `entity` | Identité, rôle acteur/usine/cadavre, surface, position, direction et références vers les compartiments. | Aucun stock additionné. |
+| `entity` | Identité, rôle acteur/usine/cadavre, surface, position, direction, références vers les compartiments et, pour les poteaux et entités électriques, `power` (énergie et réseau électrique natif). | Aucun stock additionné. |
 | `inventory` | Tous les inventaires natifs de l'entité, avec identifiant propriétaire/index, quantités par objet/qualité, piles occupées, santé, chargeur entamé ou durabilité applicable. Curseur du pilote associé inclus séparément. | Chaque propriétaire/index n'est compté qu'une fois. |
 | `transit` | Sections de lignes de tapis et piles tenues par les bras. | Séparé des inventaires. Une même ligne interne moteur peut couvrir plusieurs sections : ses sections physiques ne sont pas fusionnées par `line_equals`. |
 | `fluid` | Contenu natif du segment, ou du tampon indépendant si aucun segment n'existe, température disponible, capacité et boîtes sources. | Un seul contenu par identifiant surface/segment ; les boîtes sources ne sont pas additionnées. |
