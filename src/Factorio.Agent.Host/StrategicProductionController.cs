@@ -28,7 +28,10 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         JsonElement agent = observation.Data.GetProperty("agent");
         string observationId = $"{observation.Data.GetProperty("snapshotId").GetInt64()}:{observation.Tick}";
         // Whitelist factual fields: no session credentials, player names or coordinates leave the machine.
-        string facts = JsonSerializer.Serialize(new
+        // The planner rejects contexts above 24,000 characters; a large factory drops the least decisive lists first.
+        string facts = Facts(compact: false);
+        if (facts.Length > 23_000) facts = Facts(compact: true);
+        string Facts(bool compact) => JsonSerializer.Serialize(new
         {
             observedTick = observation.Tick,
             agent = new
@@ -42,7 +45,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             visibleEnemyCount = observation.Data.GetProperty("enemies").ValueKind == JsonValueKind.Array
                 ? observation.Data.GetProperty("enemies").GetArrayLength() : 0,
             knownResources = Names(observation.Data.GetProperty("resources")),
-            knownBuildings = Names(observation.Data.GetProperty("entities")),
+            knownBuildings = Names(observation.Data.GetProperty("entities")).Take(compact ? 40 : int.MaxValue).ToArray(),
             availableSolidRecipes = catalog.Recipes.Where(r => r.Enabled && r.Products.All(p => p.DeterministicItem) && r.Ingredients.All(p => p.DeterministicItem))
                 .Select(r => r.Name).ToArray(),
             knownFactory = new { factory.CollectedTick, factory.Coverage, physicalStocks = factory.SummarizeStocks(),
@@ -64,7 +67,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 && r.Ingredients[0].DeterministicFluid && r.Products[0].DeterministicFluid).Select(r => r.Name).ToArray(),
             technologyCollection = new { science.StartTick, science.EndTick },
             rocketResearchDependencies = SiloResearchDependencies.Read(catalog, science.Technologies),
-            nativeTechnologyIdentifiers = science.Technologies.Keys.Order(StringComparer.Ordinal).ToArray(),
+            nativeTechnologyIdentifiers = compact ? null : science.Technologies.Keys.Order(StringComparer.Ordinal).ToArray(),
             researchedTechnologies = science.Technologies.Values.Where(t => t.Researched).Select(t => t.Name).Order(StringComparer.Ordinal).ToArray(),
             availableResearch = science.Technologies.Values.Where(t => t.Enabled && t.Available && !t.Researched)
                 .Select(t => new { t.Name, t.Count, t.Ingredients, t.Trigger }).ToArray(),
