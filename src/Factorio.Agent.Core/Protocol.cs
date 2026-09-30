@@ -15,7 +15,8 @@ public static class Protocol
     public static readonly IReadOnlySet<string> Actions = new HashSet<string>(StringComparer.Ordinal)
     {
         "hello", "observe", "factory_snapshot", "spatial", "validate_placement", "research_state", "rocket_state",
-        "submit", "operation", "cancel", "recipes", "technologies", "production_catalog", "mark_fixture", "prepare_checkpoint"
+        "submit", "operation", "cancel", "recipes", "technologies", "production_catalog", "mark_fixture", "prepare_checkpoint",
+        "power_state"
     };
 
     public static JsonElement ToElement<T>(T value) => JsonSerializer.SerializeToElement(value, Json);

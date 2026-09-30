@@ -175,7 +175,8 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         return map with
         {
             Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { [name] = pole with { Name = name, Type = "reservation" } },
-            Entities = [.. map.Entities, new SpatialEntity(name, name,
+            // One id per zone: the collision field reports each obstacle id once, so shared ids would hide touching bands.
+            Entities = [.. map.Entities, new SpatialEntity($"{name}:{zone.Id}", name,
                 new((box.Min.X + box.Max.X) / 2, (box.Min.Y + box.Max.Y) / 2), box, 0, "planned")]
         };
     }

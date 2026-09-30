@@ -32,7 +32,7 @@ Les recettes, la défense, les déplacements et la construction conservent leurs
 
 Le journal contient le plan complet avant toute pose. Une reprise peut recevoir ce plan JSON avec `steam-power --session FILE --plan FILE`. Elle vérifie le monde et les équipements, recherche les machines propres déjà présentes aux positions prévues, contrôle leur orientation puis les réutilise. Seuls les éléments manquants sont fabriqués et construits. Une différence ou une ambiguïté arrête la reprise.
 
-Sans plan de reprise, la présence d'une installation existante empêche de construire une seconde installation. La sélection automatique du journal après crash, la maintenance du combustible et le dimensionnement selon les besoins de l'usine restent à développer.
+Sans plan de reprise, la présence d'une installation existante empêche de construire une seconde installation. La sélection automatique du journal après crash reste à développer. Le dimensionnement selon la demande de l'usine et le ravitaillement des chaudières par coffres sont traités par l'[extension de l'alimentation](power-expansion.md).
 
 ## Fixture vérifiée
 
