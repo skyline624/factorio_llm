@@ -32,7 +32,7 @@ try
           deploy-defense --session FILE --item NAME --quantity N
           factory-cell --session FILE --kind assembler|lab --machine ITEM [--recipe NAME]
           factory-logistics --session FILE [--quantity CRAFTS]
-          verify-factory-cells --session FILE
+          verify-factory-cells|verify-factory-research --session FILE
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
           verify-assembly-batches --session FILE
@@ -85,6 +85,12 @@ try
             string journalPath = Path.Combine(session.Directory, $"factory-logistics-{Guid.NewGuid():N}.jsonl");
             Print(new { result = await new FactoryLogistics(game, new ControllerJournal(journalPath), session.Directory)
                 .ServiceAsync(int.Parse(Option("quantity") ?? "40", CultureInfo.InvariantCulture), shutdown.Token), journalPath });
+            break;
+        }
+        case "verify-factory-research":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new FactoryResearchQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-factory-cells":
@@ -427,7 +433,7 @@ try
             string journalPath = Path.Combine(session.Directory, $"strategic-production-{Guid.NewGuid():N}.jsonl");
             using var campaignJournal = args[0] == "run-campaign" ? new CampaignJournal(journalPath) : null;
             IControllerJournal journal = campaignJournal is null ? new ControllerJournal(journalPath) : campaignJournal;
-            var controller = new StrategicProductionController(game, planner, journal);
+            var controller = new StrategicProductionController(game, planner, journal, session.Directory);
             if (args[0] == "run-campaign")
             {
                 string memoryPath = Path.Combine(session.Directory, "strategic-memory.json");

@@ -123,6 +123,8 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             result.Fluid,
             result.Rocket,
             Defense = defense,
+            automation = result.Automation?.Stages.Select(s => new { s.Recipe, s.Machines, s.CraftsPerMinute }).ToArray(),
+            result.Logistics,
             research = result.Research is { } research ? new { research.Target, research.Researched, research.StartTick,
                 research.EndTick, completedCount = research.CompletedTechnologies.Count,
                 recentCompleted = research.CompletedTechnologies.TakeLast(16).ToArray() } : null,

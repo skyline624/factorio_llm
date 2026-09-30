@@ -99,6 +99,23 @@ public sealed class FactoryBandPlannerTests
         Assert.Null(new FactoryZonePlanner().Find(map, map.Prototypes["assembling-machine-1"], new(0, 0), 2));
     }
 
+    [Fact]
+    public void PowerLinksRouteAroundTheReservedBand()
+    {
+        var box = new WorldBox(new(-0.15, -0.15), new(0.15, 0.15));
+        var source = new SpatialEntity("src", "small-electric-pole", new(-18.5, 0.5), box.Translate(new(-18.5, 0.5)), 0, "agent", Power: new(1, 1));
+        var cellPole = new SpatialEntity("cell", "small-electric-pole", new(-29.5, 5.5), box.Translate(new(-29.5, 5.5)), 0, "agent", Power: new(0, 2));
+        var map = FactoryMaps.Grass(40, [source, cellPole]);
+        var zone = new FactoryZone(1, new(-31, 2), 8, 3, 12);
+        var zoneBox = new WorldBox(zone.Origin, new(-7, 14));
+        var free = new PowerGridPlanner().Next(map, "small-electric-pole", cellPole.Bounds, new HashSet<string> { "src" });
+        Assert.True(zoneBox.Contains(free.Pole!.Position), "Without a reservation the shortest link enters the band.");
+        var reserved = new PowerGridPlanner().Next(FactoryCellBuilder.ReserveZone(map, zone, "small-electric-pole"), "small-electric-pole",
+            cellPole.Bounds, new HashSet<string> { "src" });
+        Assert.Equal(PowerGridSearchStatus.Extension, reserved.Status);
+        Assert.False(zoneBox.Contains(reserved.Pole!.Position));
+    }
+
     private static MapPosition At(PlannedEntity e, MapPosition offset)
     {
         var rotated = ExtractionPlanner.Rotate(offset, e.Direction);

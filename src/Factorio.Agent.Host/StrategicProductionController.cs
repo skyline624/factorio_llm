@@ -5,10 +5,12 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
-public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null, FluidProductionResult? Fluid = null, RocketLaunchResult? Rocket = null, DefenseDeploymentResult? Defense = null);
+public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null, FluidProductionResult? Fluid = null, RocketLaunchResult? Rocket = null, DefenseDeploymentResult? Defense = null,
+    AutomationPlan? Automation = null, LogisticsResult? Logistics = null);
 
 /// <summary>Grounds semantic production or research goals into verified native execution.</summary>
-public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal) : IStrategicGoalRunner
+public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal,
+    string? factoryDirectory = null) : IStrategicGoalRunner
 {
     public async Task<StrategicGoalResult> RunOnceAsync(CancellationToken token = default, string? previousResult = null)
     {
@@ -20,6 +22,9 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         ActorScope scope = observation.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
         if (catalog.Scope != scope || science.Scope != scope || factory.Scope != scope) throw new InvalidDataException("Strategic observations span different actor scopes.");
         var defenses = catalog.Turrets is { Count: > 0 } ? DefenseFactoryState.Read(factory, catalog) : null;
+        bool automation = factoryDirectory is not null && FactoryDirector.Available(catalog);
+        var cells = factoryDirectory is null ? [] : (await new FactoryRegistry(factoryDirectory).LoadAsync(scope.WorldId, token)).Cells
+            .Where(c => c.Status == "ready").ToArray();
         JsonElement agent = observation.Data.GetProperty("agent");
         string observationId = $"{observation.Data.GetProperty("snapshotId").GetInt64()}:{observation.Tick}";
         // Whitelist factual fields: no session credentials, player names or coordinates leave the machine.
@@ -70,7 +75,16 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 "Fluid production goals use category production, unit fluid_units and an exact native fluid identifier, up to 100000 units in the known factory. C# supports native refinery configuration and ordinary pipe routes in the observed construction area. Compatible chemical recipes may combine deterministic solid and fluid inputs, including sulfuric acid output, with finite fluid preparation and native pipe connections. Observed solid producer outputs can supply assemblers through calculated belts and inserters. Long-distance fluid networks, temperature-constrained chemistry, complete factory logistics and automatic relocation after resource depletion remain incomplete. " +
                 "Launch goals use category launch, unit completion, quantity 1 and an exact native rocket-silo item identifier. Research the silo and rocket-part recipes first. C# reuses or installs a silo, supplies bounded batches from native requirements and verifies the engine launch counter. Local powered placement and existing production capabilities still bound execution. " +
                 "Defense goals use category defense, unit items, quantity 1 to 32 and a native supported turret item. Completion means at least that many active installed turrets on the actor's surface, each with at least 100 observed rounds. C# services existing turrets first, produces supplies, calculates placements near exposed known industry and reports measured coverage. This is a finite deployment and replenishment goal, not a guarantee of continuous perimeter coverage. " +
+                "Automation goals use category production, unit items_per_minute, quantity up to 600 and an exact native item crafted in assemblers. C# builds persistent chest-fed assembler cells for the item and its assembler-made intermediates in a factory band beside the power network, then restocks them; plates and coal are supplied by the actor. When automation is available, research goals also build science cells and laboratories instead of hand-crafting packs. Prefer automation over repeated hand-crafted batches. " +
                 "Choose an unmet useful goal toward the rocket. Other meaningful goals remain permissible proposals with explicit unsupported results.",
+            automatedFactory = new
+            {
+                available = automation,
+                assemblerCells = cells.Where(c => c.Kind == "assembler").GroupBy(c => c.Recipe!).OrderBy(g => g.Key, StringComparer.Ordinal)
+                    .Select(g => new { recipe = g.Key, cells = g.Count() }).ToArray(),
+                laboratories = cells.Count(c => c.Kind == "lab"),
+                interpretation = "Persistent chest-fed cells keep producing while inputs last; the actor restocks them between goals."
+            },
             nativeSiloItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "rocket-silo").Select(p => p.Key).ToArray(),
             nativeDefenseItems = catalog.Turrets?.Keys.Order(StringComparer.Ordinal).ToArray() ?? [],
             scope = "Local observed resources; known own buildings; exact actor inventory at observedTick. Hidden areas and enemies are unknown."
@@ -100,7 +114,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             await defense.StopOwnedActionAsync(stop.Token);
         }
         await journal.AppendAsync("strategic-goal", goal, token);
-        string? reason = GroundingFailure(goal, observationId, catalog, science.Technologies);
+        string? reason = GroundingFailure(goal, observationId, catalog, science.Technologies, automation);
         if (reason is not null)
         {
             await journal.AppendAsync("grounding-unsupported", new { goal, reason }, token);
@@ -109,8 +123,14 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         // Production recollects inventory, recipes and geometry before acting; the LLM context is never a precondition.
         if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.FluidUnits)
             return new(goal, Fluid: await new FluidProductionController(game, journal).RunAsync(goal.Target, (double)goal.Quantity, token));
+        if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.ItemsPerMinute)
+        {
+            var plan = await new FactoryDirector(game, journal, factoryDirectory!).AutomateAsync(goal.Target, (double)goal.Quantity, token);
+            var service = await new FactoryLogistics(game, journal, factoryDirectory!).ServiceAsync(40, token);
+            return new(goal, Automation: plan, Logistics: service);
+        }
         if (goal.Category == GoalCategory.Research)
-            return new(goal, Research: await new ResearchGoalExecutor(game, journal).RunAsync(goal.Target, token));
+            return new(goal, Research: await new ResearchGoalExecutor(game, journal, factoryDirectory: factoryDirectory).RunAsync(goal.Target, token));
         if (goal.Category == GoalCategory.Launch)
             return new(goal, Rocket: await new RocketLaunchController(game, journal).RunAsync(goal.Target, token));
         if (goal.Category == GoalCategory.Defense)
@@ -119,9 +139,17 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
     }
 
     public static string? GroundingFailure(GoalProposal goal, string observationId, ProductionCatalog catalog,
-        IReadOnlyDictionary<string, NativeTechnology>? technologies = null)
+        IReadOnlyDictionary<string, NativeTechnology>? technologies = null, bool automation = false)
     {
         if (goal.ObservationId != observationId) return "The proposal references a different observation.";
+        if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.ItemsPerMinute)
+        {
+            if (!automation) return "Automation needs enabled assembler, inserter, pole and lab recipes and a factory directory.";
+            if (goal.Quantity is <= 0 or > 600) return "Automation requires a rate above zero and at most 600 items per minute.";
+            var machines = FactoryDirector.MachinePreference.Where(m => FactoryDirector.Enabled(catalog, m)).ToHashSet(StringComparer.Ordinal);
+            return AutomationPlanner.Choose(catalog, goal.Target, machines) is null
+                ? "The target has no enabled solid assembler recipe; smelted, mined and fluid products are supplied otherwise." : null;
+        }
         if (goal.Category == GoalCategory.Defense)
         {
             if (goal.Unit != GoalUnit.Items || goal.Quantity is < 1 or > 32 || decimal.Truncate(goal.Quantity) != goal.Quantity)

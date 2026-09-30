@@ -12,7 +12,8 @@ public interface IResearchStepExecutor
 }
 
 /// <summary>Completes the native dependency closure, requiring engine evidence after every stage.</summary>
-public sealed class ResearchGoalExecutor(IGameClient game, IControllerJournal journal, IResearchStepExecutor? stages = null)
+public sealed class ResearchGoalExecutor(IGameClient game, IControllerJournal journal, IResearchStepExecutor? stages = null,
+    string? factoryDirectory = null)
 {
     public async Task<ResearchGoalResult> RunAsync(string target, CancellationToken token = default)
     {
@@ -21,7 +22,7 @@ public sealed class ResearchGoalExecutor(IGameClient game, IControllerJournal jo
         token = deadline.Token;
         var reader = new TechnologyClient(game);
         var planner = new TechnologyPlanner();
-        var executor = stages ?? new NativeResearchSteps(game, journal);
+        var executor = stages ?? new NativeResearchSteps(game, journal, factoryDirectory);
         TechnologyObservation initial = await reader.ReadDependenciesAsync(target, token);
         var completed = new List<string>();
         for (int index = 0; index < 256; index++)
@@ -55,7 +56,7 @@ public sealed class ResearchGoalExecutor(IGameClient game, IControllerJournal jo
         }
     }
 
-    private sealed class NativeResearchSteps(IGameClient game, IControllerJournal journal) : IResearchStepExecutor
+    private sealed class NativeResearchSteps(IGameClient game, IControllerJournal journal, string? factoryDirectory) : IResearchStepExecutor
     {
         public async Task ExecuteAsync(TechnologyStep step, CancellationToken token)
         {
@@ -64,7 +65,13 @@ public sealed class ResearchGoalExecutor(IGameClient game, IControllerJournal jo
             else if (step.Kind == "mine-trigger")
                 await new ResourceResearchController(game, journal).RunAsync(step.Technology, token);
             else if (step.Kind == "research")
-                await new LaboratoryController(game, journal).RunAsync(step.Technology, token);
+            {
+                // Persistent science cells replace hand-crafted packs once assemblers, inserters and poles are unlocked.
+                var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+                if (factoryDirectory is not null && FactoryDirector.Available(catalog))
+                    await new FactoryResearchController(game, journal, factoryDirectory).RunAsync(step.Technology, token);
+                else await new LaboratoryController(game, journal).RunAsync(step.Technology, token);
+            }
             else throw new InvalidOperationException("Unsupported research stage.");
         }
     }

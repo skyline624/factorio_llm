@@ -1,0 +1,66 @@
+using System.Text.Json;
+using Factorio.Agent.Core;
+
+namespace Factorio.Agent.Host;
+
+/// <summary>
+/// Prepared fixture: injected power source, construction items and plates. Proves that a laboratory technology is
+/// completed by automatically sized science cells, a laboratory and chest logistics, without hand-crafted packs.
+/// </summary>
+public sealed class FactoryResearchQualification(RuntimeSession session)
+{
+    public async Task<string> RunAsync(CancellationToken token)
+    {
+        if (!session.IsFixture) throw new InvalidOperationException("Factory research qualification requires an explicit fixture session.");
+        using var lease = ActorControlLease.Acquire(session.Directory);
+        await using var game = session.CreateClient(lease);
+        string path = Path.Combine(session.Directory, $"factory-research-qualification-{Guid.NewGuid():N}.json");
+        string journalPath = Path.ChangeExtension(path, ".jsonl");
+        var journal = new ControllerJournal(journalPath);
+        var evidence = new List<object>();
+        bool passed = false;
+        try
+        {
+            var mark = await game.ExecuteAsync(GameRequest.Create("mark_fixture", new
+            { reason = "Injected energy interface, early technologies, construction items and plates. Factory research test, not a campaign." }), token);
+            if (!mark.Ok) throw new InvalidDataException("Fixture marker rejected.");
+            const string prepare = """
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; for _,e in pairs(s.find_entities_filtered{area={{-48,-48},{48,48}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-48,48 do for y=-48,48 do tiles[#tiles+1]={name='grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({0,0})); c.health=c.max_health; c.get_main_inventory().clear(); f.cancel_current_research(); for _,t in pairs{'steam-power','electronics','automation-science-pack','automation'} do f.technologies[t].researched=true end; f.technologies['gun-turret'].researched=false; for name,count in pairs{['assembling-machine-1']=4,inserter=8,['iron-chest']=8,['small-electric-pole']=16,lab=2,['iron-plate']=400,['copper-plate']=100} do assert(c.insert{name=name,count=count}==count) end; local source=s.create_entity{name='electric-energy-interface',position={-20,0},force=f}; assert(source); source.electric_buffer_size=1000000000; source.power_production=2000000; source.energy=1000000000; assert(s.create_entity{name='small-electric-pole',position={-18.5,0.5},force=f}); rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,researched=f.technologies['gun-turret'].researched})
+                """;
+            using var setup = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(prepare, token));
+            File.Delete(new FactoryRegistry(session.Directory).Path); // The fixture area was just emptied.
+            evidence.Add(new { check = "explicit-factory-research-preparation", native = setup.RootElement.Clone() });
+
+            var result = await new FactoryResearchController(game, journal, session.Directory).RunAsync("gun-turret", token);
+            var state = await new FactoryRegistry(session.Directory).LoadAsync((await ScopeAsync()).WorldId, token);
+            evidence.Add(new { check = "factory-research", result, cells = state.Cells });
+            if (result.Technology != "gun-turret" || state.Cells.Count(c => c.Kind == "lab") < 1
+                || !state.Cells.Any(c => c.Recipe == "automation-science-pack") || !state.Cells.Any(c => c.Recipe == "iron-gear-wheel"))
+                throw new InvalidDataException("Research did not use the expected science cells and laboratory.");
+
+            var rows = (await File.ReadAllLinesAsync(journalPath, token)).Select(l => JsonDocument.Parse(l)).ToArray();
+            try
+            {
+                var kinds = rows.Where(r => r.RootElement.GetProperty("type").GetString() == "submission")
+                    .Select(r => r.RootElement.GetProperty("data").GetProperty("kind").GetString()).ToArray();
+                evidence.Add(new { check = "no-hand-crafted-science", crafts = kinds.Count(k => k == "craft"), mines = kinds.Count(k => k == "mine"),
+                    transfers = kinds.Count(k => k is "insert" or "take") });
+                if (kinds.Contains("craft")) throw new InvalidDataException("Science or cells were hand-crafted despite supplied items.");
+            }
+            finally { foreach (var row in rows) row.Dispose(); }
+            passed = true;
+            return path;
+        }
+        finally
+        {
+            await LocalJson.WriteAsync(path, new { kind = "prepared-factory-research-qualification", passed, isAutonomousCampaign = false, journalPath, evidence },
+                CancellationToken.None);
+        }
+
+        async Task<ActorScope> ScopeAsync()
+        {
+            var observed = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 1, limit = 1 }), token);
+            return observed.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
+        }
+    }
+}

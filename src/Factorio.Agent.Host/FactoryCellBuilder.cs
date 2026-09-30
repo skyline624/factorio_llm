@@ -153,7 +153,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 if (pole.Power?.NetworkId is { } network && map.Entities.Any(e => e.Id != poleId && e.Power?.NetworkId == network
                     && (map.Prototypes[e.Name].Type == "electric-pole" || IsPowerSource(map.Prototypes[e.Name].Type)))) return;
                 var owned = map.Entities.Where(e => e.Force == pole.Force && e.Id != poleId).Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
-                var next = new PowerGridPlanner().Next(map, equipment.Pole, pole.Bounds, owned, token);
+                var next = new PowerGridPlanner().Next(ReserveZone(map, zone, equipment.Pole), equipment.Pole, pole.Bounds, owned, token);
                 await journal.AppendAsync("factory-power-link", new { poleId, next, map.CollectedTick }, token);
                 if (next.Status == PowerGridSearchStatus.Connected) return;
                 if (next.Status != PowerGridSearchStatus.Extension || next.Pole is null)
@@ -164,6 +164,20 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             }
             throw new InvalidOperationException("Joining the cell to the electric network exceeded its link budget.");
         }
+    }
+
+    /// <summary>Marks the whole band as occupied so power links never take a future cell's slot.</summary>
+    public static SpatialSnapshot ReserveZone(SpatialSnapshot map, FactoryZone zone, string poleItem)
+    {
+        const string name = "factory-zone-reservation";
+        var box = new WorldBox(zone.Origin, new(zone.Origin.X + zone.Slots * zone.Pitch, zone.Origin.Y + zone.BandHeight));
+        var pole = map.Prototypes[map.Items[poleItem].EntityName];
+        return map with
+        {
+            Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { [name] = pole with { Name = name, Type = "reservation" } },
+            Entities = [.. map.Entities, new SpatialEntity(name, name,
+                new((box.Min.X + box.Max.X) / 2, (box.Min.Y + box.Max.Y) / 2), box, 0, "planned")]
+        };
     }
 
     /// <summary>Best currently craftable cell equipment; machines keep the caller's choice.</summary>

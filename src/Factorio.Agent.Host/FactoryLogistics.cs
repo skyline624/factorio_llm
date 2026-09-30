@@ -75,6 +75,28 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 supplied[pack] = supplied.GetValueOrDefault(pack) + moved;
             }
         }
+        // Steam supply and cell furnaces stop without fuel. Keep each burner above a quarter stack of coal.
+        var cellIds = cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
+        foreach (var burner in snapshot.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "factory"
+            && r.Data.TryGetProperty("fuelInventoryId", out _)
+            && (r.Data.GetProperty("type").GetString() == "boiler" || cellIds.Contains(r.EntityId))))
+        {
+            const string fuel = "coal";
+            string inventoryId = burner.Data.GetProperty("fuelInventoryId").GetString()!;
+            var inventory = snapshot.Records.SingleOrDefault(r => r.Id == inventoryId && r.Kind == "inventory");
+            long loaded = inventory is null ? 0 : inventory.Data.GetProperty("items").EnumerateObject().Sum(p => p.Value.GetInt64());
+            long stack = catalog.Items[fuel].StackSize;
+            if (loaded >= stack / 4) continue;
+            long give = Math.Min(stack - loaded, carried.GetValueOrDefault(fuel));
+            if (give > 0)
+            {
+                long moved = await TransferAsync("insert", burner.EntityId, fuel, give, "fuel");
+                carried[fuel] = carried.GetValueOrDefault(fuel) - moved;
+                supplied[fuel] = supplied.GetValueOrDefault(fuel) + moved;
+                give = moved;
+            }
+            if (loaded + give < stack / 4) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + stack - loaded - give;
+        }
         var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick);
         await journal.AppendAsync("factory-logistics", result, token);
         return result;

@@ -71,6 +71,17 @@ public sealed class StrategicGroundingTests
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Unit = GoalUnit.Items }, "observation", Catalog(), technologies));
     }
 
+    [Fact]
+    public void AutomationRatesNeedAnEnabledAssemblerRecipeAndTheFactory()
+    {
+        var catalog = Catalogs.Early();
+        var goal = Goal() with { Target = "automation-science-pack", Unit = GoalUnit.ItemsPerMinute, Quantity = 6, ObservationId = "observation" };
+        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", catalog, automation: true));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog, automation: false));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "iron-plate" }, "observation", catalog, automation: true));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 601 }, "observation", catalog, automation: true));
+    }
+
     private static GoalProposal Goal() => new("observation", "Accumulate iron plates", GoalCategory.Production,
         "iron-plate", 20, GoalUnit.Items, GoalPriority.Normal, new(TimeSpan.Zero, 1, null, null, null));
     private static ProductionCatalog Catalog() => new(new("world", "session", "actor", 1, 2), 100, [],
