@@ -22,7 +22,10 @@ public sealed class ExtractionPlannerTests
     {
         var (map, _) = SmeltingPlannerTests.Setup(installed: true);
         var drill = map.Entities.Single(e => e.Id == "installed");
+        Assert.True(ExtractionPlanner.MiningAreaObserved(map, drill));
         map = map with { Bounds = new(new(-1, 1), new(1, 3)) };
+        // Nearby recovery skips such a drill; campaign 2026-09-30 failed a goal on one at the edge of the view.
+        Assert.False(ExtractionPlanner.MiningAreaObserved(map, drill));
         Assert.Throws<InvalidDataException>(() => ExtractionPlanner.HasRemainingResources(map, drill));
     }
 

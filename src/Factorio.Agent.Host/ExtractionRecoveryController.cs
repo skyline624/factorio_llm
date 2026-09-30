@@ -20,7 +20,8 @@ internal sealed class ExtractionRecoveryController(IGameClient game, IController
         foreach (var drill in map.Entities.Where(e => names.Contains(e.Name) && !ProductionReservations.Current.Contains(e.Id)
                      && state.Entities.Any(owned => owned.Id == e.Id) && map.Prototypes[e.Name].FuelCategories is { Count: > 0 })
                  .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)))
-            if (!ExtractionPlanner.HasRemainingResources(map, drill)
+            // A drill at the edge of the view cannot be proved depleted from here; it is simply not a candidate.
+            if (ExtractionPlanner.MiningAreaObserved(map, drill) && !ExtractionPlanner.HasRemainingResources(map, drill)
                 && await TryRecoverAsync(drill.Id, catalog, controller, token)) return true;
         return false;
     }

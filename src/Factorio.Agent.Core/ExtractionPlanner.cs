@@ -13,15 +13,23 @@ public sealed class ExtractionPlanner
 
     public static bool HasRemainingResources(SpatialSnapshot map, SpatialEntity installed)
     {
+        if (!MiningAreaObserved(map, installed))
+            throw new InvalidDataException("The complete mining area must be observed before proving depletion.");
+        return EligibleDeposits(map, map.Prototypes[installed.Name]).Any(e => MiningArea(map, installed).Overlaps(e.Bounds));
+    }
+
+    /// <summary>Whether this atomic, complete view contains the drill's whole native mining area.</summary>
+    public static bool MiningAreaObserved(SpatialSnapshot map, SpatialEntity installed) =>
+        map.Coverage.Complete && map.Coverage.Atomic && map.Bounds.Contains(MiningArea(map, installed));
+
+    private static WorldBox MiningArea(SpatialSnapshot map, SpatialEntity installed)
+    {
         EntityGeometry drill = map.Prototypes[installed.Name];
         if (drill.Type != "mining-drill" || drill.MiningRadius is not > 0 || !double.IsFinite(drill.MiningRadius.Value)
             || drill.ResourceCategories is null) throw new InvalidDataException("Missing native drill coverage.");
         double radius = drill.MiningRadius.Value;
-        var area = new WorldBox(new(installed.Position.X - radius, installed.Position.Y - radius),
+        return new(new(installed.Position.X - radius, installed.Position.Y - radius),
             new(installed.Position.X + radius, installed.Position.Y + radius));
-        if (!map.Coverage.Complete || !map.Coverage.Atomic || !map.Bounds.Contains(area))
-            throw new InvalidDataException("The complete mining area must be observed before proving depletion.");
-        return EligibleDeposits(map, drill).Any(e => area.Overlaps(e.Bounds));
     }
 
     private static IEnumerable<SpatialEntity> EligibleDeposits(SpatialSnapshot map, EntityGeometry drill) =>
