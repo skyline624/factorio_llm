@@ -28,7 +28,10 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
     public async Task<PowerState> ObserveAsync(CancellationToken token) =>
         PowerState.Parse(await game.ExecuteAsync(GameRequest.Create("power_state"), token));
 
-    /// <summary>Energy per tick that new cells will draw, from native prototype usage of the machine and its two inserters.</summary>
+    /// <summary>
+    /// Electric energy per tick that new cells will draw, from native prototype usage of the machine and its two inserters.
+    /// A burner machine such as a band furnace burns fuel, so only its inserters load the network.
+    /// </summary>
     public static double CellDemand(SpatialSnapshot map, CellEquipment equipment, bool io) =>
         Energy(map, equipment.Machine) + (io ? 2 * Energy(map, equipment.Inserter) : 0);
 
@@ -372,7 +375,8 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         return state.Boilers.Where(b => b.GeneratorIds.Any(generators.Contains)).ToArray();
     }
 
-    private static double Energy(SpatialSnapshot map, string item) => map.Prototypes[map.Items[item].EntityName].EnergyPerTick ?? 0;
+    private static double Energy(SpatialSnapshot map, string item) =>
+        map.Prototypes[map.Items[item].EntityName] is { IsElectric: true, EnergyPerTick: { } usage } ? usage : 0;
 
     private static WorldBox Footprint(SpatialSnapshot map, string item, PlacementCandidate placement) =>
         map.Prototypes[map.Items[item].EntityName].CollisionBox.Rotate(placement.Direction).Translate(placement.Position);

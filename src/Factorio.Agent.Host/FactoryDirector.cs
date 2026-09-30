@@ -5,7 +5,7 @@ namespace Factorio.Agent.Host;
 
 public sealed record RawCellCapacity(string Item, string Kind, int Cells, double PerMinute, int Built);
 
-/// <summary>Grows the persistent factory: sizes assembler chains for a target rate, adds laboratories and raw resource cells.</summary>
+/// <summary>Grows the persistent factory: sizes assembler and furnace chains for a target rate, adds laboratories and raw resource cells.</summary>
 public sealed class FactoryDirector(IGameClient game, IControllerJournal journal, string directory)
 {
     public static readonly string[] MachinePreference = ["assembling-machine-2", "assembling-machine-1"];
@@ -16,11 +16,17 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     public static bool Enabled(ProductionCatalog catalog, string item) =>
         catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == item));
 
+    /// <summary>Machines new cells are built with: the best enabled assembler and the fastest enabled furnace burning coal.</summary>
+    public static IReadOnlySet<string> MachineItems(ProductionCatalog catalog) =>
+        MachinePreference.Where(m => Enabled(catalog, m)).Take(1)
+            .Concat(FurnaceCellPlanner.Machine(catalog, FactoryLogistics.Fuel) is { } furnace ? [furnace] : Array.Empty<string>())
+            .ToHashSet(StringComparer.Ordinal);
+
     public async Task<AutomationPlan> AutomateAsync(string item, double perMinute, CancellationToken token)
     {
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
-        var machines = MachinePreference.Where(m => Enabled(catalog, m)).Take(1).ToHashSet(StringComparer.Ordinal);
-        if (machines.Count == 0) throw new InvalidOperationException("No assembling machine recipe is enabled; research automation first.");
+        var machines = MachineItems(catalog);
+        if (machines.Count == 0) throw new InvalidOperationException("No assembling machine or furnace recipe is enabled; research automation first.");
         var plan = AutomationPlanner.Plan(catalog, item, perMinute, machines);
         await journal.AppendAsync("factory-automation-plan", new { item, perMinute, plan }, token);
         await SeedRawAsync(catalog, plan.RawPerMinute, token);
@@ -30,11 +36,11 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         foreach (var stage in plan.Stages.OrderBy(s => Depth(catalog, s.Recipe, machines)))
         {
             var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-            int existing = state.Cells.Count(c => c.Kind == "assembler" && c.Recipe == stage.Recipe && c.Status == "ready");
+            int existing = state.Cells.Count(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready");
             // Power grows before the cells that will draw it, so new machines never brown out the running factory.
             await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync(stage.MachineItem, stage.Machines - existing, true, token);
             for (int count = existing; count < stage.Machines; count++)
-                await builder.BuildAsync("assembler", stage.MachineItem, stage.Recipe, token);
+                await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
         }
         return plan;
     }

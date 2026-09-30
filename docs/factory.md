@@ -44,7 +44,7 @@ Un transfert refusé est journalisé comme limite observée ; il n'est jamais re
 
 ## Dimensionnement et recherche
 
-- **`AutomationPlanner`** calcule la chaîne d'assembleurs d'un objet à partir des quantités natives des recettes. Il descend récursivement dans les intermédiaires faits en assembleur. Les plaques, minerais et fluides restent des matières premières fournies autrement. Le nombre de cellules est borné par deux limites :
+- **`AutomationPlanner`** calcule la chaîne d'assembleurs d'un objet à partir des quantités natives des recettes. Il descend récursivement dans les intermédiaires faits en assembleur, et dans l'acier fondu en [bandes de fours](furnace-bands.md). Les plaques de minerai, les minerais et les fluides restent des matières premières fournies autrement. Le nombre de cellules est borné par deux limites :
   - la vitesse de la machine ;
   - le débit d'un inserteur de base, mesuré à environ 0,8 objet par seconde sur le moteur.
 - **`FactoryDirector`** construit les cellules manquantes, fournisseurs d'abord, et ajoute des laboratoires.

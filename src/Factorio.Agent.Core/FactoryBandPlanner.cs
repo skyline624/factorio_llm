@@ -34,28 +34,31 @@ public sealed class FactoryBandPlanner
             throw new InvalidDataException("Band cells require native multi-tile machines and one-tile inserters, chests and poles.");
         int w = machine.TileWidth, h = machine.TileHeight, pitch = Pitch(machine);
         double left = origin.X + slot.Index * pitch;
+        // A machine narrower than the pitch sits east, leaving the pole in the west gap column: like a 3-tile machine's
+        // centre pole, the first slot's pole then stays within supply reach of a link from outside the reserved band.
+        double machineLeft = left + pitch - w;
         double bandTop = origin.Y + slot.Band * BandHeight(machine);
         // Rows from the machine outward: inserters, chests, then the shared two-tile walkway.
         double machineTop = slot.North ? bandTop : bandTop + h + 6;
         double armRow = slot.North ? machineTop + h : machineTop - 1;
         double chestRow = slot.North ? armRow + 1 : armRow - 1;
         double walkTop = slot.North ? chestRow + 1 : chestRow - 2;
-        var center = new MapPosition(left + w / 2.0, machineTop + h / 2.0);
+        var center = new MapPosition(machineLeft + w / 2.0, machineTop + h / 2.0);
         WorldBox body = machine.CollisionBox.Translate(center);
         var entities = new List<PlannedEntity> { new("machine", equipment.Machine, center, 0) };
         if (input)
         {
-            var at = Tile(left, armRow);
-            entities.Add(new("input-inserter", equipment.Inserter, at, Direction(arm, at, from: Tile(left, chestRow), into: body)));
-            entities.Add(new("input-chest", equipment.Chest, Tile(left, chestRow), 0));
+            var at = Tile(machineLeft, armRow);
+            entities.Add(new("input-inserter", equipment.Inserter, at, Direction(arm, at, from: Tile(machineLeft, chestRow), into: body)));
+            entities.Add(new("input-chest", equipment.Chest, Tile(machineLeft, chestRow), 0));
         }
         if (output)
         {
-            var at = Tile(left + w - 1, armRow);
-            entities.Add(new("output-inserter", equipment.Inserter, at, Direction(arm, at, from: body, into: Tile(left + w - 1, chestRow))));
-            entities.Add(new("output-chest", equipment.Chest, Tile(left + w - 1, chestRow), 0));
+            var at = Tile(machineLeft + w - 1, armRow);
+            entities.Add(new("output-inserter", equipment.Inserter, at, Direction(arm, at, from: body, into: Tile(machineLeft + w - 1, chestRow))));
+            entities.Add(new("output-chest", equipment.Chest, Tile(machineLeft + w - 1, chestRow), 0));
         }
-        double poleColumn = w >= 3 ? left + 1 : left + w;
+        double poleColumn = w >= 3 ? left + 1 : left;
         entities.Add(new("pole", equipment.Pole, Tile(poleColumn, armRow), 0));
         var footprint = new WorldBox(new(left, Math.Min(machineTop, chestRow)), new(left + pitch, Math.Max(machineTop + h, chestRow + 1)));
         return new(slot, entities, footprint, new(new(left, walkTop), new(left + pitch, walkTop + 2)));

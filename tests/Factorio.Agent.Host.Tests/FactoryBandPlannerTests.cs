@@ -65,10 +65,11 @@ public sealed class FactoryBandPlannerTests
     {
         var map = FactoryMaps.Grass(40);
         var layout = new FactoryBandPlanner().Layout(map, Assembler with { Machine = "stone-furnace" }, new(0, 0), new(0, 2, true));
-        Assert.Equal(new MapPosition(7, 1), layout.Machine.Position);
-        Assert.Equal(new MapPosition(8.5, 2.5), layout.Role("pole")!.Position);
-        Assert.Equal(new MapPosition(6.5, 2.5), layout.Role("input-inserter")!.Position);
-        Assert.Equal(new MapPosition(7.5, 2.5), layout.Role("output-inserter")!.Position);
+        // The pole takes the west gap column so a link from outside the band reaches the first slot.
+        Assert.Equal(new MapPosition(8, 1), layout.Machine.Position);
+        Assert.Equal(new MapPosition(6.5, 2.5), layout.Role("pole")!.Position);
+        Assert.Equal(new MapPosition(7.5, 2.5), layout.Role("input-inserter")!.Position);
+        Assert.Equal(new MapPosition(8.5, 2.5), layout.Role("output-inserter")!.Position);
     }
 
     [Fact]

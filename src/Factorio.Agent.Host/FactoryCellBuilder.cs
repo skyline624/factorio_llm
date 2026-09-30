@@ -19,6 +19,8 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         deadline.CancelAfter(TimeSpan.FromMinutes(40));
         token = deadline.Token;
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+        if (kind == FurnaceCellPlanner.Kind && FurnaceCellPlanner.Failure(catalog, machineItem, recipe, FactoryLogistics.Fuel) is { } refused)
+            throw new InvalidOperationException(refused);
         var equipment = Equipment(catalog, machineItem);
         bool io = kind != "lab";
         var registry = new FactoryRegistry(directory);
@@ -85,7 +87,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                     await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
                 });
         }
-        if (recipe is not null)
+        if (Configured(kind, recipe))
         {
             var configured = await controller.WorkAsync("set_recipe", new { entityId = ids["machine"], recipe }, 600, token: token);
             Completed(configured, "set_recipe");
@@ -94,10 +96,12 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         RequireScope(built.Scope, catalog);
         var machineEntity = built.Entities.SingleOrDefault(e => e.Id == ids["machine"])
             ?? throw new InvalidDataException("The built machine is not observed at its cell.");
+        string probe = ids[PowerProbe(built.Prototypes[machineEntity.Name])];
+        var consumer = built.Entities.Single(e => e.Id == probe);
         var poleEntity = built.Entities.Single(e => e.Id == ids["pole"]);
-        if (machineEntity.Power?.NetworkId is null || machineEntity.Power.NetworkId != poleEntity.Power?.NetworkId)
-            throw new InvalidOperationException("The cell machine is not on the cell pole's electric network.");
-        if (FactoryPower.IsFed(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token), ids["machine"]) == false)
+        if (consumer.Power?.NetworkId is null || consumer.Power.NetworkId != poleEntity.Power?.NetworkId)
+            throw new InvalidOperationException("The cell's electric part is not on the cell pole's electric network.");
+        if (FactoryPower.IsFed(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token), probe) == false)
             throw new InvalidOperationException("The cell network has no power source; its poles form an isolated island.");
         cell = cell with { Status = "ready", Tick = built.CollectedTick };
         await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
@@ -299,6 +303,12 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             throw new InvalidOperationException("Factory cells need electric inserters and small electric poles; research electronics first.");
         return new(machineItem, "inserter", chest, "small-electric-pole");
     }
+
+    /// <summary>Whether the machine is given its recipe; furnaces select theirs from the ingredient they receive.</summary>
+    public static bool Configured(string kind, string? recipe) => recipe is not null && kind != FurnaceCellPlanner.Kind;
+
+    /// <summary>The role whose network proves the cell is powered: the machine, or the input inserter beside a burner machine.</summary>
+    public static string PowerProbe(EntityGeometry machine) => machine.IsElectric ? "machine" : "input-inserter";
 
     public static bool IsPowerSource(string type) => type is "generator" or "electric-energy-interface" or "solar-panel" or "burner-generator";
 

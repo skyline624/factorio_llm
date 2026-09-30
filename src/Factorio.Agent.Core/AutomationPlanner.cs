@@ -1,10 +1,11 @@
 namespace Factorio.Agent.Core;
 
-public sealed record AutomationStage(string Recipe, string Item, string MachineItem, double CraftsPerMinute, int Machines);
-/// <summary>Assembler stages for a target rate; raw inputs (plates, ores, fluids, unsupported items) are supplied by the actor.</summary>
+/// <summary>Kind is the cell kind that serves the stage: "assembler", or "furnace" for chest-fed burner furnaces.</summary>
+public sealed record AutomationStage(string Recipe, string Item, string MachineItem, double CraftsPerMinute, int Machines, string Kind = "assembler");
+/// <summary>Assembler and furnace stages for a target rate; raw inputs (ore plates, ores, fluids, unsupported items) are supplied otherwise.</summary>
 public sealed record AutomationPlan(IReadOnlyList<AutomationStage> Stages, IReadOnlyDictionary<string, double> RawPerMinute);
 
-/// <summary>Sizes chest-fed assembler cells from native recipe amounts, crafting speed and one basic inserter per side.</summary>
+/// <summary>Sizes chest-fed assembler and furnace cells from native recipe amounts, crafting speed and one basic inserter per side.</summary>
 public static class AutomationPlanner
 {
     /// <summary>Observed native throughput of one basic inserter between a chest and a machine.</summary>
@@ -19,14 +20,16 @@ public static class AutomationPlanner
         Add(item, perMinute, []);
         var stages = crafts.Values.Select(stage =>
         {
-            double speed = catalog.Assemblers![stage.Machine].CraftingSpeed;
+            bool furnace = catalog.Assemblers?.ContainsKey(stage.Machine) != true;
+            double speed = furnace ? catalog.Machines[stage.Machine].CraftingSpeed : catalog.Assemblers![stage.Machine].CraftingSpeed;
             double machineCrafts = 60 * speed / stage.Recipe.EnergySeconds;
+            // A furnace's input arm also carries its fuel, a small share next to the ingredient (0.36 coal per steel craft).
             double inputs = stage.Recipe.Ingredients.Where(i => i.DeterministicItem).Sum(i => i.Amount!.Value);
             double outputs = stage.Recipe.Products.Sum(p => p.Amount!.Value);
             double armCrafts = 60 * InserterItemsPerSecond / Math.Max(inputs, outputs);
             int machines = (int)Math.Ceiling(stage.Crafts / Math.Min(machineCrafts, armCrafts) - 1e-9);
             return new AutomationStage(stage.Recipe.Name, stage.Recipe.Products[0].Name, stage.Machine, stage.Crafts,
-                Math.Clamp(machines, 1, maximumMachinesPerStage));
+                Math.Clamp(machines, 1, maximumMachinesPerStage), furnace ? FurnaceCellPlanner.Kind : "assembler");
         }).OrderBy(s => s.Recipe, StringComparer.Ordinal).ToArray();
         return new(stages, raw);
 
@@ -49,19 +52,26 @@ public static class AutomationPlanner
     }
 
     /// <summary>
-    /// The enabled single-product recipe of an item that an available assembler can craft from solids only.
-    /// Smelted, mined and fluid materials are left to other suppliers.
+    /// The enabled single-product recipe of an item that an available assembler can craft from solids only, or else
+    /// that an available furnace smelts from a solid that is not mined (steel from plates). Mined items, ore smelting
+    /// (left to resource cells on the patch) and fluid materials are left to other suppliers.
     /// </summary>
     public static (NativeRecipe Recipe, string MachineItem)? Choose(ProductionCatalog catalog, string item, IReadOnlySet<string> machineItems)
     {
         var assemblers = (catalog.Assemblers ?? new Dictionary<string, NativeAssembler>())
             .Where(p => machineItems.Contains(p.Key)).OrderByDescending(p => p.Value.CraftingSpeed).ThenBy(p => p.Key, StringComparer.Ordinal).ToArray();
+        var furnaces = ResourceCellPlanner.Supply(catalog, item) is null
+            ? catalog.Machines.Where(p => machineItems.Contains(p.Key)).OrderByDescending(p => p.Value.CraftingSpeed)
+                .ThenBy(p => p.Key, StringComparer.Ordinal).ToArray()
+            : [];
         foreach (var recipe in catalog.Recipes.Where(r => r.Enabled && r.Products.Count == 1 && r.Products[0].Name == item
                 && r.Products[0].DeterministicItem && r.Ingredients.Count > 0 && r.Ingredients.All(i => i.DeterministicItem))
             .OrderBy(r => r.Name, StringComparer.Ordinal))
         {
             var machine = assemblers.FirstOrDefault(p => p.Value.Accepts(recipe) && p.Value.FixedRecipe is null);
             if (machine.Key is not null) return (recipe, machine.Key);
+            var furnace = furnaces.FirstOrDefault(p => FurnaceCellPlanner.Smeltable(recipe, p.Value));
+            if (furnace.Key is not null) return (recipe, furnace.Key);
         }
         return null;
     }

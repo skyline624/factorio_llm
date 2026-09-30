@@ -70,7 +70,7 @@ Le rapport indique `passed: true` et `isAutonomousCampaign: false`. `verify-fact
 
 ## Limites
 
-- Seuls les produits minés directement ou issus d'une recette de fusion à un seul minerai sont pris en charge ; l'acier reste hors de ces cellules.
+- Seuls les produits minés directement ou issus d'une recette de fusion à un seul minerai sont pris en charge ; l'acier reste hors de ces cellules et passe par les [bandes de fours](furnace-bands.md).
 - Les rangées planifiées ne sont pas encore réservées lors du choix d'une nouvelle bande d'assemblage : une bande peut réduire une allée à une seule case.
 - La croissance pendant la recherche n'explore pas ; elle n'utilise que les gisements observés localement.
 - Le raccordement lointain suit la chaîne de poteaux par étapes locales ; il n'a pas encore été qualifié au-delà de la fenêtre observée.
