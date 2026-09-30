@@ -109,6 +109,14 @@ function M.production()
         fluidInputCount = fluid_inputs, fluidOutputCount = fluid_outputs}
     end
   end
+  -- Offshore pumps draw these fluids from tiles; barrel emptying does not make them recipe products to chain.
+  local terrain = {}
+  for _, tile in pairs(prototypes.tile) do
+    if tile.fluid then terrain[tile.fluid.name] = true end
+  end
+  result.terrainFluids = {}
+  for name in pairs(terrain) do result.terrainFluids[#result.terrainFluids + 1] = name end
+  table.sort(result.terrainFluids)
   for name, entity in pairs(prototypes.entity) do
     if entity.type == "resource" or entity.type == "tree" then
       local properties = entity.mineable_properties

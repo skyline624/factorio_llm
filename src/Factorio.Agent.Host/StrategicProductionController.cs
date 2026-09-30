@@ -80,6 +80,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 "Defense goals use category defense, unit items, quantity 1 to 32 and a native supported turret item. Completion means at least that many active installed turrets on the actor's surface, each with at least 100 observed rounds. C# services existing turrets first, produces supplies, calculates placements near exposed known industry and reports measured coverage. This is a finite deployment and replenishment goal, not a guarantee of continuous perimeter coverage. " +
                 "Perimeter goals use category defense, unit completion, quantity 1 and a native wall item such as stone-wall. C# rings the known factory core within one observed area with turret nests spaced by native range, outward wall shields and open gaps, loads turret reserves, and registers them so factory logistics rebuilds destroyed defenses and rearms turrets from carried magazines. " +
                 "Automation goals use category production, unit items_per_minute, quantity up to 600 and an exact native item crafted in assemblers. C# builds persistent chest-fed assembler cells for the item and its assembler-made intermediates in a factory band beside the power network, then restocks them; plates and coal are supplied by the actor. When automation is available, research goals also build science cells and laboratories instead of hand-crafting packs. Prefer automation over repeated hand-crafted batches. " +
+                "Once oil processing is researched, automation also accepts solid products of fluid chains such as plastic-bar and sulfur: C# builds pumpjack extractors on an observed crude oil deposit, refineries and chemical plants with calculated pipes, and the actor restocks their solid inputs. " +
                 "Choose an unmet useful goal toward the rocket. Other meaningful goals remain permissible proposals with explicit unsupported results.",
             automatedFactory = new
             {
@@ -87,6 +88,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 assemblerCells = cells.Where(c => c.Kind == "assembler").GroupBy(c => c.Recipe!).OrderBy(g => g.Key, StringComparer.Ordinal)
                     .Select(g => new { recipe = g.Key, cells = g.Count() }).ToArray(),
                 laboratories = cells.Count(c => c.Kind == "lab"),
+                fluidCells = cells.Where(c => c.Kind is FluidCellBuilder.MachineKind or FluidCellBuilder.ExtractorKind).GroupBy(c => c.Recipe ?? c.Kind)
+                    .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => new { recipe = g.Key, cells = g.Count() }).ToArray(),
                 perimeterTurrets = cells.Where(c => c.Kind == "turret").Sum(c => c.Entities.Count),
                 perimeterWalls = cells.Where(c => c.Kind == "wall").Sum(c => c.Entities.Count),
                 interpretation = "Persistent chest-fed cells keep producing while inputs last; the actor restocks them between goals."
@@ -192,8 +195,10 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             if (!automation) return "Automation needs enabled assembler, inserter, pole and lab recipes and a factory directory.";
             if (goal.Quantity is <= 0 or > 600) return "Automation requires a rate above zero and at most 600 items per minute.";
             var machines = FactoryDirector.MachinePreference.Where(m => FactoryDirector.Enabled(catalog, m)).ToHashSet(StringComparer.Ordinal);
+            // Solid products of fluid chains (plastic, sulfur) are automated through extractor, refinery and chemical cells.
             return AutomationPlanner.Choose(catalog, goal.Target, machines) is null
-                ? "The target has no enabled solid assembler recipe; smelted, mined and fluid products are supplied otherwise." : null;
+                && FluidChainPlanner.Choose(catalog, goal.Target) is not { Recipe.Products: [{ DeterministicItem: true }] }
+                ? "The target has no enabled solid assembler recipe or fluid chain with a solid product; smelted, mined and fluid products are supplied otherwise." : null;
         }
         if (goal.Category == GoalCategory.Defense)
         {

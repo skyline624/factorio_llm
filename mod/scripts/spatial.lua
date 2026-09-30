@@ -24,6 +24,9 @@ local function prototype(value)
   if value.type == "resource" then
     result.resourceCategory = value.resource_category
     result.miningTime = value.mineable_properties.mining_time
+    -- Infinite deposits such as crude oil yield amount / normal of the product per cycle.
+    result.infiniteResource = value.infinite_resource
+    result.normalResourceAmount = value.normal_resource_amount
   end
   if value.type == "mining-drill" then
     result.miningRadius = value.mining_drill_radius

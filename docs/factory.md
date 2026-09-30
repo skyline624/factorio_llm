@@ -73,4 +73,4 @@ Ces fixtures isolent le mécanisme. Elles ne remplacent ni une campagne normale 
 - Les plaques et le charbon viennent encore de la production pilotée par le personnage. Les colonnes de fonte sur gisement et les cellules de charbon sont en cours de développement.
 - La logistique repose sur le personnage : pas de tapis entre les cellules pour l'instant.
 - La zone doit être créée près d'un réseau électrique observé. La montée en puissance électrique et la défense périmétrique sont en cours.
-- Les recettes à fluides (pétrole, chimie) ne sont pas encore couvertes par les bandes.
+- Les recettes à fluides (pétrole, chimie) restent hors des bandes : elles forment des [cellules de chimie du pétrole](oil-chemistry.md) en zone 0, avec tuyaux calculés et coffres desservis par la même logistique.

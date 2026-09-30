@@ -105,6 +105,19 @@ public sealed class StrategicGroundingTests
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 601 }, "observation", catalog, automation: true));
     }
 
+    [Theory]
+    [InlineData("plastic-bar", true)]
+    [InlineData("sulfur", true)]
+    [InlineData("petroleum-gas", false)]
+    [InlineData("sulfuric-acid", false)]
+    public void AutomationRatesAcceptSolidProductsOfFluidChains(string target, bool accepted)
+    {
+        // Fluid products are stocks in fluid units, not items per minute; plastic and sulfur leave their chains as items.
+        var goal = Goal() with { Target = target, Unit = GoalUnit.ItemsPerMinute, Quantity = 30, ObservationId = "observation" };
+        Assert.Equal(accepted, StrategicProductionController.GroundingFailure(goal, "observation", OilCatalogs.Oil(), automation: true) is null);
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", OilCatalogs.Oil(), automation: false));
+    }
+
     private static GoalProposal Goal() => new("observation", "Accumulate iron plates", GoalCategory.Production,
         "iron-plate", 20, GoalUnit.Items, GoalPriority.Normal, new(TimeSpan.Zero, 1, null, null, null));
     private static ProductionCatalog Catalog() => new(new("world", "session", "actor", 1, 2), 100, [],
