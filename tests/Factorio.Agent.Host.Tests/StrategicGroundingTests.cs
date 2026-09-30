@@ -13,14 +13,34 @@ public sealed class StrategicGroundingTests
         var catalog = Catalog() with { Items = new Dictionary<string, NativeItem>(Catalog().Items)
             { ["gun-turret"] = new(0, 50, PlaceEntity: "gun-turret", PlaceEntityType: "ammo-turret") } };
         var goal = Goal() with { Category = GoalCategory.Defense, Target = "gun-turret", Quantity = 8 };
-        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog, stock: Turrets));
         catalog = catalog with { Turrets = new Dictionary<string, NativeTurret> { ["gun-turret"] = new("gun-turret", 18, ["bullet"]) } };
-        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", catalog));
+        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", catalog, stock: Turrets));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "iron-plate" }, "observation", catalog));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 0 }, "observation", catalog));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 33 }, "observation", catalog));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 1.5m }, "observation", catalog));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Unit = GoalUnit.Completion }, "observation", catalog));
+    }
+
+    [Fact]
+    public void TurretsMustBeStockedOrCraftableBeforeTheyCanBeInstalled()
+    {
+        // Campaign 2026-09-30 (seed 20261002): a turret goal before gun-turret research failed in production instead of
+        // being refused, and cost one of the five failures the campaign tolerates.
+        var catalog = Catalog() with
+        {
+            Items = new Dictionary<string, NativeItem>(Catalog().Items) { ["gun-turret"] = new(0, 50, PlaceEntity: "gun-turret", PlaceEntityType: "ammo-turret") },
+            Turrets = new Dictionary<string, NativeTurret> { ["gun-turret"] = new("gun-turret", 18, ["bullet"]) }
+        };
+        var goal = Goal() with { Category = GoalCategory.Defense, Target = "gun-turret", Quantity = 4 };
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog, stock: new Dictionary<string, long>()));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog,
+            stock: new Dictionary<string, long> { ["gun-turret"] = 3 })); // Installed and stocked turrets must cover the goal.
+        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", catalog,
+            stock: new Dictionary<string, long> { ["gun-turret"] = 4 }));
+        var crafted = catalog with { Recipes = [new("gun-turret", true, "crafting", 8, [new("iron-plate", "item", 20)], [new("gun-turret", "item", 1)], false)] };
+        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", crafted, stock: new Dictionary<string, long>()));
     }
 
     [Fact]
@@ -36,14 +56,15 @@ public sealed class StrategicGroundingTests
             Turrets = new Dictionary<string, NativeTurret> { ["gun-turret"] = new("gun-turret", 18, ["bullet"]) }
         };
         var goal = Goal() with { Category = GoalCategory.Defense, Target = "stone-wall", Unit = GoalUnit.Completion, Quantity = 1 };
-        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", catalog, factory: true));
+        Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", catalog, factory: true, stock: WallsAndTurrets));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog, factory: true, stock: Turrets));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Unit = GoalUnit.Items, Quantity = 40 }, "observation", catalog, factory: true));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog with { Turrets = null }, factory: true));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "iron-plate" }, "observation", catalog, factory: true));
         // Turret deployment keeps its item semantics next to perimeter walls.
         Assert.Null(StrategicProductionController.GroundingFailure(goal with { Target = "gun-turret", Unit = GoalUnit.Items, Quantity = 4 },
-            "observation", catalog, factory: true));
+            "observation", catalog, factory: true, stock: WallsAndTurrets));
     }
 
     [Fact]
@@ -107,6 +128,9 @@ public sealed class StrategicGroundingTests
         Assert.Null(StrategicProductionController.GroundingFailure(goal with { Target = "steel-plate" }, "observation", Catalogs.Raw(), automation: true));
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "iron-plate" }, "observation", Catalogs.Raw(), automation: true));
     }
+
+    private static readonly IReadOnlyDictionary<string, long> Turrets = new Dictionary<string, long> { ["gun-turret"] = 32 };
+    private static readonly IReadOnlyDictionary<string, long> WallsAndTurrets = new Dictionary<string, long> { ["gun-turret"] = 32, ["stone-wall"] = 40 };
 
     private static GoalProposal Goal() => new("observation", "Accumulate iron plates", GoalCategory.Production,
         "iron-plate", 20, GoalUnit.Items, GoalPriority.Normal, new(TimeSpan.Zero, 1, null, null, null));

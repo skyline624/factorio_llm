@@ -128,7 +128,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         }
         await journal.AppendAsync("strategic-goal", goal, token);
         if (shadow is not null) await ShadowAsync(facts, previousResult, goal, token);
-        string? reason = GroundingFailure(goal, observationId, catalog, science.Technologies, automation, factoryDirectory is not null);
+        string? reason = GroundingFailure(goal, observationId, catalog, science.Technologies, automation, factoryDirectory is not null,
+            Obtained(factory, defenses, catalog));
         if (reason is not null)
         {
             await journal.AppendAsync("grounding-unsupported", new { goal, reason }, token);
@@ -189,9 +190,25 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         await journal.AppendAsync("decision-shadow", entry, token);
     }
 
-    public static string? GroundingFailure(GoalProposal goal, string observationId, ProductionCatalog catalog,
-        IReadOnlyDictionary<string, NativeTechnology>? technologies = null, bool automation = false, bool factory = false)
+    /// <summary>Known factory inventory totals, actor included, plus installed turrets counted under their item.</summary>
+    internal static IReadOnlyDictionary<string, long> Obtained(FactorySnapshot factory, DefenseFactoryState? defenses, ProductionCatalog catalog)
     {
+        var stock = new Dictionary<string, long>(factory.SummarizeStocks().InventoryItems, StringComparer.Ordinal);
+        foreach (var turret in defenses?.Turrets ?? [])
+            if (catalog.Turrets?.FirstOrDefault(t => t.Value.EntityName == turret.Name).Key is { } item)
+                stock[item] = stock.GetValueOrDefault(item) + 1;
+        return stock;
+    }
+
+    /// <summary>
+    /// Stock holds obtained items (see <see cref="Obtained"/>): turrets can be installed only when enough are obtained or their
+    /// recipe is enabled, and a perimeter needs an obtainable wall and turret.
+    /// </summary>
+    public static string? GroundingFailure(GoalProposal goal, string observationId, ProductionCatalog catalog,
+        IReadOnlyDictionary<string, NativeTechnology>? technologies = null, bool automation = false, bool factory = false,
+        IReadOnlyDictionary<string, long>? stock = null)
+    {
+        bool Obtainable(string item) => stock?.GetValueOrDefault(item) > 0 || FactoryDirector.Enabled(catalog, item);
         if (goal.ObservationId != observationId) return "The proposal references a different observation.";
         if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.ItemsPerMinute)
         {
@@ -207,13 +224,17 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 if (goal.Unit != GoalUnit.Completion || goal.Quantity != 1)
                     return "Perimeter walls use a completion goal with quantity 1; C# sizes turrets and walls from known industry.";
                 if (!factory) return "Perimeter walls need the persistent factory registry.";
-                return catalog.Turrets is { Count: > 0 } ? null : "Perimeter walls need a supported native ammunition turret.";
+                if (catalog.Turrets is not { Count: > 0 }) return "Perimeter walls need a supported native ammunition turret.";
+                return Obtainable(goal.Target) && catalog.Turrets.Keys.Any(Obtainable) ? null
+                    : "Perimeter walls need a wall and a supported turret that are stocked or craftable; research them first.";
             }
             if (goal.Unit != GoalUnit.Items || goal.Quantity is < 1 or > 32 || decimal.Truncate(goal.Quantity) != goal.Quantity)
                 return "Defense requires 1 to 32 whole installed ammunition turrets, unit items.";
-            return catalog.Items.TryGetValue(goal.Target, out var turret) && turret.PlaceEntityType == "ammo-turret"
-                && catalog.Turrets?.TryGetValue(goal.Target, out var supported) == true && supported.EntityName == turret.PlaceEntity
-                ? null : "Defense requires an exact supported native ammunition-turret item identifier.";
+            if (!catalog.Items.TryGetValue(goal.Target, out var turret) || turret.PlaceEntityType != "ammo-turret"
+                || catalog.Turrets is null || !catalog.Turrets.TryGetValue(goal.Target, out var supported) || supported.EntityName != turret.PlaceEntity)
+                return "Defense requires an exact supported native ammunition-turret item identifier.";
+            return stock?.GetValueOrDefault(goal.Target) >= goal.Quantity || FactoryDirector.Enabled(catalog, goal.Target) ? null
+                : $"Fewer than {goal.Quantity} {goal.Target} are installed or stocked and its recipe is not enabled; research its technology first.";
         }
         if (goal.Category == GoalCategory.Launch)
         {
