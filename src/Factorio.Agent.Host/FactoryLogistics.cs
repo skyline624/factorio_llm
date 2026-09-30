@@ -67,14 +67,26 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
         var carried = Carried(snapshot);
-        foreach (var cell in cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest")))
+        var refills = cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest")).SelectMany(cell =>
         {
             NativeRecipe recipe = catalog.Recipes.Single(r => r.Name == cell.Recipe);
             string chest = cell.Entities["input-chest"];
             var inChest = Items(snapshot, chest);
-            foreach (var ingredient in recipe.Ingredients.Where(i => i.DeterministicItem))
-                await RefillAsync(chest, ingredient.Name,
-                    checked((long)(ingredient.Amount!.Value * bufferCrafts)) - inChest.GetValueOrDefault(ingredient.Name));
+            return recipe.Ingredients.Where(i => i.DeterministicItem).Select(i => (Chest: chest, Item: i.Name,
+                Loaded: inChest.GetValueOrDefault(i.Name), Target: checked((long)(i.Amount!.Value * bufferCrafts))));
+        }).ToArray();
+        // Scarce items are shared before any chest is filled; transfers still go chest by chest to keep one visit each.
+        var shares = new Dictionary<(string Chest, string Item), long>();
+        foreach (var item in refills.GroupBy(r => r.Item))
+        {
+            var wanting = item.Where(r => r.Loaded < r.Target).ToArray();
+            var split = PlanShares(wanting.Select(r => (r.Loaded, r.Target)).ToArray(), carried.GetValueOrDefault(item.Key));
+            for (int index = 0; index < wanting.Length; index++) shares[(wanting[index].Chest, item.Key)] = split[index];
+        }
+        foreach (var (chest, item, loaded, target) in refills.Where(r => r.Loaded < r.Target))
+        {
+            long moved = await RefillAsync(chest, item, shares[(chest, item)], reportShort: false);
+            if (target - loaded > moved) shortfall[item] = shortfall.GetValueOrDefault(item) + target - loaded - moved;
         }
         foreach (var cell in cells.Where(c => c.Kind == "lab"))
         {
@@ -226,6 +238,25 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// full stacks made the actor extract 250 coal through its early drill before the coal cell could deliver.
     /// </summary>
     internal static long FuelShortfall(long loaded, long given, long stack) => Math.Max(0, stack / 4 - loaded - given);
+
+    /// <summary>
+    /// Splits a carried item among input chests: every chest first reaches a quarter of its target, then chests are filled
+    /// in order. On 2026-09-30 (seed 20261002) registry-order refills gave every gear to the first consumers and left the
+    /// inserter cell empty for two hours.
+    /// </summary>
+    internal static long[] PlanShares(IReadOnlyList<(long Loaded, long Target)> chests, long available)
+    {
+        var plan = new long[chests.Count];
+        foreach (bool quarter in new[] { true, false })
+            for (int index = 0; index < chests.Count && available > 0; index++)
+            {
+                long goal = quarter ? chests[index].Target / 4 : chests[index].Target;
+                long give = Math.Min(available, Math.Max(0, goal - chests[index].Loaded - plan[index]));
+                plan[index] += give;
+                available -= give;
+            }
+        return plan;
+    }
 
     /// <summary>
     /// Splits carried fuel among burners below a quarter stack: every starved burner first reaches a quarter stack,

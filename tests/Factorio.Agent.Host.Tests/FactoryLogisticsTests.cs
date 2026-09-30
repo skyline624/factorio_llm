@@ -38,6 +38,18 @@ public sealed class FactoryLogisticsTests
     }
 
     [Fact]
+    public void ScarceIngredientsBringEveryInputChestToAQuarterOfItsTargetFirst()
+    {
+        // Campaign 2026-09-30 (seed 20261002): chests were refilled in registry order, so the first gear consumers took every
+        // gear and the inserter cell listed after them stayed empty for two hours.
+        Assert.Equal([10L, 10L, 10L], FactoryLogistics.PlanShares([(0, 40), (0, 40), (0, 40)], available: 30));
+        Assert.Equal([40L, 10L, 10L], FactoryLogistics.PlanShares([(0, 40), (0, 40), (0, 40)], available: 60));
+        // A chest already above its quarter waits until the others reach theirs.
+        Assert.Equal([0L, 10L, 5L], FactoryLogistics.PlanShares([(20, 40), (0, 40), (5, 40)], available: 15));
+        Assert.Equal([0L, 0L], FactoryLogistics.PlanShares([(40, 40), (0, 40)], available: 0));
+    }
+
+    [Fact]
     public void TheCoalMinerIsFuelledFirstThenPowerThenTheRest()
     {
         // Campaign 2026-09-30 (seed 20261002): the new coal miner never got its own coal, so nothing refilled the others.
