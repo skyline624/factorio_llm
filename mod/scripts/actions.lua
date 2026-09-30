@@ -247,7 +247,15 @@ starts.research = function(r, c, args)
   for _, prerequisite in pairs(tech.prerequisites) do
     U.check(prerequisite.researched, "prerequisite_missing", "Missing research: " .. prerequisite.name)
   end
-  U.check(c.force.add_research(name), "research_rejected", "Engine rejected research selection")
+  local current = c.force.current_research
+  if args.replace == true and current and current.name ~= name then
+    -- A newer strategic goal supersedes a stale selection; the engine keeps the replaced technology's saved progress.
+    c.force.research_queue = {name}
+    U.check(c.force.current_research and c.force.current_research.name == name, "research_rejected", "Engine rejected research replacement")
+    r.receipt.effects.replaced = current.name
+  else
+    U.check(c.force.add_research(name), "research_rejected", "Engine rejected research selection")
+  end
   r.receipt.effects.technology, r.receipt.effects.queued = name, true
   r.receipt.effects.researched = tech.researched
   return "completed" -- The operation selects research; labs must still perform it.

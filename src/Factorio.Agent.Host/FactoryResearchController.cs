@@ -59,13 +59,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
                 await journal.AppendAsync("factory-research-result", result, token);
                 return result;
             }
-            if (state.Selected is not null && state.Selected != technologyName)
-                throw new InvalidOperationException("Another technology is selected. Reconcile research before replacing it.");
-            if (state.Selected is null)
-            {
-                var selected = await controller.WorkAsync("research", new { technology = technologyName }, 600, token: token);
-                if (selected.Status != "completed") throw new InvalidOperationException($"Research selection ended with {selected.Status}: {selected.Error?.Code}.");
-            }
+            if (state.Selected != technologyName) await SelectAsync(controller, journal, state.Selected, technologyName, token);
             var service = await logistics.ServiceAsync(40, token);
             var shortfall = service.Shortfall.Where(p => p.Value > 0).OrderBy(p => p.Key, StringComparer.Ordinal).ToArray();
             var factory = await new FactoryRegistry(directory).LoadAsync(observation.Scope.WorldId, token);
@@ -125,6 +119,19 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
             growth.Failed(item, tick);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Selects the goal's technology. A different selection left by an earlier goal, for instance one that reached its
+    /// deadline, is replaced: the strategic arbiter owns research, and the engine keeps the replaced technology's saved
+    /// progress. On 2026-09-30 (seed 20261002) refusing such a leftover failed five research goals in a row.
+    /// </summary>
+    internal static async Task SelectAsync(SpatialController controller, IControllerJournal journal, string? selected, string technology,
+        CancellationToken token)
+    {
+        var receipt = await controller.WorkAsync("research", new { technology, replace = selected is not null }, 600, token: token);
+        if (receipt.Status != "completed") throw new InvalidOperationException($"Research selection ended with {receipt.Status}: {receipt.Error?.Code}.");
+        if (selected is not null) await journal.AppendAsync("research-selection-replaced", new { previous = selected, technology }, token);
     }
 
     /// <summary>

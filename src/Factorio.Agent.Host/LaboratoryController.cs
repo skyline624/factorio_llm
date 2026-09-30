@@ -46,9 +46,8 @@ public sealed class LaboratoryController(IGameClient game, IControllerJournal jo
         await MaintainFuelAsync(force: true);
         await SupplyAsync();
         ResearchSnapshot beforeSelection = await ReadAsync();
-        RequireSelection(beforeSelection);
         if (beforeSelection.Selected != technologyName)
-            await ActAsync("research", new { technology = technologyName });
+            await FactoryResearchController.SelectAsync(controller, journal, beforeSelection.Selected, technologyName, token);
         int powered = 0;
         for (int attempt = 0; attempt < 1800; attempt++)
         {
