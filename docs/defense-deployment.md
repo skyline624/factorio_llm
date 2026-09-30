@@ -1,6 +1,6 @@
 # Installation et ravitaillement des tourelles
 
-Un objectif stratégique `defense`, unité `items`, désigne un nombre entier de 1 à 32 tourelles installées et actives, chacune avec au moins 100 coups observés. Le nom cible doit correspondre à un objet de tourelle à munitions pris en charge dans le catalogue natif. Porter des tourelles dans le sac ne satisfait pas cet objectif.
+Un objectif stratégique `defense`, unité `items`, désigne un nombre entier de 1 à 32 tourelles installées et actives, chacune avec au moins 100 coups observés. Le nom cible doit correspondre à un objet de tourelle à munitions pris en charge dans le catalogue natif. Porter des tourelles dans le sac ne satisfait pas cet objectif. L'ancrage refuse l'objectif tant que les tourelles installées, portées ou stockées dans l'usine connue ne couvrent pas la quantité demandée et que la recette de la tourelle n'est pas débloquée : il demande alors de rechercher d'abord la technologie. Le 30 septembre 2026 (graine 20261002), un objectif de quatre tourelles proposé avant la recherche `gun-turret` avait échoué en production au lieu d'être refusé. Un objectif de périmètre exige de même un mur et une tourelle obtenables.
 
 C# réutilise les tourelles existantes avant d'en construire. Il ravitaille celles dont la réserve est insuffisante, choisit des munitions compatibles à partir des prototypes et demande les fournitures à l'exécuteur de production ordinaire. Les matières premières suivent donc les règles de production par machines et d'amorçage limité. Aucun objet n'est injecté par le contrôleur.
 
