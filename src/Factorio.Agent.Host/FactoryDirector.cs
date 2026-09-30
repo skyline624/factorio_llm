@@ -1,4 +1,5 @@
 using Factorio.Agent.Core;
+using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
@@ -22,6 +23,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         if (machines.Count == 0) throw new InvalidOperationException("No assembling machine recipe is enabled; research automation first.");
         var plan = AutomationPlanner.Plan(catalog, item, perMinute, machines);
         await journal.AppendAsync("factory-automation-plan", new { item, perMinute, plan }, token);
+        await SeedRawAsync(catalog, plan.RawPerMinute, token);
         var registry = new FactoryRegistry(directory);
         var builder = new FactoryCellBuilder(game, journal, directory);
         // Consumers after their suppliers keeps early cells useful even if a later build is interrupted.
@@ -72,6 +74,47 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 return capacity;
             }
             await builder.BuildNextAsync(item, perMinute - current, token, explorationBudget);
+        }
+    }
+
+    /// <summary>Minutes of the planned rate that carried stock must cover before a raw item can go without a resource cell.</summary>
+    public const double SeedHorizonMinutes = 10;
+
+    /// <summary>
+    /// Raw items the plan draws that no ready resource cell supplies and carried stock cannot cover for the horizon, plus coal
+    /// for their furnaces when such plates are smelted. A smelter cell costs about what an assembler cell costs and repays it
+    /// within minutes, so it is built first; a pocket of plates still lets the assemblers start at once.
+    /// </summary>
+    internal static IReadOnlyList<(string Item, double PerMinute)> RawSeeds(ProductionCatalog catalog, FactoryState state,
+        IReadOnlyDictionary<string, double> raw, IReadOnlyDictionary<string, long> carried)
+    {
+        bool Unsupplied(string item, double perMinute) => ResourceCellPlanner.Supply(catalog, item) is not null
+            && RawCapacity(state, item).Cells == 0 && carried.GetValueOrDefault(item) < perMinute * SeedHorizonMinutes;
+        var seeds = raw.Where(p => p.Value > 0 && Unsupplied(p.Key, p.Value)).Select(p => (p.Key, p.Value)).ToList();
+        if (!raw.ContainsKey(FactoryLogistics.Fuel) && Unsupplied(FactoryLogistics.Fuel, RawCapacityGrowth.DefaultPerMinute)
+            && seeds.Any(s => ResourceCellPlanner.Supply(catalog, s.Key)?.Kind == "smelter"))
+            seeds.Add((FactoryLogistics.Fuel, RawCapacityGrowth.DefaultPerMinute));
+        return seeds.OrderBy(s => s.Item1, StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>
+    /// One resource cell per unsupplied raw item before any assembler, travelling at most a few steps toward remembered
+    /// deposits. A failure leaves the item to the usual growth and procurement; a changed actor identity stays fatal.
+    /// </summary>
+    private async Task SeedRawAsync(ProductionCatalog catalog, IReadOnlyDictionary<string, double> raw, CancellationToken token)
+    {
+        var carried = FactoryLogistics.Carried(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token));
+        foreach (var (item, perMinute) in RawSeeds(catalog, await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token), raw, carried))
+        {
+            try
+            {
+                await EnsureRawAsync(item, Math.Min(perMinute, 10000), token, maximumNewCells: 1, explorationBudget: 4);
+            }
+            catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+            {
+                if (ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token)).Scope != catalog.Scope) throw;
+                await journal.AppendAsync("factory-raw-seed-failed", new { item, perMinute, error = error.GetType().Name, error.Message }, token);
+            }
         }
     }
 
