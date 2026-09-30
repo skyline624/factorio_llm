@@ -67,10 +67,33 @@ Un transfert refusé est journalisé comme limite observée ; il n'est jamais re
 
 Ces fixtures isolent le mécanisme. Elles ne remplacent ni une campagne normale ni la qualification finale sur trois graines.
 
+## Modules intégrés depuis
+
+| Module | Document | Qualification réelle (fixture) |
+|---|---|---|
+| Cellules de ressources sur gisement (foreuse → four → inserteur → coffre, foreuse → coffre) | [resource-cells.md](resource-cells.md) | `verify-resource-cells` |
+| Extension de l'alimentation vapeur selon la demande mesurée, chaudières alimentées par coffre | [power-expansion.md](power-expansion.md) | `verify-power-expansion` |
+| Périmètre défensif (nids de tourelles, murs extérieurs), réarmement et reconstruction après attaque | [perimeter-defense.md](perimeter-defense.md) | `verify-perimeter`, avec une attaque de biters |
+| Preuve d'alimentation : un poteau doit partager son réseau avec un générateur connu, les îlots isolés sont réparés | présent document | cellules et recherche |
+
+Le 30/09, après la fusion des trois modules, les cinq qualifications (`verify-factory-cells`, `verify-factory-research`, `verify-resource-cells`, `verify-power-expansion`, `verify-perimeter`) ont réussi à la suite sur une même fixture neuve. Deux ajustements de vérification reflètent le code fusionné :
+
+- les poteaux de liaison sont enregistrés comme rôles `link-n` ;
+- un poteau détruit est reconstruit directement par la maintenance.
+
+## Campagne normale du 30/09 (graine 20261001), après correction de l'îlot électrique
+
+Le modèle a enchaîné ces objectifs par la voie « usine » :
+
+- `logistic-science-pack` : 120 engrenages et 103 packs rouges produits par les cellules ;
+- `steel-processing` ;
+- `gun-turret`.
+
+La partie reste assistée : le contrôleur a été relancé à la main après le blocage de l'îlot. Ce n'est donc pas une campagne de qualification.
+
 ## Limites connues
 
 - Les cellules sont alimentées par coffre et par un seul inserteur de base de chaque côté. Les recettes gourmandes demandent donc plusieurs cellules.
-- Les plaques et le charbon viennent encore de la production pilotée par le personnage. Les colonnes de fonte sur gisement et les cellules de charbon sont en cours de développement.
-- La logistique repose sur le personnage : pas de tapis entre les cellules pour l'instant.
-- La zone doit être créée près d'un réseau électrique observé. La montée en puissance électrique et la défense périmétrique sont en cours.
-- Les recettes à fluides (pétrole, chimie) ne sont pas encore couvertes par les bandes.
+- La logistique repose sur le personnage, sans tapis entre les cellules.
+- L'acier et les briques en bande, ainsi que la chimie pétrolière persistante, sont en cours de développement. Les recettes à fluides ne sont pas encore couvertes.
+- Le coût en trajets de la logistique croît avec le nombre de cellules. Un regroupement par proximité et des seuils de remplissage restent à ajouter.
