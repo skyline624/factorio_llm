@@ -20,16 +20,19 @@ public sealed class RawSeedTests
         Assert.Equal(RawCapacityGrowth.DefaultPerMinute, seeds.Single(s => s.Item == "coal").PerMinute);
     }
 
-    [Fact]
-    public void ReadyCellsAndUnsuppliableItemsAreNotSeeded()
+    [Theory]
+    [InlineData(30, false)]
+    [InlineData(15, true)]
+    public void CellsCoveringThePlannedRateAndUnsuppliableItemsAreNotSeeded(double cellPerMinute, bool seeded)
     {
+        // One 15-plate cell under a 24-plate plan still leaves the assemblers starved, so the rate decides, not a cell count.
         var row = new ResourceRow(1, "smelter", "iron-plate", "iron-ore", new("burner-mining-drill", "iron-chest", "stone-furnace", "inserter",
-            "small-electric-pole"), new(0, 0), 0, 3, 2, 15);
+            "small-electric-pole"), new(0, 0), 0, 3, 2, cellPerMinute);
         var cell = new FactoryCell("iron", 0, new(1, 0, true), "smelter", "burner-mining-drill", "iron-plate",
             new Dictionary<string, string>(), "ready", 1);
         var raw = new Dictionary<string, double>(ScienceRaw) { ["invented-fluid"] = 5 };
         var seeds = FactoryDirector.RawSeeds(Catalogs.Raw(), State([cell], [row]), raw, new Dictionary<string, long>());
-        Assert.Equal(["coal", "copper-plate"], seeds.Select(s => s.Item).Order(StringComparer.Ordinal));
+        Assert.Equal(seeded ? ["coal", "copper-plate", "iron-plate"] : ["coal", "copper-plate"], seeds.Select(s => s.Item).Order(StringComparer.Ordinal));
     }
 
     [Fact]

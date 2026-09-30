@@ -80,8 +80,11 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     /// <summary>Minutes of the planned rate that carried stock must cover before a raw item can go without a resource cell.</summary>
     public const double SeedHorizonMinutes = 10;
 
+    /// <summary>Resource cells built per raw item and automation call before the assemblers; growth adds the rest later.</summary>
+    public const int SeedCellsPerItem = 2;
+
     /// <summary>
-    /// Raw items the plan draws that no ready resource cell supplies and carried stock cannot cover for the horizon, plus coal
+    /// Raw items the plan draws faster than ready resource cells supply and carried stock cannot cover for the horizon, plus coal
     /// for their furnaces when such plates are smelted. A smelter cell costs about what an assembler cell costs and repays it
     /// within minutes, so it is built first; a pocket of plates still lets the assemblers start at once.
     /// </summary>
@@ -89,7 +92,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         IReadOnlyDictionary<string, double> raw, IReadOnlyDictionary<string, long> carried)
     {
         bool Unsupplied(string item, double perMinute) => ResourceCellPlanner.Supply(catalog, item) is not null
-            && RawCapacity(state, item).Cells == 0 && carried.GetValueOrDefault(item) < perMinute * SeedHorizonMinutes;
+            && RawCapacity(state, item).PerMinute < perMinute - 1e-9 && carried.GetValueOrDefault(item) < perMinute * SeedHorizonMinutes;
         var seeds = raw.Where(p => p.Value > 0 && Unsupplied(p.Key, p.Value)).Select(p => (p.Key, p.Value)).ToList();
         if (!raw.ContainsKey(FactoryLogistics.Fuel) && Unsupplied(FactoryLogistics.Fuel, RawCapacityGrowth.DefaultPerMinute)
             && seeds.Any(s => ResourceCellPlanner.Supply(catalog, s.Key)?.Kind == "smelter"))
@@ -98,7 +101,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     }
 
     /// <summary>
-    /// One resource cell per unsupplied raw item before any assembler, travelling at most a few steps toward remembered
+    /// Up to two resource cells per undersupplied raw item before any assembler, travelling at most a few steps toward remembered
     /// deposits. A failure leaves the item to the usual growth and procurement; a changed actor identity stays fatal.
     /// </summary>
     private async Task SeedRawAsync(ProductionCatalog catalog, IReadOnlyDictionary<string, double> raw, CancellationToken token)
@@ -108,7 +111,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         {
             try
             {
-                await EnsureRawAsync(item, Math.Min(perMinute, 10000), token, maximumNewCells: 1, explorationBudget: 4);
+                await EnsureRawAsync(item, Math.Min(perMinute, 10000), token, maximumNewCells: SeedCellsPerItem, explorationBudget: 4);
             }
             catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
             {
