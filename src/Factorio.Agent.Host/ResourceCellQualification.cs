@@ -62,8 +62,11 @@ public sealed class ResourceCellQualification(RuntimeSession session)
             using var destroyed = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(DestroyPole.Replace("POLE_ID", lostPole, StringComparison.Ordinal), token));
             var reopened = await logistics.ServiceAsync(40, token);
             var open = (await LoadAsync()).Cells.Single(c => c.Id == damaged.Id);
-            Require(open.Status == "building" && !open.Entities.ContainsKey("pole") && open.Entities.Count == damaged.Entities.Count - 1,
-                "Logistics did not reopen the damaged cell without its destroyed pole.");
+            // Either maintenance rebuilds the recorded pole in place at once, or resource health reopens the cell for the builder.
+            bool reopenedForBuilder = open.Status == "building" && !open.Entities.ContainsKey("pole") && open.Entities.Count == damaged.Entities.Count - 1;
+            bool rebuiltByMaintenance = open.Status == "ready" && open.Entities.TryGetValue("pole", out var newPole) && newPole != lostPole
+                && reopened.Maintenance?.Rebuilt.Contains(newPole) == true;
+            Require(reopenedForBuilder || rebuiltByMaintenance, "Logistics neither reopened nor rebuilt the damaged cell's destroyed pole.");
             var repaired = await director.EnsureRawAsync("iron-plate", 30, token, explorationBudget: 0);
             var rebuilt = (await LoadAsync()).Cells.Single(c => c.Id == damaged.Id);
             evidence.Add(new { check = "destroyed-pole-repaired", lostPole, native = destroyed.RootElement.Clone(), reopened, open, repaired, rebuilt });

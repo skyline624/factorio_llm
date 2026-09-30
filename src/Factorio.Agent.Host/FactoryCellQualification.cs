@@ -35,7 +35,9 @@ public sealed class FactoryCellQualification(RuntimeSession session)
             var gears = await builder.BuildAsync("assembler", "assembling-machine-1", "iron-gear-wheel", token);
             var lab = await builder.BuildAsync("lab", "lab", null, token);
             evidence.Add(new { check = "cells-ready", gears, lab });
-            Require(gears.Status == "ready" && gears.Entities.Count == 6 && lab.Entities.Count == 2, "Cells were not completed with their native entities.");
+            // Link poles are recorded as link-n roles so maintenance can rebuild them; they are not cell parts.
+            static int Parts(FactoryCell cell) => cell.Entities.Keys.Count(role => !role.StartsWith("link-", StringComparison.Ordinal));
+            Require(gears.Status == "ready" && Parts(gears) == 6 && Parts(lab) == 2, "Cells were not completed with their native entities.");
 
             var logistics = new FactoryLogistics(game, journal, session.Directory);
             var first = await logistics.ServiceAsync(50, token);
