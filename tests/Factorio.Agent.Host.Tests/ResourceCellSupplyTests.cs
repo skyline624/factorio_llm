@@ -94,6 +94,23 @@ public sealed class ResourceCellSupplyTests
     }
 
     [Fact]
+    public void SaturatedCellsStillShortGrowPastThePlannedRate()
+    {
+        // Campaign 2026-09-30 (seed 20261002): 33.75 iron a minute of ready cells against a 30-plate plan never grew, while
+        // buffers and unplanned consumers kept iron 250 plates short every round.
+        var growth = new RawCapacityGrowth();
+        growth.Observe(Round(0, ["iron-plate"], iron: 40));
+        growth.Observe(Round(3600, ["iron-plate"], iron: 32));
+        Assert.Equal(33.75 + RawCapacityGrowth.DefaultPerMinute, growth.Demand("iron-plate", planned: 30, capacity: 33.75), 6);
+        Assert.True(growth.Due("iron-plate", 2, 33.75, growth.Demand("iron-plate", 30, 33.75)));
+        // Cells delivering far below their capacity (unfuelled, unpowered) earn no extra cell; the plan still rules.
+        var idle = new RawCapacityGrowth();
+        idle.Observe(Round(0, ["iron-plate"]));
+        idle.Observe(Round(3600, ["iron-plate"], iron: 5));
+        Assert.Equal(30, idle.Demand("iron-plate", planned: 30, capacity: 33.75));
+    }
+
+    [Fact]
     public void RawSupplyFactsShowReadyCapacityDepletionAndDrillsPerItem()
     {
         // The planner never saw its raw bottleneck: two depleted iron cells looked like any other factory state.

@@ -37,13 +37,14 @@ public sealed class RawCapacityGrowth(long persistentTicks = 3600, int persisten
         ? streak.Delivered * 3600.0 / (streak.LastTick - streak.FirstTick) : 0;
 
     /// <summary>
-    /// Rate the ready cells must reach: the planned rate; for an unplanned item such as fuel, the default rate, or one
-    /// default step beyond capacity once ready cells deliver their capacity and the item still runs short.
+    /// Rate the ready cells must reach: the planned rate, or the default rate for an unplanned item such as fuel; one
+    /// default step beyond capacity once ready cells deliver their capacity and the item still runs short. Plans leave out
+    /// chest buffers and unplanned consumers such as ammunition, so saturated cells may fall short of a covered plan.
     /// </summary>
     public double Demand(string item, double planned, double capacity)
     {
-        if (planned > 0) return planned;
-        return capacity > 0 && Delivered(item) >= SaturatedShare * capacity ? capacity + DefaultPerMinute : DefaultPerMinute;
+        double baseline = planned > 0 ? planned : DefaultPerMinute;
+        return capacity > 0 && Delivered(item) >= SaturatedShare * capacity ? Math.Max(baseline, capacity + DefaultPerMinute) : baseline;
     }
 
     public bool Due(string item, int cells, double capacity, double demand) => cells < maximumCells
