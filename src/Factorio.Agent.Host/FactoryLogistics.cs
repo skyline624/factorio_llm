@@ -5,7 +5,7 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 public sealed record LogisticsResult(IReadOnlyDictionary<string, long> Collected, IReadOnlyDictionary<string, long> Supplied,
-    IReadOnlyDictionary<string, long> Shortfall, int Actions, long Tick);
+    IReadOnlyDictionary<string, long> Shortfall, int Actions, long Tick, MaintenanceResult? Maintenance = null);
 
 /// <summary>
 /// The actor as the factory's transport: empties cell output chests, then refills input chests and laboratories
@@ -17,16 +17,21 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     {
         if (bufferCrafts is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(bufferCrafts));
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+        await using var controller = new SpatialController(game, journal);
+        // Upkeep first: destroyed registered entities are rebuilt and turrets rearmed before production transport.
+        var upkeep = await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token);
         var state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
         var cells = state.Cells.Where(c => c.Status == "ready").ToArray();
         var collected = new Dictionary<string, long>(StringComparer.Ordinal);
-        var supplied = new Dictionary<string, long>(StringComparer.Ordinal);
-        var shortfall = new Dictionary<string, long>(StringComparer.Ordinal);
-        int actions = 0;
-        await using var controller = new SpatialController(game, journal);
+        var supplied = new Dictionary<string, long>(upkeep.Supplied, StringComparer.Ordinal);
+        var shortfall = new Dictionary<string, long>(upkeep.Shortfall, StringComparer.Ordinal);
+        int actions = upkeep.Actions;
         var snapshots = new FactorySnapshotClient(game);
         FactorySnapshot snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
+        // A cell still missing an entity waits for maintenance; its transfers would target a destroyed entity.
+        var present = FactoryMaintenance.Present(snapshot);
+        cells = cells.Where(c => c.Entities.Values.All(present.Contains)).ToArray();
 
         foreach (var cell in cells.Where(c => c.Entities.ContainsKey("output-chest")))
         {
@@ -97,7 +102,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             }
             if (loaded + give < stack / 4) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + stack - loaded - give;
         }
-        var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick);
+        var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, upkeep);
         await journal.AppendAsync("factory-logistics", result, token);
         return result;
 

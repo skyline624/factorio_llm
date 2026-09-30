@@ -46,6 +46,8 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         var planningMap = await spatial.CaptureAsync(items, 48, token);
         RequireScope(planningMap.Scope, catalog);
         CellLayout layout = new FactoryBandPlanner().Layout(planningMap, equipment, zone.Origin, cell.Slot, io, io);
+        // Recorded roles let maintenance rebuild a destroyed entity exactly where the cell expects it.
+        cell = cell with { Plan = layout.Entities.ToDictionary(e => e.Role, StringComparer.Ordinal) };
         await journal.AppendAsync("factory-cell-plan", new { cell.Id, kind, recipe, zone, layout }, token);
         await EnsureItemsAsync(layout.Entities.GroupBy(e => e.Item).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal));
 
@@ -170,7 +172,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
     public static SpatialSnapshot ReserveZone(SpatialSnapshot map, FactoryZone zone, string poleItem)
     {
         const string name = "factory-zone-reservation";
-        var box = new WorldBox(zone.Origin, new(zone.Origin.X + zone.Slots * zone.Pitch, zone.Origin.Y + zone.BandHeight));
+        var box = zone.Box;
         var pole = map.Prototypes[map.Items[poleItem].EntityName];
         return map with
         {

@@ -146,6 +146,8 @@ internal static class FactoryMaps
             ["small-electric-pole"] = new("small-electric-pole", "electric-pole", Box(0.1484375), Solid, 1, 1,
                 SupplyArea: 2.5, MaxWireDistance: 7.5),
             ["tree"] = new("tree", "tree", Box(0.4), Solid, 1, 1),
+            ["gun-turret"] = new("gun-turret", "ammo-turret", Box(0.7), Solid, 2, 2),
+            ["stone-wall"] = new("stone-wall", "wall", Box(0.29), Solid, 1, 1),
             ["iron-ore"] = new("iron-ore", "resource", Box(0.1), new(["resource"], false, false, false), 1, 1, ResourceCategory: "basic-solid")
         };
         var items = new Dictionary<string, PlaceableItem>
@@ -155,7 +157,9 @@ internal static class FactoryMaps
             ["stone-furnace"] = new("stone-furnace", 50),
             ["inserter"] = new("inserter", 50),
             ["wooden-chest"] = new("wooden-chest", 50),
-            ["small-electric-pole"] = new("small-electric-pole", 50)
+            ["small-electric-pole"] = new("small-electric-pole", 50),
+            ["gun-turret"] = new("gun-turret", 10),
+            ["stone-wall"] = new("stone-wall", 100)
         };
         var rows = new List<TileRun>();
         for (int y = -half; y < half; y++)

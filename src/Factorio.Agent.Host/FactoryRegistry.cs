@@ -1,12 +1,20 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Factorio.Agent.Core;
 
 namespace Factorio.Agent.Host;
 
-public sealed record FactoryZone(int Id, MapPosition Origin, int Slots, int Pitch, int BandHeight);
-/// <summary>A persistent automated cell. Entity identities are native ids proven by build receipts.</summary>
+public sealed record FactoryZone(int Id, MapPosition Origin, int Slots, int Pitch, int BandHeight)
+{
+    /// <summary>The whole band, including slots not built yet.</summary>
+    [JsonIgnore] public WorldBox Box => new(Origin, new(Origin.X + Slots * Pitch, Origin.Y + BandHeight));
+}
+/// <summary>
+/// A persistent automated cell. Entity identities are native ids proven by build receipts. Plan records each role's
+/// item, position and direction so maintenance can rebuild it; registries written before plans load without them.
+/// </summary>
 public sealed record FactoryCell(string Id, int Zone, CellSlot Slot, string Kind, string MachineItem, string? Recipe,
-    IReadOnlyDictionary<string, string> Entities, string Status, long Tick);
+    IReadOnlyDictionary<string, string> Entities, string Status, long Tick, IReadOnlyDictionary<string, PlannedEntity>? Plan = null);
 public sealed record FactoryState(int Version, string WorldId, IReadOnlyList<FactoryZone> Zones, IReadOnlyList<FactoryCell> Cells)
 {
     public FactoryState With(FactoryCell cell) => this with { Cells = [.. Cells.Where(c => c.Id != cell.Id), cell] };

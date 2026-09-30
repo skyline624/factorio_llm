@@ -33,6 +33,8 @@ try
           factory-cell --session FILE --kind assembler|lab --machine ITEM [--recipe NAME]
           factory-logistics --session FILE [--quantity CRAFTS]
           verify-factory-cells|verify-factory-research --session FILE
+          perimeter-defense --session FILE [--item WALL] [--layers 1|2]
+          verify-perimeter --session FILE [--layers 1|2]
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
           verify-assembly-batches --session FILE
@@ -91,6 +93,22 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new FactoryResearchQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "perimeter-defense":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            string journalPath = Path.Combine(session.Directory, $"perimeter-defense-{Guid.NewGuid():N}.jsonl");
+            Print(new { result = await new PerimeterDefenseController(game, new ControllerJournal(journalPath), session.Directory)
+                .RunAsync(Option("item") ?? "stone-wall", layers: int.Parse(Option("layers") ?? "2", CultureInfo.InvariantCulture), token: shutdown.Token), journalPath });
+            break;
+        }
+        case "verify-perimeter":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new PerimeterDefenseQualification(session).RunAsync(int.Parse(Option("layers") ?? "2", CultureInfo.InvariantCulture), shutdown.Token) });
             break;
         }
         case "verify-factory-cells":
