@@ -63,7 +63,7 @@ Un transfert refusé est journalisé comme limite observée ; il n'est jamais re
 |---|---|---|
 | `verify-factory-cells` | Fixture préparée : interface d'énergie injectée, objets fournis | Cellule d'engrenages et laboratoire construits en environ 18 s de jeu. 100 plaques livrées, 16 engrenages collectés en 40 s, limités par le débit de l'inserteur. |
 | `verify-factory-research` | Fixture préparée, même préparation | `gun-turret` recherchée en 9 885 ticks par une cellule d'engrenages, une cellule de packs rouges et un laboratoire, sans aucune fabrication manuelle. 155 transferts. |
-| Campagne du 30/09 (graine 20261001) | Partie normale, en cours | À consigner après analyse. |
+| Campagne du 30/09 (graine 20261001), premier passage | Partie normale, modèle cloud réel | En 30 minutes : recherche de `steam-power`, des packs rouges et d'`automation`. Première zone d'usine créée près du réseau, cellule d'engrenages construite. Arrêt par le coupe-circuit après cinq échecs, sur deux défauts corrigés depuis : poteau de liaison manquant, cellule réutilisée par l'ancienne production. |
 
 Ces fixtures isolent le mécanisme. Elles ne remplacent ni une campagne normale ni la qualification finale sur trois graines.
 
