@@ -17,7 +17,20 @@ public static class LocalJson
             await file.FlushAsync(token);
             file.Flush(flushToDisk: true);
         }
-        File.Move(temporary, path, overwrite: true);
+        // Replacing a local file is idempotent. Windows refuses it while a scanner or reader briefly holds
+        // the destination, so wait a bounded time instead of failing the strategic goal.
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(temporary, path, overwrite: true);
+                return;
+            }
+            catch (Exception error) when (error is UnauthorizedAccessException or IOException && attempt < 40)
+            {
+                await Task.Delay(25 * Math.Min(attempt, 8), token);
+            }
+        }
     }
 }
 

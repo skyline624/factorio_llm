@@ -15,6 +15,18 @@ public sealed class CheckpointStoreTests : IDisposable
     public CheckpointStoreTests() => Directory.CreateDirectory(Path.Combine(directory, "saves"));
 
     [Fact]
+    public async Task LocalJsonReplacesAFileThatAnotherProcessHoldsBriefly()
+    {
+        string path = Path.Combine(directory, "observation-watermark.json");
+        await File.WriteAllTextAsync(path, "{}");
+        var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+        var release = Task.Run(async () => { await Task.Delay(300); await held.DisposeAsync(); });
+        await LocalJson.WriteAsync(path, new { tick = 5 });
+        await release;
+        Assert.Contains("5", await File.ReadAllTextAsync(path));
+    }
+
+    [Fact]
     public async Task TamperedCheckpointIsRejectedBeforeLaunchingTheEngine()
     {
         await SealAsync();
