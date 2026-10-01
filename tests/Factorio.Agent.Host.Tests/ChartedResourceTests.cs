@@ -200,6 +200,18 @@ public sealed class ChartedResourceTests : IDisposable
     }
 
     [Fact]
+    public void RepeatedRecentDeathsRefuseOnlyABlindSearchStep()
+    {
+        NativeDeathTransition Death(long tick) => new(1, tick, 10, 1, new(-108, 28));
+        var destination = new ResourceSighting("1:crude-oil:80.5:24.5", "crude-oil", new(80.5, 24.5), 200, ResourceSighting.Charted);
+        Assert.True(ResourceResearchController.BlindSearchTooDangerous(null, [Death(100), Death(200)]));
+        Assert.False(ResourceResearchController.BlindSearchTooDangerous(null, [Death(200)]));
+        Assert.False(ResourceResearchController.BlindSearchTooDangerous(null, []));
+        // A remembered or charted destination outside the zones is a directed trip, not a blind one.
+        Assert.False(ResourceResearchController.BlindSearchTooDangerous(destination, [Death(100), Death(200), Death(300)]));
+    }
+
+    [Fact]
     public async Task TheMapIsReadOnTheFirstExplorationStepAndEveryEighthAfter()
     {
         var game = new ChartedGame { Reading = Reply(200, [Oil()], ["crude-oil"]) };
@@ -249,15 +261,19 @@ public sealed class ChartedResourceTests : IDisposable
     }
 
     [Fact]
-    public void MaintenanceRebuildsADestroyedRadarAtItsPlan()
+    public void MaintenanceRebuildsADestroyedRadarAndItsPowerLinkAtTheirPlan()
     {
-        var plan = new PlannedEntity("machine", "radar", new(-10.5, 3.5), 0);
+        var plan = new PlannedEntity("machine", "radar", new(-18.5, 7.5), 0);
+        var link = new PlannedEntity("link-1", "small-electric-pole", new(-19.5, 4.5), 0);
         var cell = new FactoryCell("radar-1", 0, new(0, 0, true), RadarController.Kind, "radar", null,
-            new Dictionary<string, string> { ["machine"] = "77" }, "ready", 100, Plan: new Dictionary<string, PlannedEntity> { ["machine"] = plan });
+            new Dictionary<string, string> { ["machine"] = "77", ["link-1"] = "78" }, "ready", 100,
+            Plan: new Dictionary<string, PlannedEntity> { ["machine"] = plan, ["link-1"] = link });
         var state = new FactoryState(1, "world", [], [cell]);
-        var missing = Assert.Single(FactoryMaintenance.Missing(state, new HashSet<string>()));
-        Assert.Equal(("radar-1", "machine", plan), (missing.Cell.Id, missing.Role, missing.Plan));
-        Assert.Empty(FactoryMaintenance.Missing(state, new HashSet<string> { "77" }));
+        Assert.Equal([("link-1", link), ("machine", plan)],
+            FactoryMaintenance.Missing(state, new HashSet<string>()).Select(m => (m.Role, m.Plan)));
+        var pole = Assert.Single(FactoryMaintenance.Missing(state, new HashSet<string> { "77" }));
+        Assert.Equal(("radar-1", "link-1"), (pole.Cell.Id, pole.Role));
+        Assert.Empty(FactoryMaintenance.Missing(state, new HashSet<string> { "77", "78" }));
     }
 
     [Fact]

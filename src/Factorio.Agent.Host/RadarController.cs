@@ -41,33 +41,53 @@ public sealed class RadarController(IGameClient game, IControllerJournal journal
             return null;
         }
         // Built beside the fed pole nearest the actor, the radar joins that network; the grid code extends it otherwise.
+        var standingBefore = FactoryMaintenance.Present(known);
         await controller.TravelAsync(fed!, 8, catalog, token);
         string radarId = await new PoweredMachineController(game, journal).InstallAsync(item!, catalog, controller, token);
         await new PowerGridController(game, journal).ConnectAsync(radarId, catalog, controller, token);
         known = await KnownAsync(catalog, token);
         if (FactoryPower.IsFed(known, radarId) != true) throw new InvalidOperationException("The built radar did not join a network with a generator.");
         var record = known.Records.Single(r => r.Kind == "entity" && r.EntityId == radarId);
-        var plan = new PlannedEntity("machine", item!, record.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!,
-            record.Data.GetProperty("direction").GetInt32());
+        var entities = new Dictionary<string, string>(StringComparer.Ordinal) { ["machine"] = radarId };
+        var plan = new Dictionary<string, PlannedEntity>(StringComparer.Ordinal) { ["machine"] = Planned("machine", item!, record) };
+        // Poles built for the radar are its power links: maintenance rebuilds them with it.
+        foreach (var pole in known.Records.Where(r => r.Kind == "entity" && !standingBefore.Contains(r.EntityId)
+                && r.Data.GetProperty("role").GetString() == "factory" && r.Data.GetProperty("type").GetString() == "electric-pole")
+            .OrderBy(r => r.EntityId, StringComparer.Ordinal))
+        {
+            string role = $"link-{entities.Count}";
+            string? poleItem = catalog.Items.Where(p => p.Value.PlaceEntity == pole.Name).Select(p => p.Key).Order(StringComparer.Ordinal).FirstOrDefault();
+            if (poleItem is null) continue;
+            entities[role] = pole.EntityId;
+            plan[role] = Planned(role, poleItem, pole);
+        }
         // A destroyed radar keeps its cell identity: still one radar, now at the new plan.
         var built = new FactoryCell(cell?.Id ?? $"radar-{Guid.NewGuid():N}", 0, new(0, 0, true), Kind, item!, null,
-            new Dictionary<string, string>(StringComparer.Ordinal) { ["machine"] = radarId }, "ready", known.CollectedTick,
-            Plan: new Dictionary<string, PlannedEntity>(StringComparer.Ordinal) { ["machine"] = plan });
+            entities, "ready", known.CollectedTick, Plan: plan);
         await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(built), token);
-        await journal.AppendAsync("radar-built", new { cell = built.Id, radarId, plan, network = record.Data.GetProperty("electricNetworkId").GetInt64(),
-            replaced = cell?.Entities, known.CollectedTick }, token);
+        await journal.AppendAsync("radar-built", new { cell = built.Id, radarId, built.Entities, plan,
+            network = record.Data.GetProperty("electricNetworkId").GetInt64(), replaced = cell?.Entities, known.CollectedTick }, token);
         return built;
+
+        static PlannedEntity Planned(string role, string item, FactoryRecord entity) => new(role, item,
+            entity.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!, entity.Data.GetProperty("direction").GetInt32());
     }
 
     /// <summary>
     /// Ensures the radar, then reads the map every <see cref="WaitTicks"/> until a chunk shows one of the resources where the
     /// reading taken before showed none, the radar stops adding chunks, or the wait budget ends. Returns that reading, else null.
+    /// Each wait starts with the radar powered: in a fixture the steam boiler ran dry and the stalled scan ended the wait early.
     /// </summary>
     internal async Task<ChartedResourceSnapshot?> ChartAsync(IReadOnlyList<string> names, ChartedResourceSnapshot? before,
         ChartedResourceSurvey survey, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
     {
         var radar = await EnsureAsync(catalog, controller, token);
         if (radar is null) return null;
+        string radarId = radar.Entities["machine"];
+        var view = await new SpatialClient(game).CaptureAsync([radar.MachineItem], 48, token);
+        if (view.Scope != catalog.Scope) throw new InvalidDataException("Actor identity changed while waiting for the radar.");
+        double perTick = view.Prototypes[view.Items[radar.MachineItem].EntityName].EnergyPerTick ?? 0;
+        var power = new PoweredMachineController(game, journal);
         var shown = (before?.Deposits ?? []).Select(d => (d.Name, d.Chunk)).ToHashSet();
         int read = -1, stalled = 0;
         for (int round = 0; ; round++)
@@ -83,7 +103,9 @@ public sealed class RadarController(IGameClient game, IControllerJournal journal
                     charted.CollectedTick }, token);
                 return null;
             }
-            await journal.AppendAsync("radar-charting-wait", new { cell = radar.Id, radar = radar.Entities["machine"], round, readChunks = read,
+            // An unpowered radar gets fuel for the rest of the wait through the existing boiler maintenance; a powered one is left as is.
+            await power.MaintainFuelAsync(radarId, perTick * WaitTicks * (WaitRounds - round), catalog, controller, false, token);
+            await journal.AppendAsync("radar-charting-wait", new { cell = radar.Id, radar = radarId, round, readChunks = read,
                 charted.CollectedTick, ticks = WaitTicks }, token);
             var waited = await controller.WorkAsync("wait", new { ticks = WaitTicks }, WaitTicks + 300, token: token);
             if (waited.Status != "completed") throw new InvalidOperationException("The radar charting wait did not complete; reconcile native effects.");

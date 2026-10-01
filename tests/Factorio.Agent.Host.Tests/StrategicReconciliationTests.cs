@@ -340,6 +340,24 @@ public sealed class StrategicReconciliationTests : IDisposable
         Assert.DoesNotContain("submit", game.Calls);
     }
 
+    [Fact]
+    public async Task ABlindSearchRefusedAfterRepeatedDeathsReachesTheNextDecisionAsItsOwnFailure()
+    {
+        var game = await PrepareAsync(true);
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize((await ReadMemoryAsync()) with { Pending = false }, Protocol.Json));
+        string nextJournal = Path.Combine(directory, "next.jsonl");
+        var runner = new FailingThenNext(async () =>
+        {
+            var journal = new ControllerJournal(nextJournal);
+            await journal.AppendAsync("strategic-context", new { facts = "{\"observedTick\":40001}" }, default);
+            await journal.AppendAsync("strategic-goal", new { category = 1, target = "oil-processing", quantity = 1, unit = 4 }, default);
+        }, new ExplorationTooDangerousException("No remembered or charted crude-oil deposit; 2 recent own deaths refuse a blind step."));
+        await new StrategicCampaignController(game, runner, Memory, nextJournal).RunAsync(2);
+        Assert.Contains("exploration_too_dangerous", runner.Next.Previous);
+        Assert.DoesNotContain("recent own deaths", runner.Next.Previous);
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

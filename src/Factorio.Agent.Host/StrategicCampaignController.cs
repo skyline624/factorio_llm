@@ -101,6 +101,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                     GameRpcException rpc => rpc.Error.Code,
                     NavigationPlanningException => "navigation_blocked",
                     ExplorationDangerException => "exploration_danger_excluded",
+                    ExplorationTooDangerousException => "exploration_too_dangerous",
                     PlannerException => "planner_unavailable",
                     TimeoutException => "controller_budget_exhausted",
                     InvalidDataException => "observation_inconsistent",
