@@ -57,7 +57,14 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 // maintainer's own journal entry; an operation it left active still blocks the next goal below.
                 try { await maintenance(token); }
                 catch (Exception) when (!token.IsCancellationRequested) { }
-                observation = await ObserveAsync(token);
+                observation = await ObserveAsync(token, allowDead: true);
+                // A death between goals, such as an attack during logistics, follows the same recovery as one during a goal.
+                // On 2026-10-01 (seed 20261002) the campaign stopped instead because the actor died during maintenance.
+                if ((!observation.Alive || observation.Scope.Incarnation != memory.Scope.Incarnation) && activeJournalPath is not null)
+                {
+                    memory = await new StrategicRecoveryController(game, memoryPath, activeJournalPath, recovery).ResumeAsync(token);
+                    observation = await ObserveAsync(token);
+                }
             }
             Validate(memory, observation);
             if (observation.Rockets > 0) return new(true, index, observation.Tick, "rocket-observed");
