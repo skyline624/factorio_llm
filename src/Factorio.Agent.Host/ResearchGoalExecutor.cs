@@ -63,7 +63,7 @@ public sealed class ResearchGoalExecutor(IGameClient game, IControllerJournal jo
             if (step.Kind == "craft-trigger")
                 await new ResearchPrerequisiteController(game, new ProductionGoalExecutor(game, journal), journal).RunAsync(step.Technology, token);
             else if (step.Kind == "mine-trigger")
-                await new ResourceResearchController(game, journal).RunAsync(step.Technology, token);
+                await new ResourceResearchController(game, journal, factoryDirectory).RunAsync(step.Technology, token);
             else if (step.Kind == "research")
             {
                 // Persistent science cells replace hand-crafted packs once assemblers, inserters and poles are unlocked.

@@ -21,6 +21,17 @@ La photographie suivante, au tick 79 304, constate la disparition du gisement et
 L'ancienne partie de développement n'avait pas de mémoire persistante de ses gisements. La reprise utilise les recettes des fours connus comme indices, puis enrichit la mémoire uniquement avec de nouvelles observations natives. Aucun historique de position n'est inventé ou importé depuis des journaux dépourvus de surface vérifiable.
 
 
+## Destinations lues sur la carte de la force
+
+La mémoire reçoit aussi les lectures de la carte de la force (`charted_resources`, voir [protocole](protocol.md#lecture-de-la-carte-charted_resources)). Le fichier passe en version 2 : chaque souvenir porte `origin`, `local` pour une entité vue dans une photographie spatiale complète, `charted` pour une entité lue dans un secteur de la carte. Un fichier version 1 est relu comme entièrement local, puis réécrit en version 2 ; un binaire antérieur refuse un fichier version 2 au lieu de confondre les deux origines.
+
+Le client de session enregistre chaque lecture valide sous le même verrou interprocessus, avec remplacement atomique. Il garde un échantillon réel par nom et secteur, daté du tick de lecture, sans quantité ni ennemi. Une lecture complète remplace les anciens souvenirs cartographiés de ses noms dans sa couverture ; une lecture tronquée ne les remplace qu'en deçà de `completeRadius`. Une lecture n'efface jamais un souvenir local et n'ajoute aucune cellule explorée : la carte ne remplace pas la vue du terrain. Une photographie locale remplace les souvenirs cartographiés de sa couverture, comme tout autre souvenir. Dans une même cellule de huit cases, le souvenir le plus récent l'emporte ; à tick égal, l'observation locale est préférée.
+
+Un souvenir cartographié reste une destination. Les recherches existantes le suivent par le chemin historique, puis l'observation locale décide du site, de sa géométrie, de son stock et de ses menaces. La recherche de déclencheur pétrolier, la production de base, les rangées de ressources, la préparation de fonte, l'extraction stockée et les extracteurs de fluide lisent la carte avant leur premier pas d'exploration, puis tous les huit pas. La mémoire choisit le gisement connu le plus proche, local ou cartographié, hors refus locaux et zones de mort récentes. La [recherche par extraction](resource-research.md#carte-de-la-force-et-radar) décrit le radar et la qualification réelle.
+
+Tests hors ligne : analyse stricte des lectures, rejet des incohérences, correspondance requête/réponse, enregistrement par le client de session, remplacement dans la couverture, priorité locale, compatibilité version 1, refus d'un autre monde, d'une autre surface ou d'un tick plus ancien, et choix du gisement le plus proche quelle que soit son origine.
+
+
 ## Restauration des anciens journaux
 
 `restore-resource-memory --session FILE` reconstruit des souvenirs depuis les journaux privés antérieurs à cette mémoire. L’import exige une commande de minage et un reçu terminé portant le même identifiant, une empreinte de commande cohérente, le même monde, un tick non futur et une production positive reconnue par le catalogue natif. L’identifiant natif de la cible doit aussi confirmer la surface, le nom et les coordonnées exactes de la commande. Les lignes incomplètes ou non corrélées ne fournissent aucune position.

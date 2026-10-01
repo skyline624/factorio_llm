@@ -41,6 +41,9 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
         }
         if (request.Action == "spatial" && response.Ok)
             await new ResourceMemoryStore(session.Directory).RecordAsync(SpatialSnapshot.Parse(response), cancellationToken);
+        // A reading of the force's map enters the same memory, as charted destinations rather than local sightings.
+        if (request.Action == "charted_resources" && response.Ok)
+            await new ResourceMemoryStore(session.Directory).RecordChartedAsync(ChartedResourceSnapshot.Parse(response), cancellationToken);
         if (request.Action == "observe" && response.Ok) await RecordDeathAsync(response, cancellationToken);
         return response;
     }

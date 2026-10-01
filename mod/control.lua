@@ -12,6 +12,7 @@ local Spatial = require("scripts.spatial")
 local Research = require("scripts.research")
 local Rocket = require("scripts.rocket")
 local Power = require("scripts.power")
+local ChartedResources = require("scripts.charted_resources")
 
 script.on_init(Actor.initialize)
 script.on_configuration_changed(Actor.initialize)
@@ -53,7 +54,7 @@ local function hello(args)
 end
 
 local handlers = {hello = hello, observe = Observation.observe, research_state = Research.observe, rocket_state = Rocket.observe, factory_snapshot = FactorySnapshot.page, submit = Operations.submit,
-  power_state = Power.observe,
+  power_state = Power.observe, charted_resources = ChartedResources.observe,
   spatial = Spatial.observe, validate_placement = Spatial.validate_placement,
   prepare_checkpoint = function(args)
     local s = Actor.state()

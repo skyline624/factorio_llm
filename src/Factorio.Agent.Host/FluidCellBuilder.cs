@@ -178,8 +178,11 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
     {
         var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
         var visited = new HashSet<string>(StringComparer.Ordinal);
+        var charting = new ChartedResourceSurvey(game, journal);
         for (int attempt = 0; attempt < 5; attempt++)
         {
+            // Deposits on the force's map join the remembered destinations below, before the local view is taken.
+            await charting.BeforeExplorationAsync([resource], "fluid-extractor-search", token);
             var map = await CaptureAsync([.. items, .. ground.Items], catalog, token);
             // A deposit under a band, a resource row or steam growth stays free for them.
             var planning = FactoryGround.Reserve(map, ground.Boxes(map), pipeItem);
