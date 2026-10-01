@@ -7,8 +7,12 @@ namespace Factorio.Agent.Host;
 public sealed record ResourceResearchResult(string Technology, string Resource, string MachineId,
     long StartTick, long EndTick, int PoweredSamples, double ConnectedFluidStock);
 
-/// <summary>Unlocks a native resource trigger through real powered extraction, never a research grant.</summary>
-public sealed class ResourceResearchController(IGameClient game, IControllerJournal journal)
+/// <summary>
+/// Unlocks a native resource trigger through real powered extraction, never a research grant. The deposit is searched in local
+/// views, then in the resource memory, which a reading of the force's map feeds before any blind step; with a factory directory,
+/// a resource neither remembered nor charted first gets the factory radar and a bounded wait for its sectors.
+/// </summary>
+public sealed class ResourceResearchController(IGameClient game, IControllerJournal journal, string? factoryDirectory = null)
 {
     public async Task<ResourceResearchResult> RunAsync(string technology, CancellationToken token = default)
     {
@@ -35,6 +39,8 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
         var executor = new ProductionGoalExecutor(game, journal);
         var power = new PoweredMachineController(game, journal);
         var exploration = new ExplorationPlanner();
+        var charting = new ChartedResourceSurvey(game, journal);
+        bool radarConsulted = false;
         await using var controller = new SpatialController(game, journal);
         SpatialSnapshot map = await MapAsync();
         var deferred = new HashSet<string>(StringComparer.Ordinal);
@@ -46,13 +52,23 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
             if (selected is not null) break;
             string[] unsuitable = map.Entities.Where(IsTarget).Select(e => e.Id).ToArray();
             foreach (string id in unsuitable) deferred.Add(id);
-            ResourceMemorySnapshot? memory = game is IResourceMemoryReader reader ? await reader.ReadResourceMemoryAsync(map, token) : null;
-            // A historical deposit in the zone of a recent own death is not a destination; frontiers are explored instead.
-            IReadOnlyList<NativeDeathTransition> zones = game is IDangerZoneReader danger
-                ? await danger.ReadActiveDeathsAsync(map.Scope, map.SurfaceIndex, map.CollectedTick, token) : [];
-            var historical = memory?.Resources.Where(r => r.Name == resourceName && !deferred.Contains(r.EntityId)
-                    && !zones.Any(z => DangerZones.Covers(z, r.Position)))
-                .OrderBy(r => r.Position.DistanceTo(map.Actor.Position)).FirstOrDefault();
+            // The force's map is read before a blind step; its deposits join the memory as charted destinations. The view is
+            // captured again so that the memory is never newer than the observation it is read against.
+            var charted = await charting.BeforeExplorationAsync([resourceName], "resource-research", token);
+            if (charted is not null) map = await MapAsync();
+            var historical = await HistoricalAsync();
+            if (historical is null && factoryDirectory is not null && !radarConsulted)
+            {
+                // Neither remembered nor charted: the factory radar charts sectors during a bounded wait before any blind walk.
+                radarConsulted = true;
+                charted ??= await charting.ReadAsync([resourceName], "resource-research", token);
+                if (await new RadarController(game, journal, factoryDirectory).ChartAsync([resourceName], charted, charting, catalog,
+                    controller, token) is not null)
+                {
+                    map = await MapAsync();
+                    historical = await HistoricalAsync();
+                }
+            }
             // Run 16 (2026-10-01, seed 20261002): the crude-oil search met a pack far east while the actor was unarmored.
             await new SurvivalKitController(game, journal).BeforeTripAsync("resource-research-search", token);
             var frontier = await controller.FindExplorationWaypointAsync(exploration, catalog, "", historical?.Position, token);
@@ -165,6 +181,16 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
             var value = await spatial.CaptureAsync(items, 48, token);
             RequireScope(value.Scope);
             return value;
+        }
+        // The nearest remembered deposit, locally observed or charted, that was not refused here. A deposit in the zone of a
+        // recent own death is not a destination; frontiers are explored instead.
+        async Task<ResourceSighting?> HistoricalAsync()
+        {
+            ResourceMemorySnapshot? memory = game is IResourceMemoryReader reader ? await reader.ReadResourceMemoryAsync(map, token) : null;
+            IReadOnlyList<NativeDeathTransition> zones = game is IDangerZoneReader danger
+                ? await danger.ReadActiveDeathsAsync(map.Scope, map.SurfaceIndex, map.CollectedTick, token) : [];
+            return memory?.NearestOf(resourceName, map.Actor.Position,
+                r => !deferred.Contains(r.EntityId) && !zones.Any(z => DangerZones.Covers(z, r.Position)));
         }
     }
     private sealed record ExtractionSelection(string Item, string? Pole = null, ResourceExtractionPlacement? Local = null,

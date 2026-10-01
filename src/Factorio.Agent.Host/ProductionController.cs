@@ -29,6 +29,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
         var planner = new ProductionPlanner();
         var spatial = new SpatialClient(game);
         var exploration = new ExplorationPlanner();
+        var charting = new ChartedResourceSurvey(game, journal);
         ProductionState initial = await ObserveAsync(deadline.Token);
         var receipts = new List<OperationReceipt>();
         for (int stepNumber = 0; stepNumber < 256; stepNumber++)
@@ -126,6 +127,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     break;
                 case "unavailable":
                     await new SurvivalKitController(game, journal).BeforeTripAsync("resource-search", deadline.Token);
+                    await charting.BeforeExplorationAsync(catalog, step.Item, "resource-search", deadline.Token);
                     ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, step.Item, token: deadline.Token);
                     await journal.AppendAsync("exploration-frontier", new { step.Item, frontier = next.Position, next.CollectedTick }, deadline.Token);
                     await controller.NavigateAsync(next.Position, cancellationToken: deadline.Token);
