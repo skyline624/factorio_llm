@@ -8,6 +8,20 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class StrategicGroundingTests
 {
     [Fact]
+    public void AvailableResearchNamesTheRecipesItUnlocks()
+    {
+        // Campaign 2026-10-01 (seed 20261002): the planner never saw that military research brings a better gun.
+        var effects = Protocol.ToElement(new object[]
+        {
+            new { type = "unlock-recipe", recipe = "submachine-gun" },
+            new { type = "gun-speed", ammo_category = "bullet", modifier = 0.1 },
+            new { type = "unlock-recipe", recipe = "shotgun" }
+        });
+        Assert.Equal(["submachine-gun", "shotgun"], StrategicProductionController.Unlocks(effects));
+        Assert.Empty(StrategicProductionController.Unlocks(null));
+    }
+
+    [Fact]
     public void DefenseMeansInstalledNativeTurretsRatherThanCarriedItemStock()
     {
         var catalog = Catalog() with { Items = new Dictionary<string, NativeItem>(Catalog().Items)

@@ -72,7 +72,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             nativeTechnologyIdentifiers = compact ? null : science.Technologies.Keys.Order(StringComparer.Ordinal).ToArray(),
             researchedTechnologies = science.Technologies.Values.Where(t => t.Researched).Select(t => t.Name).Order(StringComparer.Ordinal).ToArray(),
             availableResearch = science.Technologies.Values.Where(t => t.Enabled && t.Available && !t.Researched)
-                .Select(t => new { t.Name, t.Count, t.Ingredients, t.Trigger }).ToArray(),
+                .Select(t => new { t.Name, t.Count, t.Ingredients, t.Trigger, unlocks = Unlocks(t.Effects) }).ToArray(),
             executionCapabilities = "Production goals use category production, unit items and an exact native item identifier, up to 1000 carried items. " +
                 "C# explores, mines, hand-crafts, installs or reuses furnaces, powered assemblers and native steam supply. " +
                 "Prefer machine production and fuel over bulk hand mining. C# can prepare or reuse burner or electric drills feeding compatible storage or furnaces for deterministic solid deposits such as coal, stone and iron ore. Electric solid extraction can extend a known power network with calculated poles and service a distant connected boiler. Trees still require manual harvesting and machine bootstrap may need small manual quantities. " +
@@ -271,6 +271,17 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         if (!catalog.Items.ContainsKey(goal.Target)) return "The target is not an exact native item identifier; no guessed alias is executed.";
         return null;
     }
+
+    /// <summary>
+    /// Recipes a technology unlocks, from its native effects, so the planner can tell which research brings a better gun,
+    /// armor, ammunition or wall. On 2026-10-01 (seed 20261002) the pistol-armed actor died 23 times while military research
+    /// stayed unchosen.
+    /// </summary>
+    internal static string[] Unlocks(JsonElement? effects) => effects is { ValueKind: JsonValueKind.Array } list
+        ? list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object && e.TryGetProperty("type", out var type)
+                && type.GetString() == "unlock-recipe" && e.TryGetProperty("recipe", out var recipe) && recipe.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetProperty("recipe").GetString()!).Take(12).ToArray()
+        : [];
 
     private static string[] Names(JsonElement value) => value.ValueKind == JsonValueKind.Array
         ? value.EnumerateArray().Select(e => e.GetProperty("name").GetString()!).Distinct(StringComparer.Ordinal).Order().ToArray()
