@@ -41,6 +41,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         await director.EnsureLabsAsync(labs, token);
         var builder = new FactoryCellBuilder(game, journal, directory);
         await builder.RepairPowerAsync(token);
+        await director.ExpandPowerAsync(observation.Scope, token);
         await journal.AppendAsync("factory-research-start", new { technologyName, technology.Count, unitSeconds, labs, minutes }, token);
 
         var logistics = new FactoryLogistics(game, journal, directory);

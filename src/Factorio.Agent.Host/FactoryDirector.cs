@@ -92,6 +92,22 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 return capacity;
             }
             await builder.BuildNextAsync(item, perMinute - current, token, explorationBudget);
+            await ExpandPowerAsync(catalog.Scope, token);
+        }
+    }
+
+    /// <summary>
+    /// Electric resource cells draw from the network like assembler cells, so steam grows after each one. On 2026-10-01
+    /// (seed 20261002) dozens of electric drill cells raised the demand to 2.7 times capacity without any expansion attempt.
+    /// A failed expansion leaves the built cell in place and is journaled; a changed actor identity still stops the caller.
+    /// </summary>
+    internal async Task ExpandPowerAsync(ActorScope scope, CancellationToken token)
+    {
+        try { await new PowerExpansionController(game, journal, directory).EnsureCapacityAsync(0, token); }
+        catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+        {
+            if (ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token)).Scope != scope) throw;
+            await journal.AppendAsync("power-expansion-failed", new { error = error.GetType().Name, error.Message }, token);
         }
     }
 

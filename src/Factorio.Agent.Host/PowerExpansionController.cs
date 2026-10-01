@@ -23,6 +23,8 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
     /// blocks every later one; eight units (about 14 MW of steam) leave the factory room to grow before other energy sources.
     /// </summary>
     public const int ReservedUnits = 8;
+    /// <summary>Tiles from the anchor boiler within which a new shore unit stays observable and linkable to the network.</summary>
+    public const double SiteReach = 32;
     private const string Fuel = "coal";
 
     public async Task<PowerState> ObserveAsync(CancellationToken token) =>
@@ -105,7 +107,10 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         var map = await CaptureAsync(items, catalog, token);
         string force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
         var planner = new PowerExpansionPlanner();
-        var plan = planner.Next(await PlanningAsync(map, items, catalog, token), items.Boiler, items.Engine, force);
+        var planning = await PlanningAsync(map, items, catalog, token);
+        // A chain without room to grow in place continues on its own shore nearby.
+        var plan = planner.Next(planning, items.Boiler, items.Engine, force)
+            ?? (items.Pump is { } pump ? planner.Site(planning, pump, items.Boiler, items.Engine, SiteReach) : null);
         if (plan is null) return null;
         await journal.AppendAsync("power-expansion-plan", new { plan, map.CollectedTick }, token);
         foreach (var group in plan.Machines.GroupBy(m => m.Item)) await EnsureItemsAsync(group.Key, group.Count(), token);
@@ -352,9 +357,9 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         return map;
     }
 
-    internal sealed record SteamItems(string Boiler, string Engine, string Pole, string Chest, string Inserter)
+    internal sealed record SteamItems(string Boiler, string Engine, string Pole, string Chest, string Inserter, string? Pump = null)
     {
-        public string[] All => [Boiler, Engine, Pole, Chest, Inserter];
+        public string[] All => Pump is null ? [Boiler, Engine, Pole, Chest, Inserter] : [Boiler, Engine, Pole, Chest, Inserter, Pump];
         public string[] Machines => [Boiler, Engine];
     }
 
@@ -366,7 +371,8 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         string Item(string entity) => catalog.Items.Where(p => p.Value.PlaceEntity == entity).Select(p => p.Key).Order(StringComparer.Ordinal).FirstOrDefault()
             ?? throw new InvalidDataException($"No item places {entity}.");
         var equipment = FactoryCellBuilder.Equipment(catalog, Item(boiler.Name));
-        return new(equipment.Machine, Item(engine.Name), equipment.Pole, equipment.Chest, equipment.Inserter);
+        string? pump = catalog.Items.Where(p => p.Value.PlaceEntityType == "offshore-pump").Select(p => p.Key).Order(StringComparer.Ordinal).FirstOrDefault();
+        return new(equipment.Machine, Item(engine.Name), equipment.Pole, equipment.Chest, equipment.Inserter, pump);
     }
 
     private static IReadOnlyList<ObservedBoiler> Boilers(PowerState state, ElectricNetworkState network)

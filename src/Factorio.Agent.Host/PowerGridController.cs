@@ -3,7 +3,11 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
-/// <summary>Extends an owned native electric network to a fixed consumer, verifying each constructed link.</summary>
+/// <summary>
+/// Extends an owned native electric network to a fixed consumer, verifying each constructed link. Only poles on a network
+/// with a generator are sources: on 2026-10-01 (seed 20261002) a coal drill joined the nearest pole, on an island whose
+/// links biters had destroyed, and the goal failed for want of a steam supply.
+/// </summary>
 internal sealed class PowerGridController(IGameClient game, IControllerJournal journal)
 {
     public async Task ConnectAsync(string machineId, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
@@ -23,14 +27,18 @@ internal sealed class PowerGridController(IGameClient game, IControllerJournal j
         var target = map.Entities.Single(e => e.Id == machineId);
         WorldBox footprint = target.Bounds;
         if (!map.Prototypes[target.Name].IsElectric) throw new InvalidDataException("Grid target is not an electric consumer.");
-        if (target.Power?.NetworkId is not null) return;
+        var known = await KnownAsync();
+        if (target.Power?.NetworkId is not null && FactoryPower.IsFed(known, machineId) != false) return;
         var names = poles.Select(item => catalog.Items[item].PlaceEntity).ToHashSet(StringComparer.Ordinal);
         if (!state.Entities.Any(e => names.Contains(e.Name)))
         {
             await new SteamPowerController(game, journal).RunAsync(token);
             state = await ObserveAsync();
+            known = await KnownAsync();
         }
-        var source = state.Entities.Where(e => names.Contains(e.Name)).OrderBy(e => e.Position.DistanceTo(machine.Position)).First();
+        var source = state.Entities.Where(e => names.Contains(e.Name) && FactoryPower.IsFed(known, e.Id) != false)
+            .OrderBy(e => e.Position.DistanceTo(machine.Position)).FirstOrDefault()
+            ?? throw new InvalidOperationException("No owned pole is on a network with a generator; repair the power links first.");
         await controller.TravelAsync(source.Position, 8, catalog, token);
         map = await MapAsync();
         string poleItem = PowerGridPlanner.ChoosePole(map, poles, state.Inventory);
@@ -38,7 +46,8 @@ internal sealed class PowerGridController(IGameClient game, IControllerJournal j
         {
             map = await MapAsync();
             state = await ObserveAsync();
-            var owned = state.Entities.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+            known = await KnownAsync();
+            var owned = state.Entities.Select(e => e.Id).Where(id => FactoryPower.IsFed(known, id) != false).ToHashSet(StringComparer.Ordinal);
             var link = await ControllerPlanning.RunAsync(t => new PowerGridPlanner().Next(map, poleItem, footprint, owned, t),
                 controller, TimeSpan.FromMinutes(2), token);
             if (link.Status == PowerGridSearchStatus.Connected)
@@ -70,6 +79,12 @@ internal sealed class PowerGridController(IGameClient game, IControllerJournal j
         {
             var value = await production.ObserveAsync(token);
             if (value.Scope != catalog.Scope || value.ControlMode != "ai") throw new InvalidDataException("Grid construction actor changed.");
+            return value;
+        }
+        async Task<FactorySnapshot> KnownAsync()
+        {
+            var value = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            if (value.Scope != catalog.Scope) throw new InvalidDataException("Grid construction actor changed.");
             return value;
         }
         async Task<SpatialSnapshot> MapAsync()

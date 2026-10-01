@@ -39,8 +39,8 @@ public sealed class FactoryPowerLogisticsTests
     [Theory]
     [InlineData(45, 3, 0)]
     [InlineData(8, 4, 0)]
-    [InlineData(5, 2, 45)]
-    [InlineData(0, 1, 50)]
+    [InlineData(5, 2, 195)]
+    [InlineData(0, 1, 200)]
     public void OnlyALowFeederSupplyAsksForCoalProcurement(long chest, long boiler, long shortfall)
     {
         using var world = new World(chest, boiler, carried: 0);

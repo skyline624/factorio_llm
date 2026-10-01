@@ -4,7 +4,10 @@ namespace Factorio.Agent.Core;
 public sealed record SteamChain(SpatialEntity Boiler, IReadOnlyList<SpatialEntity> Engines);
 /// <summary>A planned fluid link; Source and Target are observed entity ids or planned machine roles.</summary>
 public sealed record SteamLink(string Source, string Target, FluidConnectionPlacement Connection);
-/// <summary>"complete" adds engines to an under-equipped boiler; "unit" adds a boiler fed from an existing boiler's water port.</summary>
+/// <summary>
+/// "complete" adds engines to an under-equipped boiler; "unit" adds a boiler fed from an existing boiler's water port; "site"
+/// adds an offshore pump, its boiler and engines on a free shore (BoilerId then names the planned boiler role).
+/// </summary>
 public sealed record SteamExpansionPlan(string Kind, string BoilerId, IReadOnlyList<PlannedMachine> Machines, IReadOnlyList<SteamLink> Links);
 
 /// <summary>
@@ -82,6 +85,40 @@ public sealed class PowerExpansionPlanner
                 return new("complete", chain.Boiler.Id, added.Select(a => a.Machine).ToArray(), added.Select(a => a.Link).ToArray());
         return chains.Select(c => Unit(map, c, boilerItem, engineItem, ratio)).FirstOrDefault(p => p is not null);
     }
+
+    /// <summary>
+    /// A new unit on its own shore when no watered chain can grow in place: an offshore pump on water, a boiler it waters and
+    /// the boiler's full set of engines, nearest to the actor first and within <paramref name="reach"/> of it so the new
+    /// engines can be linked to the observed network. On 2026-10-01 (seed 20261002) water north of the only boiler and bootstrap
+    /// leftovers south of it left no room for a chained unit while the network demand reached 2.7 times its capacity.
+    /// </summary>
+    public SteamExpansionPlan? Site(SpatialSnapshot map, string pumpItem, string boilerItem, string engineItem, double reach)
+    {
+        EntityGeometry pump = Geometry(map, pumpItem), boiler = Geometry(map, boilerItem);
+        if (pump.FluidSourceOffset is null) throw new InvalidDataException("Missing native offshore pump water source geometry.");
+        int ratio = EnginesPerBoiler(boiler, Geometry(map, engineItem));
+        var field = new SpatialCollisionField(map);
+        int shores = 0;
+        foreach (var placement in new PlacementPlanner().FindCandidates(field, pumpItem, map.Actor.Position, requireBuildReach: false)
+            .Where(p => p.Position.DistanceTo(map.Actor.Position) <= reach))
+        {
+            MapPosition offset = ExtractionPlanner.Rotate(pump.FluidSourceOffset, placement.Direction);
+            if (field.FluidAt(new(placement.Position.X + offset.X, placement.Position.Y + offset.Y)) != "water") continue;
+            if (++shores > MaximumShores) break;
+            var withPump = SteamPowerPlanner.Add(map, "pump", pump, placement);
+            foreach (var water in new FluidConnectionPlanner().Find(new(withPump), pump, placement, boilerItem, "water").Take(CandidatesPerLink))
+            {
+                var engines = Extend(SteamPowerPlanner.Add(withPump, "boiler", boiler, water.Placement), boiler, water.Placement, "boiler", engineItem, ratio, 1);
+                if (engines.Count == ratio)
+                    return new("site", "boiler", [new("pump", pumpItem, placement), new("boiler", boilerItem, water.Placement), .. engines.Select(e => e.Machine)],
+                        [new("pump", "boiler", water), .. engines.Select(e => e.Link)]);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Shore placements tried for a new unit; each costs a few fluid searches.</summary>
+    private const int MaximumShores = 64;
 
     /// <summary>
     /// The room the installation needs to keep growing, as planned entities: the missing engines of every watered chain,

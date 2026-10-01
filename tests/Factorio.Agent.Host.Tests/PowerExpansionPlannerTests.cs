@@ -66,6 +66,26 @@ public sealed class PowerExpansionPlannerTests
     }
 
     [Fact]
+    public void ABlockedChainGrowsOnItsOwnShoreWithAPumpABoilerAndAFullSetOfEngines()
+    {
+        // Campaign 2026-10-01 (seed 20261002): water north of the only boiler and bootstrap leftovers south of it left no room
+        // for a chained unit while demand reached 2.7 times capacity.
+        var map = Shore([.. CompleteSupply(), Entity("lab", "lab", new(1.5, 6.5), 0)]) with
+        {
+            TileFluids = new Dictionary<string, string> { ["water"] = "water" }
+        };
+        Assert.Null(new PowerExpansionPlanner().Next(map, "boiler", "steam-engine", Force));
+        var plan = new PowerExpansionPlanner().Site(map, "offshore-pump", "boiler", "steam-engine", reach: 32)!;
+        Assert.Equal("site", plan.Kind);
+        Assert.Equal(["pump", "boiler", "engine-1", "engine-2"], plan.Machines.Select(m => m.Role));
+        Assert.Equal([("pump", "boiler"), ("boiler", "engine-1"), ("engine-1", "engine-2")], plan.Links.Select(l => (l.Source, l.Target)));
+        AssertBuildable(map, plan);
+        // Once built, the new unit is a watered chain that later steps complete or extend like any other.
+        Assert.Contains(PowerExpansionPlanner.Chains(Build(map, plan, "site"), Force), c => c.Boiler.Id == "site:boiler" && c.Engines.Count == 2);
+        Assert.Null(new PowerExpansionPlanner().Site(map, "offshore-pump", "boiler", "steam-engine", reach: 0.5));
+    }
+
+    [Fact]
     public void ReservedGrowthKeepsFeedersOutOfTheNextUnit()
     {
         // Trees behind the boiler push the nearest feeder in front of the free water port, where the next boiler goes.

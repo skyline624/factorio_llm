@@ -27,6 +27,11 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     public const long UnplannedStock = 50;
     /// <summary>Free bag slots below which surplus goes back to its producers' output chests before collecting.</summary>
     public const int MinimumFreeSlots = 10;
+    /// <summary>
+    /// Stacks of coal kept in each boiler feeder chest. One boiler at full load burns 27 coal a minute, so one stack lasted two
+    /// minutes and the boilers starved between rounds; four stacks carry the network through about two logistics rounds.
+    /// </summary>
+    public const int PowerChestStacks = 4;
 
     public async Task<LogisticsResult> ServiceAsync(int bufferCrafts = 40, CancellationToken token = default)
     {
@@ -80,7 +85,9 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         var needs = Refills(snapshot).GroupBy(r => r.Item).ToDictionary(g => g.Key, g => g.Sum(r => Math.Max(0, r.Target - r.Loaded)), StringComparer.Ordinal);
         int labs = cells.Count(c => c.Kind == "lab");
         foreach (string pack in catalog.Items.Keys.Where(IsSciencePack)) needs[pack] = needs.GetValueOrDefault(pack) + labs * StackSize(pack);
-        needs[Fuel] = needs.GetValueOrDefault(Fuel) + FuelReserve(snapshot, cells, StackSize(Fuel)) + StackSize(Fuel);
+        needs[Fuel] = needs.GetValueOrDefault(Fuel) + FuelReserve(snapshot, cells, StackSize(Fuel)) + StackSize(Fuel)
+            + cells.Where(c => c.Kind == "power" && c.Entities.ContainsKey("input-chest"))
+                .Sum(c => PowerFuelNeed(Items(snapshot, c.Entities["input-chest"]), Fuel, PowerChestStacks * StackSize(Fuel)));
         long Cap(string item) => CollectCap(needs.GetValueOrDefault(item), StackSize(item));
         var bag = Carried(snapshot);
         if (FreeSlots(snapshot) < MinimumFreeSlots)
@@ -138,13 +145,13 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         }
         const string fuel = Fuel;
         long stack = catalog.Items[fuel].StackSize;
-        // Power cells feed their boilers from a chest; keeping one stack there lets boilers run between actor visits.
+        // Power cells feed their boilers from a chest; keeping several stacks there lets boilers run between actor visits.
         foreach (var cell in cells.Where(c => c.Kind == "power" && c.Entities.ContainsKey("input-chest")))
         {
             string chest = cell.Entities["input-chest"];
             var inChest = Items(snapshot, chest);
             long moved = 0;
-            long need = PowerFuelNeed(inChest, fuel, stack);
+            long need = PowerFuelNeed(inChest, fuel, PowerChestStacks * stack);
             if (need == 0 && inChest.Keys.Any(k => k != fuel))
                 await journal.AppendAsync("factory-power-chest-mixed", new { cell.Id, chest, inChest }, token);
             long give = Math.Min(need, carried.GetValueOrDefault(fuel));

@@ -80,8 +80,16 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
                 cell = cell with { Entities = new Dictionary<string, string>(ids, StringComparer.Ordinal) };
                 await SaveAsync(cell);
             }
-            // A pole recorded before an interruption may still be unconnected.
-            if (planned.Role == "pole") await ConnectPowerAsync(ids["pole"], planned.Position);
+            // A pole recorded before an interruption may still be unconnected. Link poles belong to the cell so maintenance
+            // rebuilds them after an attack cuts the cell from the generators.
+            if (planned.Role == "pole")
+                await JoinNetworkAsync(ids["pole"], planned.Position, row.Equipment.Pole!, [.. items, .. (state.Rows ?? []).SelectMany(r => Items(r.Equipment))],
+                    state, catalog, controller, async (linkId, link) =>
+                    {
+                        cell = FactoryCellBuilder.WithLink(cell!, linkId, link, row.Equipment.Pole!);
+                        foreach (var (role, id) in cell.Entities) ids[role] = id;
+                        await SaveAsync(cell);
+                    }, token);
         }
         var built = await MapAsync(items, 32);
         // Native targets can resolve after the next entity update; observing again is not a mutation retry.
@@ -168,9 +176,7 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
             return candidates.Length <= 16 ? candidates : throw new InvalidOperationException("Too many candidate cell items for one native observation.");
         }
 
-        // Every planned row and factory band keeps its ground, including cells not built yet and walkways.
-        IEnumerable<WorldBox> Reserved(SpatialSnapshot map) => (state.Rows ?? []).SelectMany(r => ResourceCellPlanner.Reservation(map, r))
-            .Concat(state.Zones.Select(z => new WorldBox(z.Origin, new(z.Origin.X + z.Slots * z.Pitch, z.Origin.Y + z.BandHeight))));
+        IEnumerable<WorldBox> Reserved(SpatialSnapshot map) => ReservedGround(state, map);
 
         // Recorded parts destroyed or replaced since they were built are built again. The factory photograph lists every
         // known own entity wherever the actor stands, so absence from it is native truth rather than a local view.
@@ -221,62 +227,11 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
                 catalog, controller, token, remaining);
         }
 
-        async Task ConnectPowerAsync(string poleId, MapPosition polePosition)
-        {
-            string poleItem = row.Equipment.Pole!;
-            WorldBox? target = null;
-            string? force = null;
-            long? island = null;
-            for (int link = 0; link < 64; link++)
-            {
-                var map = await MapAsync([.. items, .. (state.Rows ?? []).SelectMany(r => Items(r.Equipment))], 48);
-                if (map.Entities.SingleOrDefault(e => e.Id == poleId) is { } pole)
-                {
-                    (target, force, island) = (pole.Bounds, pole.Force, pole.Power?.NetworkId);
-                    if (island is { } network && map.Entities.Any(e => e.Id != poleId && e.Power?.NetworkId == network
-                        && (map.Prototypes[e.Name].Type == "electric-pole" || FactoryCellBuilder.IsPowerSource(map.Prototypes[e.Name].Type)))) return;
-                }
-                if (target is null)
-                {
-                    // One approach tells a pole out of view from a destroyed one; a gone pole is never chased.
-                    if (link > 0 || map.Bounds.Contains(polePosition))
-                        throw new InvalidOperationException($"The resource cell pole {poleId} is not observed at its planned position.");
-                    await controller.TravelAsync(polePosition, 6, catalog, token);
-                    continue;
-                }
-                // Poles of the unpowered island around this cell are not sources.
-                var owned = map.Entities.Where(e => e.Force == force && e.Id != poleId && (island is null || e.Power?.NetworkId != island))
-                    .Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
-                var reserved = ResourceCellPlanner.Reserve(map, Reserved(map), poleItem);
-                var next = new PowerGridPlanner().Next(reserved, poleItem, target, owned, token);
-                await journal.AppendAsync("resource-power-link", new { poleId, next, map.CollectedTick }, token);
-                if (next.Status == PowerGridSearchStatus.Extension && next.Pole is not null)
-                {
-                    // Link poles come from the carried stock, for the whole planned chain at once.
-                    await CarriedStock.EnsureAsync(game, journal, poleItem, PowerGridPlanner.ChainPoles(next), token);
-                    string added = await new PoweredMachineController(game, journal).BuildAtAsync(poleItem, next.Pole, catalog, controller, token);
-                    await journal.AppendAsync("resource-power-pole", new { poleId, added, next.Pole.Position }, token);
-                    await controller.TravelAsync(next.Pole.Position, 3, catalog, token);
-                    continue;
-                }
-                if (next.Status != PowerGridSearchStatus.NoObservedPath || map.Entities.Any(e => owned.Contains(e.Id)
-                    && map.Prototypes[e.Name].Type == "electric-pole" && e.Power?.NetworkId is not null))
-                    throw new InvalidOperationException($"The resource cell pole cannot join the observed network: {next.Status}.");
-                // No owned network in view: walk to the nearest known pole and extend from there.
-                var known = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
-                var remote = known.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "factory"
-                        && r.Data.GetProperty("type").GetString() == "electric-pole" && !map.Entities.Any(e => e.Id == r.EntityId))
-                    .Select(r => r.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!)
-                    .OrderBy(p => p.DistanceTo(polePosition)).FirstOrDefault()
-                    ?? throw new InvalidOperationException("No owned electric network is known; build steam power first.");
-                await controller.TravelAsync(remote, 6, catalog, token);
-            }
-            throw new InvalidOperationException("Joining the resource cell to the electric network exceeded its link budget.");
-        }
-
         string? Problem(SpatialSnapshot map, IReadOnlyDictionary<string, string> built)
         {
-            var observed = built.ToDictionary(p => p.Key, p => map.Entities.SingleOrDefault(e => e.Id == p.Value), StringComparer.Ordinal);
+            // Link poles may stand outside the cell's view; the network proof below covers them.
+            var observed = built.Where(p => layout.Role(p.Key) is not null)
+                .ToDictionary(p => p.Key, p => map.Entities.SingleOrDefault(e => e.Id == p.Value), StringComparer.Ordinal);
             if (observed.FirstOrDefault(p => p.Value is null) is { Key: { } missing }) return $"The built {missing} is not observed at its resource cell.";
             var drill = observed["drill"]!;
             if (!Drops(drill.DropPosition, drill.DropTargetId, observed[row.Equipment.Furnace is null ? "output-chest" : "furnace"]!))
@@ -305,6 +260,113 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
             return map;
         }
     }
+
+    /// <summary>
+    /// Reconnects ready resource cells whose pole stands on an island without a generator, registering the new link poles.
+    /// On 2026-10-01 (seed 20261002) biters destroyed the unregistered links of the coal cells: the cells stayed ready on an
+    /// unfed island and the boilers starved with them. Destroyed cell poles are left to maintenance and cell health.
+    /// </summary>
+    public async Task<int> RepairPowerAsync(CancellationToken token = default)
+    {
+        var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+        var registry = new FactoryRegistry(directory);
+        var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Actor identity changed while repairing resource cell power.");
+        string[] items = (state.Rows ?? []).SelectMany(r => Items(r.Equipment)).Distinct(StringComparer.Ordinal).ToArray();
+        int repaired = 0;
+        await using var controller = new SpatialController(game, journal);
+        foreach (var cell in state.Cells.Where(c => c.IsResource && c.Status == "ready" && c.Entities.ContainsKey("pole")))
+        {
+            string poleId = cell.Entities["pole"];
+            var pole = snapshot.Records.FirstOrDefault(r => r.Kind == "entity" && r.EntityId == poleId);
+            var row = state.Rows?.SingleOrDefault(r => r.Id == cell.Slot.Band);
+            if (pole is null || row?.Equipment.Pole is not { } poleItem || FactoryPower.IsFed(snapshot, poleId) != false) continue;
+            var position = pole.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+            await controller.TravelAsync(position, 6, catalog, token);
+            var repairedCell = cell;
+            await JoinNetworkAsync(poleId, position, poleItem, items, state, catalog, controller, async (linkId, link) =>
+            {
+                repairedCell = FactoryCellBuilder.WithLink(repairedCell, linkId, link, poleItem);
+                await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(repairedCell), token);
+            }, token);
+            // One link usually rejoins every cell of the same island.
+            snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            repaired++;
+        }
+        if (repaired > 0) await journal.AppendAsync("resource-power-repair", new { repaired }, token);
+        return repaired;
+    }
+
+    /// <summary>
+    /// Extends the network to a cell pole until a generator shares its network, proven on the whole known factory: a pole
+    /// that only touches other poles may sit on an island cut off by an attack. Only poles fed by a generator are sources.
+    /// When the mod reports no network identities, joining any owned pole network is accepted as before.
+    /// </summary>
+    private async Task JoinNetworkAsync(string poleId, MapPosition polePosition, string poleItem, IReadOnlyList<string> items, FactoryState state,
+        ProductionCatalog catalog, SpatialController controller, Func<string, PlacementCandidate, Task> registerLink, CancellationToken token)
+    {
+        var spatial = new SpatialClient(game);
+        WorldBox? target = null;
+        string? force = null;
+        for (int link = 0; link < 64; link++)
+        {
+            var known = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            var map = await spatial.CaptureAsync(items.Append(poleItem).Distinct(StringComparer.Ordinal).ToArray(), 48, token);
+            if (known.Scope != catalog.Scope || map.Scope != catalog.Scope)
+                throw new InvalidDataException("Actor identity changed while joining a resource cell to the network; reconcile partial construction.");
+            bool? fed = FactoryPower.IsFed(known, poleId);
+            if (fed == true) return;
+            long? island = null;
+            if (map.Entities.SingleOrDefault(e => e.Id == poleId) is { } pole)
+            {
+                (target, force, island) = (pole.Bounds, pole.Force, pole.Power?.NetworkId);
+                if (fed is null && island is { } network && map.Entities.Any(e => e.Id != poleId && e.Power?.NetworkId == network
+                    && (map.Prototypes[e.Name].Type == "electric-pole" || FactoryCellBuilder.IsPowerSource(map.Prototypes[e.Name].Type)))) return;
+            }
+            if (target is null)
+            {
+                // One approach tells a pole out of view from a destroyed one; a gone pole is never chased.
+                if (link > 0 || map.Bounds.Contains(polePosition))
+                    throw new InvalidOperationException($"The resource cell pole {poleId} is not observed at its planned position.");
+                await controller.TravelAsync(polePosition, 6, catalog, token);
+                continue;
+            }
+            bool Source(SpatialEntity e) => e.Force == force && e.Id != poleId
+                && (fed is null ? island is null || e.Power?.NetworkId != island : FactoryPower.IsFed(known, e.Id) == true);
+            var owned = map.Entities.Where(Source).Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+            var reserved = ResourceCellPlanner.Reserve(map, ReservedGround(state, map), poleItem);
+            var next = new PowerGridPlanner().Next(reserved, poleItem, target, owned, token);
+            await journal.AppendAsync("resource-power-link", new { poleId, fed, next, map.CollectedTick }, token);
+            if (next.Status == PowerGridSearchStatus.Extension && next.Pole is not null)
+            {
+                // Link poles come from the carried stock, for the whole planned chain at once.
+                await CarriedStock.EnsureAsync(game, journal, poleItem, PowerGridPlanner.ChainPoles(next), token);
+                string added = await new PoweredMachineController(game, journal).BuildAtAsync(poleItem, next.Pole, catalog, controller, token);
+                await registerLink(added, next.Pole);
+                await journal.AppendAsync("resource-power-pole", new { poleId, added, next.Pole.Position }, token);
+                await controller.TravelAsync(next.Pole.Position, 3, catalog, token);
+                continue;
+            }
+            if (next.Status != PowerGridSearchStatus.NoObservedPath || map.Entities.Any(e => owned.Contains(e.Id)
+                && map.Prototypes[e.Name].Type == "electric-pole" && e.Power?.NetworkId is not null))
+                throw new InvalidOperationException($"The resource cell pole cannot join the observed network: {next.Status}.");
+            // No fed network in view: walk to the nearest known fed pole and extend from there.
+            var remote = known.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "factory"
+                    && r.Data.GetProperty("type").GetString() == "electric-pole" && !map.Entities.Any(e => e.Id == r.EntityId)
+                    && (fed is null || FactoryPower.IsFed(known, r.EntityId) == true))
+                .Select(r => r.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!)
+                .OrderBy(p => p.DistanceTo(polePosition)).FirstOrDefault()
+                ?? throw new InvalidOperationException("No owned electric network with a generator is known; build steam power first.");
+            await controller.TravelAsync(remote, 6, catalog, token);
+        }
+        throw new InvalidOperationException("Joining the resource cell to the electric network exceeded its link budget.");
+    }
+
+    /// <summary>Every planned row and factory band keeps its ground, including cells not built yet and walkways.</summary>
+    private static IEnumerable<WorldBox> ReservedGround(FactoryState state, SpatialSnapshot map) =>
+        (state.Rows ?? []).SelectMany(r => ResourceCellPlanner.Reservation(map, r))
+            .Concat(state.Zones.Select(z => new WorldBox(z.Origin, new(z.Origin.X + z.Slots * z.Pitch, z.Origin.Y + z.BandHeight))));
 
     private static string[] Items(ResourceCellEquipment equipment) =>
         new[] { equipment.Drill, equipment.Chest, equipment.Furnace, equipment.Inserter, equipment.Pole }.OfType<string>().ToArray();
