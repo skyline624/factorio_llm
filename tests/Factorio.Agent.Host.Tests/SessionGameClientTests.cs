@@ -81,7 +81,33 @@ public sealed class SessionGameClientTests : IDisposable
         await Task.WhenAll(first, nextPage, defense);
         Assert.Equal(["factory_snapshot", "observe", "factory_snapshot"], game.Calls);
     }
+    [Fact]
+    public async Task ObservedOwnDeathIsRememberedOnceAsADangerZone()
+    {
+        var game = new DeathGame();
+        var client = new SessionGameClient(Session(), game);
+        await client.ExecuteAsync(GameRequest.Create("observe"));
+        await client.ExecuteAsync(GameRequest.Create("observe"));
+        await new SessionGameClient(Session(), game).ExecuteAsync(GameRequest.Create("observe")); // A restarted process.
+        var stored = await new DangerZoneStore(directory).LoadAsync("world", default);
+        Assert.Equal([new NativeDeathTransition(1, 450, 775, 1, new(131, -15))], stored.Deaths);
+        var scope = new ActorScope("world", "session", "actor", 2, 2);
+        Assert.Single(await client.ReadActiveDeathsAsync(scope, 1, 600));
+        Assert.Empty(await client.ReadActiveDeathsAsync(scope, 1, 450 + DangerZones.LifetimeTicks));
+        await Assert.ThrowsAsync<SessionDivergenceException>(() => client.ReadActiveDeathsAsync(scope with { WorldId = "other" }, 1, 600));
+    }
+
     public void Dispose() => Directory.Delete(directory, recursive: true);
+
+    private sealed class DeathGame : IGameClient
+    {
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new GameResponse(1, request.RequestId, true, 500, Protocol.ToElement(new
+            {
+                scope = new ActorScope("world", "session", "actor", 2, 2),
+                recovery = new { lastDeath = new { tick = 450, position = new MapPosition(131, -15), unitNumber = 775, incarnation = 1, surfaceIndex = 1 } }
+            })));
+    }
 
     private sealed class FakeGame : IGameClient
     {

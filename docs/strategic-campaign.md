@@ -76,6 +76,8 @@ Le lot d’acier a ensuite été terminé après reprise et réconciliation des 
 
 La boucle intègre désormais une [récupération durable des corps propres](death-recovery.md), avant toute nouvelle décision stratégique. Le scénario préparé a été vérifié en headless et avec un joueur connecté : mort pendant une opération, réapparition normale, récupération des objets et fabrication suivante avec coûts natifs exacts. Les limites sous attaques et de reconstruction restent explicites.
 
+Une récupération différée par la [zone d'une mort récente](death-recovery.md#zones-de-danger-après-une-mort) reste dans `strategic-memory.json` (`deferred`) avec son tick de relance ; la boucle la relance une fois, entre deux objectifs, quand ce tick est atteint. Un objectif dont toute l'exploration est refusée pour danger échoue avec `exploration_danger_excluded`.
+
 ## Progression militaire dans la partie de développement
 
 Le même enchaînement stratégique a terminé `military` au tick 6171837 avec 10 packs rouges consommés, `military-2` au tick 6249043 avec 20 rouges et 20 verts, puis `military-science-pack` au tick 6337149 avec 30 rouges et 30 verts. Les journaux de laboratoire comptent respectivement 86, 172 et 253 relevés alimentés. Une lecture native indépendante après sauvegarde et reprise, au tick 6422318, confirme ces trois recherches, les 50 aciers portés, 250 points de vie et une file vide. `automation-2` reste alors inachevée.

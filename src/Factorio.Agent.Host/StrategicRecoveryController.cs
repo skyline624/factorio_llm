@@ -61,10 +61,12 @@ public sealed class StrategicRecoveryController(IGameClient game, string memoryP
                     recoveryDeathObserved = memory.RecoveryDeathObserved,
                     remaining = result.Remaining.Take(24).ToDictionary(p => p.Key, p => p.Value),
                     collectedItemTypes = result.Collected.Count, remainingItemTypes = result.Remaining.Count,
-                    interpretation = "Only verified native transfers count as collected stock. A death during recovery defers further attempts until a new strategy is available; it does not reveal current enemy positions. Re-observe factory outputs and resume production, rebuild or prepare defenses toward the rocket; never replay old actions or count corpse stock as carried."
+                    automaticRetryTick = result.RetryTick,
+                    interpretation = $"Only verified native transfers count as collected stock. Corpses within {DangerZones.Radius} tiles of an own death younger than {DangerZones.LifetimeTicks / 3600} game minutes are not approached unless a normal observation shows no mobile enemy there; they are retried automatically at automaticRetryTick. A death during recovery defers further attempts until a new strategy is available. Neither reveals current enemy positions. Re-observe factory outputs and resume production, rebuild or prepare defenses toward the rocket; never replay old actions or count corpse stock as carried."
                 }, Protocol.Json);
                 if (feedback.Length > 4000) throw new InvalidDataException("Recovery feedback exceeds the strategic context budget.");
-                memory = new(1, scope, after.Tick, false, feedback);
+                memory = new(1, scope, after.Tick, false, feedback,
+                    Deferred: result.RetryTick is { } retry ? new DeferredRecovery(death, retry) : null);
                 await LocalJson.WriteAsync(memoryPath, memory, token);
                 return memory;
             }

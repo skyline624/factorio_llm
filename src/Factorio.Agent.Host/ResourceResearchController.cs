@@ -47,7 +47,11 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
             string[] unsuitable = map.Entities.Where(IsTarget).Select(e => e.Id).ToArray();
             foreach (string id in unsuitable) deferred.Add(id);
             ResourceMemorySnapshot? memory = game is IResourceMemoryReader reader ? await reader.ReadResourceMemoryAsync(map, token) : null;
-            var historical = memory?.Resources.Where(r => r.Name == resourceName && !deferred.Contains(r.EntityId))
+            // A historical deposit in the zone of a recent own death is not a destination; frontiers are explored instead.
+            IReadOnlyList<NativeDeathTransition> zones = game is IDangerZoneReader danger
+                ? await danger.ReadActiveDeathsAsync(map.Scope, map.SurfaceIndex, map.CollectedTick, token) : [];
+            var historical = memory?.Resources.Where(r => r.Name == resourceName && !deferred.Contains(r.EntityId)
+                    && !zones.Any(z => DangerZones.Covers(z, r.Position)))
                 .OrderBy(r => r.Position.DistanceTo(map.Actor.Position)).FirstOrDefault();
             // Run 16 (2026-10-01, seed 20261002): the crude-oil search met a pack far east while the actor was unarmored.
             await new SurvivalKitController(game, journal).BeforeTripAsync("resource-research-search", token);

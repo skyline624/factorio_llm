@@ -11,7 +11,11 @@ public interface IStrategicGoalRunner
 
 public sealed record StrategicCampaignResult(bool RocketLaunched, int GoalsExecuted, long EndTick, string StopReason = "goal-budget");
 public sealed record StrategicMemory(int Version, ActorScope Scope, long Tick, bool Pending, string? PreviousResult,
-    string? PendingJournal = null, NativeDeathTransition? Recovery = null, bool RecoveryDeathObserved = false);
+    string? PendingJournal = null, NativeDeathTransition? Recovery = null, bool RecoveryDeathObserved = false,
+    DeferredRecovery? Deferred = null);
+
+/// <summary>Corpses left in recent death zones; their recovery runs again between goals once the game reaches RetryTick.</summary>
+public sealed record DeferredRecovery(NativeDeathTransition Death, long RetryTick);
 
 /// <summary>Sequential strategic goals under the caller's actor lease. Unknown outcomes are never retried.</summary>
 public sealed class StrategicCampaignController(IGameClient game, IStrategicGoalRunner runner, string memoryPath,
@@ -66,6 +70,15 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                     observation = await ObserveAsync(token);
                 }
             }
+            // Corpses left in recent death zones are collected once those zones expire, before the next decision. A death during
+            // this retry is a death during recovery: it defers again without a further automatic retry.
+            if (memory.Deferred is { } deferred && observation.Tick >= deferred.RetryTick && activeJournalPath is not null)
+            {
+                await new ControllerJournal(activeJournalPath).AppendAsync("deferred-recovery-retry", new { deferred, observation.Tick }, token);
+                await LocalJson.WriteAsync(memoryPath, memory with { Recovery = deferred.Death, Deferred = null }, token);
+                memory = await new StrategicRecoveryController(game, memoryPath, activeJournalPath, recovery).ResumeAsync(token);
+                observation = await ObserveAsync(token);
+            }
             Validate(memory, observation);
             if (observation.Rockets > 0) return new(true, index, observation.Tick, "rocket-observed");
             if (campaignJournal is not null) activeJournalPath = await campaignJournal.BeginGoalAsync(index, token);
@@ -87,6 +100,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 {
                     GameRpcException rpc => rpc.Error.Code,
                     NavigationPlanningException => "navigation_blocked",
+                    ExplorationDangerException => "exploration_danger_excluded",
                     PlannerException => "planner_unavailable",
                     TimeoutException => "controller_budget_exhausted",
                     InvalidDataException => "observation_inconsistent",
@@ -113,7 +127,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             consecutiveFailures = 0;
             string feedback = Feedback(result, after.Tick, compact: false);
             if (feedback.Length > 4000) feedback = Feedback(result, after.Tick, compact: true);
-            memory = new(1, after.Scope, after.Tick, false, feedback);
+            memory = new(1, after.Scope, after.Tick, false, feedback, Deferred: memory.Deferred);
             await LocalJson.WriteAsync(memoryPath, memory, token);
             observation = after;
             string goalKey = JsonSerializer.Serialize(new { result.Goal.Category, result.Goal.Target, result.Goal.Quantity, result.Goal.Unit }, Protocol.Json);

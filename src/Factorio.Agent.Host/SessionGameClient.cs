@@ -5,12 +5,14 @@ using Factorio.Agent.Core;
 namespace Factorio.Agent.Host;
 
 /// <summary>Serializes calls across CLI processes and detects observed world-history regressions.</summary>
-public sealed class SessionGameClient(RuntimeSession session, IGameClient inner, ActorControlLease? controllerLease = null) : IGameClient, IResourceMemoryReader, IAsyncDisposable
+public sealed class SessionGameClient(RuntimeSession session, IGameClient inner, ActorControlLease? controllerLease = null)
+    : IGameClient, IResourceMemoryReader, IDangerZoneReader, IAsyncDisposable
 {
     private static readonly HashSet<string> Mutations = ["hello", "submit", "cancel", "mark_fixture", "prepare_checkpoint"];
     private readonly SemaphoreSlim callGate = new(1, 1);
     private int controlWaiters;
     private bool disposed;
+    private NativeDeathTransition? recordedDeath;
     private string WatermarkPath => Path.Combine(session.Directory, "observation-watermark.json");
 
     public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
@@ -39,7 +41,30 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
         }
         if (request.Action == "spatial" && response.Ok)
             await new ResourceMemoryStore(session.Directory).RecordAsync(SpatialSnapshot.Parse(response), cancellationToken);
+        if (request.Action == "observe" && response.Ok) await RecordDeathAsync(response, cancellationToken);
         return response;
+    }
+
+    public async Task<IReadOnlyList<NativeDeathTransition>> ReadActiveDeathsAsync(ActorScope scope, int surfaceIndex, long tick,
+        CancellationToken token = default)
+    {
+        if (scope.WorldId != session.ProposedWorldId || scope.SessionId != session.SessionId)
+            throw new SessionDivergenceException("Danger zone request belongs to another world or controller session.");
+        using IDisposable priority = await AcquireCallAsync(control: false, token);
+        await using FileStream guard = await AcquireLockAsync(token);
+        return (await new DangerZoneStore(session.Directory).LoadAsync(session.ProposedWorldId, token)).Active(surfaceIndex, tick);
+    }
+
+    // Every observation carries the engine's latest own death; each is remembered once, whoever observed it.
+    private async Task RecordDeathAsync(GameResponse response, CancellationToken token)
+    {
+        if (!response.Data.TryGetProperty("recovery", out JsonElement recovery) || recovery.ValueKind != JsonValueKind.Object
+            || !recovery.TryGetProperty("lastDeath", out JsonElement node) || node.ValueKind != JsonValueKind.Object) return;
+        NativeDeathTransition death = NativeDeathTransition.ParseLastDeath(node);
+        if (death == recordedDeath) return;
+        if (death.DeathTick > response.Tick) throw new InvalidDataException("The native death is newer than its observation.");
+        await new DangerZoneStore(session.Directory).RecordAsync(session.ProposedWorldId, death, token);
+        recordedDeath = death;
     }
 
     public async Task<ResourceMemorySnapshot> ReadResourceMemoryAsync(SpatialSnapshot current, CancellationToken token = default)

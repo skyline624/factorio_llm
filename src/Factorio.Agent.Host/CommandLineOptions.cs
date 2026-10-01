@@ -5,7 +5,7 @@ public static class CommandLineOptions
 {
     private static readonly HashSet<string> Flags = new(StringComparer.Ordinal)
     {
-        "fixture", "stationary-threat", "reuse", "recovery-death", "ollama-cloud"
+        "fixture", "stationary-threat", "reuse", "recovery-death", "danger-zone", "ollama-cloud"
     };
 
     private static readonly HashSet<string> Values = new(StringComparer.Ordinal)
