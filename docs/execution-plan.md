@@ -6,6 +6,8 @@ Statut : exécution autorisée par l'objectif actif de l'utilisateur. Ce plan co
 
 Agent majoritairement C#, mod Lua minimal, Factorio 2.0.77 de base, modèle `glm-5.3-flash:cloud` via Ollama. Progression depuis un départ normal jusqu'au lancement constaté d'une fusée, avec pollution, évolution, expansion et attaques actives. Qualification finale sur trois graines documentées, sans intervention humaine ni apport artificiel dans les campagnes de réussite. Aucun jalon technique ne remplace ce résultat.
 
+Depuis la demande explicite du 1er octobre 2026, une campagne peut aussi sélectionner `gpt-6.1-sol` via le compte ChatGPT existant et le transport officiel Codex, décrit dans [codex-planner.md](codex-planner.md). Ce choix ne change ni la validation des objectifs en C#, ni les exigences de qualification. Aucun remplacement automatique du modèle ou du transport.
+
 ## Contraintes et preuves
 
 - SOLID, DRY et KISS ; interfaces aux frontières, composants testables, pas de microservices superflus.

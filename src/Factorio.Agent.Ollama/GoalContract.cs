@@ -91,6 +91,13 @@ internal static class GoalContract
                 (index.ValueKind != JsonValueKind.Number || !index.TryGetInt32(out var indexValue) || indexValue < 0)))
             throw Invalid("The tool call contains unsupported fields or metadata.", metrics.Attempts);
 
+        return ParseArguments(arguments, observationId, metrics);
+    }
+
+    public static GoalProposal ParseArguments(JsonElement arguments, string observationId, PlannerMetrics metrics)
+    {
+        if (arguments.ValueKind != JsonValueKind.Object)
+            throw Invalid("Expected a proposed goal object.", metrics.Attempts);
         var fields = arguments.EnumerateObject().Select(p => p.Name).ToArray();
         if (fields.Length != Fields.Length || !Fields.All(f => fields.Count(p => p == f) == 1))
             throw Invalid("The proposed goal has missing, duplicate or unknown fields.", metrics.Attempts);

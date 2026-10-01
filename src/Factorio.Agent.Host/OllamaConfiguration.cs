@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Factorio.Agent.Ollama;
+using Factorio.Agent.Codex;
 
 namespace Factorio.Agent.Host;
 
@@ -57,6 +58,24 @@ public static class OllamaConfiguration
         return new DecisionModelOptions { BaseUrl = baseUrl, Model = decision.Model };
     }
 
+    public static async Task<string> LoadPlannerTransportAsync(string? path, CancellationToken token = default)
+    {
+        var profile = await ReadAsync(path ?? ResolveDefaultPath(), path is not null, token);
+        string transport = profile?.Planner?.Transport ?? "ollama";
+        if (transport is not ("ollama" or "codex-chatgpt"))
+            throw new InvalidDataException("Planner.Transport must be ollama or codex-chatgpt.");
+        return transport;
+    }
+
+    public static async Task<CodexOptions> LoadCodexAsync(string? path, CancellationToken token = default)
+    {
+        var profile = await ReadAsync(path ?? ResolveDefaultPath(), path is not null, token);
+        if (profile?.Planner?.Transport != "codex-chatgpt" || profile.Codex is null)
+            throw new InvalidDataException("Codex requires explicit Planner.Transport=codex-chatgpt and a Codex section.");
+        profile.Codex.Validate();
+        return profile.Codex;
+    }
+
     private static async Task<Profile?> ReadAsync(string path, bool required, CancellationToken token)
     {
         if (!required && !File.Exists(path)) return null;
@@ -80,8 +99,15 @@ public static class OllamaConfiguration
 
     private sealed class Profile
     {
+        public PlannerSettings? Planner { get; init; }
+        public CodexOptions? Codex { get; init; }
         public Settings? Ollama { get; init; }
         public DecisionSettings? DecisionModel { get; init; }
+    }
+
+    private sealed class PlannerSettings
+    {
+        public string Transport { get; init; } = "ollama";
     }
 
     private sealed class DecisionSettings

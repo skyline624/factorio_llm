@@ -112,6 +112,33 @@ public sealed class OllamaConfigurationTests : IDisposable
             Path.Combine(directory, "missing.json"), false, null));
     }
 
+    [Fact]
+    public async Task CodexIsAnExplicitTransportAndDoesNotRequireAnOllamaKey()
+    {
+        string path = await WriteAsync("""{"Planner":{"Transport":"codex-chatgpt"},"Codex":{"Model":"gpt-6.1-sol"}}""");
+        Assert.Equal("codex-chatgpt", await OllamaConfiguration.LoadPlannerTransportAsync(path));
+        Assert.Equal("gpt-6.1-sol", (await OllamaConfiguration.LoadCodexAsync(path)).Model);
+        Assert.Null(await OllamaConfiguration.LoadDecisionAsync(path));
+    }
+
+    [Fact]
+    public async Task ExistingOllamaProfileKeepsItsTransportAndCannotEnableCodexImplicitly()
+    {
+        string path = await WriteAsync("""{"Ollama":{},"Codex":{"Model":"gpt-6.1-sol"}}""");
+        Assert.Equal("ollama", await OllamaConfiguration.LoadPlannerTransportAsync(path));
+        await Assert.ThrowsAsync<InvalidDataException>(() => OllamaConfiguration.LoadCodexAsync(path));
+    }
+
+    [Theory]
+    [InlineData("{\"Planner\":{\"Transport\":\"auto\"}}")]
+    [InlineData("{\"Planner\":{\"Transport\":\"codex-chatgpt\"},\"Codex\":{\"ApiKey\":\"synthetic-secret\"}}")]
+    public async Task UnknownTransportAndSecretsInCodexSectionAreRejected(string json)
+    {
+        string path = await WriteAsync(json);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => OllamaConfiguration.LoadPlannerTransportAsync(path));
+        Assert.DoesNotContain("synthetic-secret", error.ToString());
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);

@@ -29,7 +29,9 @@ Ces commandes et la [CI](.github/workflows/ci.yml) ne doivent lancer ni Factorio
 
 ## Configuration du modèle
 
-Deux accès sont disponibles : la passerelle Ollama locale (par défaut) et l'API Ollama Cloud directe. Avec la passerelle, installer Ollama puis s'y authentifier ; son adresse par défaut est `http://localhost:11434`. Le modèle choisi reste `glm-5.3-flash:cloud`. L'API directe emploie le nom natif du même modèle, `glm-5.3-flash`, sans le suffixe de passerelle. Les observations et l'historique sélectionnés sont transmis à Ollama Cloud. Aucun modèle ni transport de remplacement n'est sélectionné silencieusement.
+Pour GLM, deux accès sont disponibles : la passerelle Ollama locale (par défaut) et l'API Ollama Cloud directe. Avec la passerelle, installer Ollama puis s'y authentifier ; son adresse par défaut est `http://localhost:11434`. Le modèle choisi reste `glm-5.3-flash:cloud`. L'API directe emploie le nom natif du même modèle, `glm-5.3-flash`, sans le suffixe de passerelle. Les observations et l'historique sélectionnés sont transmis à Ollama Cloud. Aucun modèle ni transport de remplacement n'est sélectionné silencieusement.
+
+Un profil explicite peut sélectionner [GPT-6.1 Sol avec le compte ChatGPT via Codex](docs/codex-planner.md). Ce transport conserve la même validation C# des objectifs et ne donne au modèle aucun environnement de bureau. `check-codex` vérifie un appel réel avant une campagne ; les compilations et tests ordinaires restent hors ligne.
 
 Pour l'accès direct, créer une [clé API Ollama](https://ollama.com/settings/keys), copier le profil cloud puis renseigner `Ollama.ApiKey` dans le fichier local ignoré par Git. Aucun service Ollama local n'est nécessaire :
 
