@@ -111,6 +111,23 @@ public sealed class FactoryLogisticsTests
     }
 
     [Fact]
+    public void DemandPullCountsChestsOutputsAndTheBagButNotCorpsesOrLoadedTurrets()
+    {
+        // Campaign 2026-10-01 (seed 20261002): 476 magazines on corpses kept the magazine cell paused with none in any chest.
+        static FactoryRecord Holding(string id, string owner, string name, int magazines) =>
+            new(id, "inventory", owner, name, Protocol.ToElement(new { items = new Dictionary<string, long> { ["firearm-magazine"] = magazines } }));
+        var snapshot = new FactorySnapshot("snapshot", Scope, 100, 200, Protocol.ToElement(new { }), [
+            Holding("corpse-inventory", "corpse:1:2:1", "character_corpse", 323),
+            Holding("turret-ammo", "turret", "turret_ammo", 11),
+            Holding("assembler-input", "assembler", "crafter_input", 4),
+            Holding("output-chest", "chest", "chest", 7),
+            Holding("assembler-output", "assembler", "crafter_output", 2),
+            Holding("bag", "actor", "character_main", 5)]);
+        Assert.Equal(14, FactoryLogistics.AvailableStock(snapshot)["firearm-magazine"]);
+        Assert.False(FactoryLogistics.Paused(new Dictionary<string, long>(), "firearm-magazine", 14));
+    }
+
+    [Fact]
     public void AnEmptyBagEncodedAsAnEmptyObjectLeavesEveryUsableSlotFree()
     {
         // Campaign 2026-10-01 (seed 20261002): after a death the respawned actor's empty "stacks" list arrived as {} and

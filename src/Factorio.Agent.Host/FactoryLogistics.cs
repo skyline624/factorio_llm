@@ -73,7 +73,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         var shares = CellShares(catalog, state);
         // Demand pulls production: a producer whose product already holds enough stock is not refilled and drains to a stop.
         var caps = StockCaps(catalog, state);
-        var stocks = snapshot.SummarizeStocks().InventoryItems;
+        var stocks = AvailableStock(snapshot);
         var paused = cells.Where(c => c.Kind is "assembler" or FurnaceCellPlanner.Kind && c.Recipe is not null)
             .Select(c => (Cell: c, Product: catalog.Recipes.Single(r => r.Name == c.Recipe).Products[0].Name))
             .Where(p => Paused(caps, p.Product, stocks.GetValueOrDefault(p.Product))).ToArray();
@@ -364,6 +364,23 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         if (state.Targets is not { Count: > 0 } targets || machines.Count == 0) return null;
         return AutomationPlanner.Plan(catalog, targets, machines).Stages.ToDictionary(s => s.Item, s => (long)Math.Ceiling(s.CraftsPerMinute
             * catalog.Recipes.Single(r => r.Name == s.Recipe).Products[0].Amount!.Value * StockMinutes - 1e-9), StringComparer.Ordinal);
+    }
+
+    /// <summary>Inventories whose items logistics can hand out: chests, finished machine outputs and the actor's bag.</summary>
+    private static readonly HashSet<string> Distributable = new(StringComparer.Ordinal) { "chest", "crafter_output", "character_main" };
+
+    /// <summary>
+    /// Known stock that demand pull counts. Corpses lie where the actor died and turret magazines, machine inputs and fuel are
+    /// already committed. On 2026-10-01 (seed 20261002) 476 magazines on eight corpses kept the magazine cell paused while no
+    /// chest held any and the actor had no ammunition left.
+    /// </summary>
+    internal static Dictionary<string, long> AvailableStock(FactorySnapshot snapshot)
+    {
+        var stock = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var record in snapshot.Records.Where(r => r.Kind == "inventory" && Distributable.Contains(r.Name)))
+            foreach (var item in record.Data.GetProperty("items").EnumerateObject())
+                stock[item.Name] = stock.GetValueOrDefault(item.Name) + item.Value.GetInt64();
+        return stock;
     }
 
     /// <summary>
