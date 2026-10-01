@@ -36,6 +36,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         if (cell is not null) zone = state.Zones.Single(z => z.Id == cell.Zone);
         else
         {
+            if (Refusal(state, kind) is { } full) throw new InvalidOperationException(full);
             var geometryMap = await spatial.CaptureAsync(items, 48, token);
             RequireScope(geometryMap.Scope, catalog);
             EntityGeometry machine = geometryMap.Prototypes[geometryMap.Items[machineItem].EntityName];
@@ -315,6 +316,14 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
 
     /// <summary>Slots of a new band: silos get a band of their own, sized for the one a factory builds.</summary>
     public static int Slots(string kind) => kind == SiloCellPlanner.Kind ? SiloCellPlanner.MaximumCells : ZoneSlots;
+
+    /// <summary>
+    /// Why a new cell of this kind is refused: silo cells in any status, a ready one whose silo is gone included, already fill the
+    /// factory's <see cref="SiloCellPlanner.MaximumCells"/>. A band still has a free row beside its silo, so planning alone cannot stop it.
+    /// </summary>
+    public static string? Refusal(FactoryState state, string kind) =>
+        kind == SiloCellPlanner.Kind && state.Cells.Count(c => c.Kind == kind) >= SiloCellPlanner.MaximumCells
+            ? $"The factory already registers {SiloCellPlanner.MaximumCells} silo cell(s); resume or rebuild it instead of building another." : null;
 
     /// <summary>The role whose network proves the cell is powered: the machine, or the input inserter beside a burner machine.</summary>
     public static string PowerProbe(EntityGeometry machine) => machine.IsElectric ? "machine" : "input-inserter";

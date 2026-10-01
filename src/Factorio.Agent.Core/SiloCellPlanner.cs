@@ -10,6 +10,11 @@ public static class SiloCellPlanner
     public const string Kind = "silo";
     /// <summary>Silos one factory builds: a second one would draw on the same ingredient chains and only split their output.</summary>
     public const int MaximumCells = 1;
+    /// <summary>
+    /// Cycles of an ingredient below which the cell calls for the actor: over a minute of its inserter's work, so a refill starts before
+    /// the silo idles, without a trip for each item a swing takes.
+    /// </summary>
+    public const int LowWaterCycles = 2;
 
     /// <summary>Silo items cells can be built with: a native silo prototype placed by an item whose recipe is enabled.</summary>
     public static IEnumerable<string> Machines(ProductionCatalog catalog) => (catalog.Silos ?? new Dictionary<string, RocketSiloPrototype>()).Keys
@@ -21,12 +26,19 @@ public static class SiloCellPlanner
             .Select(p => p.Key).Order(StringComparer.Ordinal).FirstOrDefault();
 
     /// <summary>
-    /// Carried stock the actor needs so logistics can complete the silo's next batch through its cell: the rocket's remaining need,
-    /// at most <see cref="RocketPlanner.BatchCycles"/> cycles as for hand supply, less what already waits in the cell's chest and
-    /// inserter hand. Zero for every ingredient outside a supply step.
+    /// Carried stock the actor brings for the silo, per ingredient: nothing while the cell's chest and inserter hand hold
+    /// <see cref="LowWaterCycles"/> cycles of it, or all the rocket still needs; below that, enough to reach the cell's planned buffer of
+    /// <paramref name="bufferCrafts"/> cycles, the target logistics refills the chest toward, within the remaining need. Zero for every
+    /// ingredient outside a supply step.
     /// </summary>
-    public static IReadOnlyDictionary<string, int> Procurement(RocketStep step, NativeRecipe recipe, IReadOnlyDictionary<string, long> cellStock) =>
-        recipe.Ingredients.Where(i => i.DeterministicItem).GroupBy(i => i.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => step.Kind != "supply" ? 0
-            : checked((int)Math.Clamp(Math.Min(step.RequiredItems.GetValueOrDefault(g.Key), g.Sum(i => i.Amount!.Value) * RocketPlanner.BatchCycles)
-                - cellStock.GetValueOrDefault(g.Key), 0, 1000)), StringComparer.Ordinal);
+    public static IReadOnlyDictionary<string, int> Procurement(RocketStep step, NativeRecipe recipe, IReadOnlyDictionary<string, long> cellStock,
+        int bufferCrafts) =>
+        recipe.Ingredients.Where(i => i.DeterministicItem).GroupBy(i => i.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g =>
+        {
+            double cycle = g.Sum(i => i.Amount!.Value);
+            long required = step.Kind == "supply" ? step.RequiredItems.GetValueOrDefault(g.Key) : 0;
+            long stock = cellStock.GetValueOrDefault(g.Key);
+            return stock >= Math.Min(required, cycle * LowWaterCycles) ? 0
+                : checked((int)Math.Clamp(Math.Min(required, cycle * bufferCrafts) - stock, 0, 1000));
+        }, StringComparer.Ordinal);
 }

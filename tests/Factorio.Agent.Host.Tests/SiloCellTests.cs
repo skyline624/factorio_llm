@@ -120,17 +120,26 @@ public sealed class SiloCellTests
     }
 
     [Fact]
-    public void TheActorOnlyBringsWhatTheCellLacksForTheNextFiveParts()
+    public void TheActorRefillsTheCellBelowItsLowWaterMarkUpToThePlannedBuffer()
     {
         var recipe = SiloCatalogs.Rocket().Recipes.Single(r => r.Name == "rocket-part");
+        static Dictionary<string, long> Stock(long units, long structures, long fuel) => new()
+        {
+            ["processing-unit"] = units, ["low-density-structure"] = structures, ["rocket-fuel"] = fuel
+        };
+        // Ninety parts to go and a ten-part planned buffer: one item an inserter swing took is not worth a trip.
+        var far = new RocketStep("supply", 90, new Dictionary<string, int> { ["processing-unit"] = 900, ["low-density-structure"] = 900, ["rocket-fuel"] = 900 });
+        Assert.All(SiloCellPlanner.Procurement(far, recipe, Stock(49, 50, 50), 10).Values, n => Assert.Equal(0, n));
+        Assert.All(SiloCellPlanner.Procurement(far, recipe, Stock(20, 20, 20), 10).Values, n => Assert.Equal(0, n));
+        // Below two parts, that ingredient is brought up to the buffer logistics refills the chest toward.
+        Assert.Equal(new Dictionary<string, int> { ["processing-unit"] = 85, ["low-density-structure"] = 0, ["rocket-fuel"] = 0 },
+            SiloCellPlanner.Procurement(far, recipe, Stock(15, 50, 50), 10));
+        Assert.All(SiloCellPlanner.Procurement(far, recipe, Stock(0, 0, 0), 10).Values, n => Assert.Equal(100, n));
+        // The last part: what the rocket still needs, less the cell's stock.
         var last = new RocketStep("supply", 1, new Dictionary<string, int> { ["processing-unit"] = 10, ["low-density-structure"] = 10, ["rocket-fuel"] = 10 });
-        var stock = new Dictionary<string, long> { ["processing-unit"] = 4, ["low-density-structure"] = 12 };
         Assert.Equal(new Dictionary<string, int> { ["processing-unit"] = 6, ["low-density-structure"] = 0, ["rocket-fuel"] = 10 },
-            SiloCellPlanner.Procurement(last, recipe, stock));
-        // Ninety parts to go: one bounded batch of five parts, as hand supply delivers.
-        var far = last with { RemainingCycles = 90, RequiredItems = last.RequiredItems.ToDictionary(p => p.Key, _ => 900) };
-        Assert.All(SiloCellPlanner.Procurement(far, recipe, new Dictionary<string, long>()).Values, n => Assert.Equal(RocketPlanner.BatchCycles * 10, n));
-        Assert.All(SiloCellPlanner.Procurement(last with { Kind = "wait" }, recipe, new Dictionary<string, long>()).Values, n => Assert.Equal(0, n));
+            SiloCellPlanner.Procurement(last, recipe, new Dictionary<string, long> { ["processing-unit"] = 4, ["low-density-structure"] = 12 }, 10));
+        Assert.All(SiloCellPlanner.Procurement(last with { Kind = "wait" }, recipe, Stock(0, 0, 0), 10).Values, n => Assert.Equal(0, n));
     }
 
     [Fact]

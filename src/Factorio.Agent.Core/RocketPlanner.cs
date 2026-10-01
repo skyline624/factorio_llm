@@ -5,7 +5,7 @@ public sealed record RocketStep(string Kind, int RemainingCycles, IReadOnlyDicti
 /// <summary>Uses native part counters and launch phases; a prepared rocket is never interpreted as a completed launch.</summary>
 public static class RocketPlanner
 {
-    /// <summary>Recipe cycles one delivery carries at most, by hand or through a silo cell.</summary>
+    /// <summary>Recipe cycles one hand delivery carries at most; a silo cell is refilled toward its planned buffer instead.</summary>
     public const int BatchCycles = 5;
 
     /// <summary>At most five cycles per delivery, reduced by loaded stock and the engine's insertable counts.</summary>
