@@ -30,7 +30,8 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
     IReadOnlyDictionary<string, NativeFurnace> Machines, IReadOnlyDictionary<string, bool> HandCategories,
     IReadOnlyDictionary<string, NativeAssembler>? Assemblers = null,
     IReadOnlyDictionary<string, string>? MiningSourceTypes = null, IReadOnlyDictionary<string, NativeTurret>? Turrets = null,
-    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? TerrainFluids = null)
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? TerrainFluids = null,
+    IReadOnlyDictionary<string, RocketSiloPrototype>? Silos = null)
 {
     public bool CanHandCraft(NativeRecipe recipe) => !recipe.HandCraftingDisabled && HandCategories.ContainsKey(recipe.Category);
 
@@ -47,7 +48,10 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
             || catalog.Turrets?.Values.Any(t => !double.IsFinite(t.Range) || t.Range <= 0 || t.AmmoCategories.Count == 0) == true
             || catalog.Machines.Values.Any(m => !double.IsFinite(m.CraftingSpeed) || m.CraftingSpeed <= 0)
             || catalog.Assemblers?.Values.Any(m => !double.IsFinite(m.CraftingSpeed) || m.CraftingSpeed <= 0
-                || !double.IsFinite(m.EnergyPerTick) || m.EnergyPerTick <= 0) == true)
+                || !double.IsFinite(m.EnergyPerTick) || m.EnergyPerTick <= 0) == true
+            || catalog.Silos?.Values.Any(s => s is null || string.IsNullOrWhiteSpace(s.EntityName) || string.IsNullOrWhiteSpace(s.Recipe)
+                || s.PartsRequired < 1 || !double.IsFinite(s.CraftingSpeed) || s.CraftingSpeed <= 0
+                || !double.IsFinite(s.EnergyPerTick) || s.EnergyPerTick <= 0) == true)
             throw new InvalidDataException("Inconsistent native production catalog.");
         return catalog;
     }
