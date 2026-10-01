@@ -11,10 +11,7 @@ public sealed record NativeDeathTransition(long Incarnation, long DeathTick, lon
         var data = response.Data;
         var current = data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
         var actor = data.GetProperty("agent");
-        var death = data.GetProperty("recovery").GetProperty("lastDeath");
-        var result = new NativeDeathTransition(death.GetProperty("incarnation").GetInt64(), death.GetProperty("tick").GetInt64(),
-            death.GetProperty("unitNumber").GetInt64(), death.GetProperty("surfaceIndex").GetInt32(),
-            death.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!);
+        var result = ParseLastDeath(data.GetProperty("recovery").GetProperty("lastDeath"));
         bool alive = actor.GetProperty("alive").GetBoolean();
         long expectedIncarnation = awaitingRespawn && !alive ? previous.Incarnation : checked(previous.Incarnation + 1);
         if (previous.Incarnation < 1 || current.WorldId != previous.WorldId || current.ActorId != previous.ActorId
@@ -28,4 +25,9 @@ public sealed record NativeDeathTransition(long Incarnation, long DeathTick, lon
             throw new InvalidDataException("The native observation does not prove one death and normal respawn of the previous actor.");
         return result;
     }
+
+    /// <summary>The engine record of the actor's latest death, without any claim about the respawn that followed.</summary>
+    public static NativeDeathTransition ParseLastDeath(JsonElement death) => new(death.GetProperty("incarnation").GetInt64(),
+        death.GetProperty("tick").GetInt64(), death.GetProperty("unitNumber").GetInt64(), death.GetProperty("surfaceIndex").GetInt32(),
+        death.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!);
 }
