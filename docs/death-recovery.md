@@ -104,6 +104,8 @@ Le prototype `character-corpse` de Factorio 2.0.77 déclare `time_to_live = 0`, 
 
 Journaux : `corpse-recovery-start.activeDeathZones`, `danger-zone-inspection` (verdict `clear`, `occupied` ou `out-of-sight`, distance, ennemis visibles par type dans la zone), `corpse-recovery-danger-deferral`, `deferred-recovery-retry`. L’exploration correspondante est décrite dans [spatial.md](spatial.md#exploration-et-zones-de-danger).
 
+Un corps situé à plus de 48 tuiles de toute industrie connue (machines, fours, foreuses, laboratoires, chaudières, coffres, bras, tourelles ; ni poteaux ni corps) n'est pas approché non plus : sa zone a pu expirer alors que les nids qui ont tué le personnage sont toujours là, et un corps n'expire jamais en 2.0.77. L'issue est `distant-corpses-deferred`, journalisée `corpse-recovery-distance-deferral`, sans nouvel essai automatique. Le 1er octobre 2026 (run22), une récupération est partie vers un vieux corps au nord-est, dont la zone avait expiré, et le personnage est mort en (96,6 ; −114,6).
+
 ### Preuve native en fixture
 
 `verify-death-recovery --session FILE --danger-zone` exige une fixture marquée. Après la préparation habituelle (terrain dégagé, 40 plaques, 6 charbons, corps étranger de 3 plaques), chaque scénario oublie les morts antérieures de la fixture, dont la zone vient d’être vidée. La qualification provoque la mort pendant un déplacement C#, puis crée un petit déchiqueteur désactivé par script à huit cases du corps : visible pour l’observation normale, incapable d’attaquer. Le deuxième objectif vérifie le report, retire ce déchiqueteur et accélère explicitement le jeu (vitesse 32) jusqu’à l’échéance, sans restaurer de sauvegarde. Le troisième fabrique dix engrenages avec les plaques récupérées.

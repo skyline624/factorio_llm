@@ -19,6 +19,21 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
     /// <summary>The native observation maximum, two chunks: always inside the character's guaranteed 5x5-chunk sight.</summary>
     public const int InspectionRadius = 64;
 
+    /// <summary>
+    /// Tiles from known own industry beyond which a corpse waits: its death zone may have expired while the nests that killed
+    /// the actor still stand. Base 2.0.77 corpses never expire (time_to_live 0), so waiting costs nothing. On 2026-10-01
+    /// (seed 20261002) a recovery walked toward an old corpse far north-east, whose zone had expired, and the actor died at
+    /// (96.6, -114.6).
+    /// </summary>
+    public const double IndustryReach = 48;
+
+    /// <summary>Own entity types that make a place worth defending: production, power, storage and turrets, not poles or corpses.</summary>
+    private static readonly HashSet<string> IndustryTypes = new(StringComparer.Ordinal)
+    {
+        "assembling-machine", "furnace", "mining-drill", "lab", "boiler", "generator", "offshore-pump", "container",
+        "inserter", "rocket-silo", "storage-tank", "ammo-turret", "radar"
+    };
+
     public async Task<CorpseRecoveryResult> RunAsync(NativeDeathTransition death, ActorScope scope, CancellationToken token)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -34,11 +49,12 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
         long lastTick = death.DeathTick;
         for (int step = 0; step < 256; step++)
         {
-            var response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 32, limit = 200 }), token);
+            var response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 32, limit = 200, entityLimit = ProductionController.MaximumOwnEntities }), token);
             if (!response.Ok) throw new GameRpcException(response.Error!);
             var data = response.Data;
             var actor = data.GetProperty("agent");
             var corpses = ReadObservedCorpses(response, death, scope, lastTick);
+            var industry = Industry(data);
             lastTick = response.Tick;
             if (step == 0)
             {
@@ -60,15 +76,20 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             foreach (var zone in holding.SelectMany(Blocking).Distinct().Where(z => !verdicts.ContainsKey(z)).ToArray())
                 verdicts[zone] = await InspectAsync(zone, position, scope, lastTick, token);
             var blocked = holding.Where(c => Blocking(c).Length > 0).ToArray();
-            var selected = corpses.Except(blocked).OrderBy(c => c.Position.DistanceTo(position)).ThenBy(c => c.Id, StringComparer.Ordinal)
+            var distant = holding.Except(blocked).Where(c => !NearIndustry(industry, c.Position)).ToArray();
+            var selected = corpses.Except(blocked).Except(distant).OrderBy(c => c.Position.DistanceTo(position)).ThenBy(c => c.Id, StringComparer.Ordinal)
                 .SelectMany(c => c.Items.Where(p => p.Value > 0 && !unavailable.Contains((c.Id, p.Key)))
                     .OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => (Corpse: c, Item: p.Key, Count: p.Value)))
                 .FirstOrDefault();
             if (selected.Corpse is null)
             {
                 if (blocked.Length > 0) return await DeferBlockedAsync(response.Tick, blocked, Blocking, verdicts, collected, remaining, corpses, token);
+                if (distant.Length > 0)
+                    await journal.AppendAsync("corpse-recovery-distance-deferral", new { response.Tick, reach = IndustryReach,
+                        corpses = distant.Select(c => new { c.Id, c.Position, c.Items }) }, token);
                 var result = new CorpseRecoveryResult(response.Tick,
-                    remaining.Values.Any(n => n > 0) ? "items-deferred" : corpses.Count == 0 ? "no-surviving-corpse" : "collected",
+                    distant.Length > 0 ? "distant-corpses-deferred"
+                        : remaining.Values.Any(n => n > 0) ? "items-deferred" : corpses.Count == 0 ? "no-surviving-corpse" : "collected",
                     collected, remaining, corpses.Select(c => c.Id).ToArray());
                 await journal.AppendAsync("corpse-recovery-result", result, token);
                 return result;
@@ -106,6 +127,17 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
         }
         throw new TimeoutException("Corpse recovery exhausted its transfer budget; partial effects remain journaled.");
     }
+
+    /// <summary>Positions of known own industry in an observation; empty when the observation lists no own entity.</summary>
+    internal static IReadOnlyList<MapPosition> Industry(JsonElement observation) =>
+        observation.TryGetProperty("entities", out var entities) && entities.ValueKind == JsonValueKind.Array
+            ? entities.EnumerateArray().Where(e => e.TryGetProperty("type", out var type) && IndustryTypes.Contains(type.GetString() ?? ""))
+                .Select(e => e.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!).ToArray()
+            : [];
+
+    /// <summary>A corpse is approached only near known own industry; with no industry known yet every corpse is.</summary>
+    internal static bool NearIndustry(IReadOnlyList<MapPosition> industry, MapPosition corpse) =>
+        industry.Count == 0 || industry.Any(p => p.DistanceTo(corpse) <= IndustryReach);
 
     internal static async Task<CorpseRecoveryResult> DeferAsync(IGameClient game, IControllerJournal journal,
         NativeDeathTransition death, ActorScope scope, long earliestTick, CancellationToken token)

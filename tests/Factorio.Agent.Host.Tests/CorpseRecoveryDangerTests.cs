@@ -82,6 +82,25 @@ public sealed class CorpseRecoveryDangerTests
     }
 
     [Fact]
+    public void CorpsesFarFromKnownIndustryWaitWhileNearOnesAreRecovered()
+    {
+        // Campaign 2026-10-01 (seed 20261002): an old corpse far north-east, its zone expired, killed the recovering actor.
+        var industry = CorpseRecoveryController.Industry(Protocol.ToElement(new
+        {
+            entities = new object[]
+            {
+                new { type = "furnace", position = new MapPosition(-50, 0) },
+                new { type = "electric-pole", position = new MapPosition(60, -100) },
+                new { type = "character-corpse", position = new MapPosition(96, -114) }
+            }
+        }));
+        Assert.Equal([new MapPosition(-50, 0)], industry);
+        Assert.True(CorpseRecoveryController.NearIndustry(industry, new(-20, 10)));
+        Assert.False(CorpseRecoveryController.NearIndustry(industry, new(96, -114)));
+        Assert.True(CorpseRecoveryController.NearIndustry([], new(96, -114)));
+    }
+
+    [Fact]
     public async Task FiniteNativeCorpseLifetimeIsJournaledAsALossRatherThanApproached()
     {
         // Base 2.0.77 character corpses never expire (time_to_live 0); a modded ten-minute body would vanish first.
