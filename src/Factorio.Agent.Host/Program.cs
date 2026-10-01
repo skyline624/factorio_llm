@@ -40,6 +40,8 @@ try
           power-expand --session FILE
           perimeter-defense --session FILE [--item WALL] [--layers 1|2]
           verify-perimeter --session FILE [--layers 1|2]
+          attack-response --session FILE
+          verify-attack-response --session FILE
           decision-replay --session FILE [--quantity N] [--config FILE]
           verify-rocket --session FILE
           verify-furnace-fuel --session FILE
@@ -168,6 +170,21 @@ try
             string journalPath = Path.Combine(session.Directory, $"perimeter-defense-{Guid.NewGuid():N}.jsonl");
             Print(new { result = await new PerimeterDefenseController(game, new ControllerJournal(journalPath), session.Directory)
                 .RunAsync(Option("item") ?? "stone-wall", layers: int.Parse(Option("layers") ?? "2", CultureInfo.InvariantCulture), token: shutdown.Token), journalPath });
+            break;
+        }
+        case "attack-response":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            string journalPath = Path.Combine(session.Directory, $"attack-response-{Guid.NewGuid():N}.jsonl");
+            Print(new { result = await new AttackResponseController(game, new ControllerJournal(journalPath), session.Directory).RunAsync(shutdown.Token), journalPath });
+            break;
+        }
+        case "verify-attack-response":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new AttackResponseQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-perimeter":
@@ -541,6 +558,12 @@ try
                         {
                             try
                             {
+                                // Equip the actor and answer attacked clusters before logistics walks the factory again.
+                                try { await new AttackResponseController(game, maintenanceJournal, session.Directory).RunAsync(token); }
+                                catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+                                {
+                                    await maintenanceJournal.AppendAsync("attack-response-error", new { error = error.GetType().FullName, error.Message }, token);
+                                }
                                 var cells = await new FactoryRegistry(session.Directory).LoadAsync(session.ProposedWorldId, token);
                                 if (cells.Cells.Any(c => c.Status == "ready"))
                                 {

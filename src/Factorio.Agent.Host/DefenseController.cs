@@ -5,9 +5,10 @@ using System.Net.Sockets;
 namespace Factorio.Agent.Host;
 
 /// <summary>Single sequential actor arbiter. No inference call is part of this control loop.</summary>
-public sealed class DefenseController(IGameClient game, IControllerJournal journal)
+public sealed class DefenseController(IGameClient game, IControllerJournal journal, ReflexEventLog? reflexes = null)
 {
     private readonly OperationClient operations = new(game);
+    private readonly ReflexEventLog fights = reflexes ?? ReflexEventLog.Shared;
     private string? uncertainOperation;
     private string? ownedOperation;
     private OperationSubmission? ownedSubmission;
@@ -38,6 +39,13 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         VisibleThreat? target = DefensePolicy.SelectTarget(observation);
         EquipmentDecision? equipment = target is null ? EquipmentPolicy.Select(observation) : null;
         bool retreat = RetreatPlanner.Needed(observation);
+        (SpatialSnapshot Map, RetreatPlan Plan)? cover = null;
+        if (!retreat && RetreatPlanner.SeeksCover(observation))
+        {
+            // Planned before preempting: an unreachable refuge never interrupts a fight the actor can still win.
+            cover = await PlanRetreatAsync(observation, token);
+            retreat = cover.Value.Plan.Next is not null;
+        }
         if (observation.Operation is { IsTerminal: false } own && own.OperationId == ownedOperation
             && !(retreat && own.Kind == "shoot"))
             return new("defending", observation.Tick, own.OperationId);
@@ -69,10 +77,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         OperationSubmission? submission = null;
         if (retreat)
         {
-            var map = await new SpatialClient(game).CaptureAsync(cancellationToken: token);
-            var plan = new RetreatPlanner().Find(observation, map, token);
-            await journal.AppendAsync("retreat-plan", new { map.Scope, map.CollectedTick, observation.Health, plan,
-                interpretation = "Observed paths toward loaded-turret coverage or increased enemy separation; no guarantee against unseen or faster threats." }, token);
+            var (map, plan) = cover ?? await PlanRetreatAsync(observation, token);
             if (plan.Next is not null)
                 submission = OperationSubmission.Create(map.Scope, "move", new { position = plan.Next, tolerance = .15 },
                     map.CollectedTick + 180, new { position = map.Actor.Position, positionTolerance = .5 });
@@ -84,6 +89,10 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         await journal.AppendAsync("submission", submission, token);
         ownedOperation = submission.OperationId;
         ownedSubmission = submission;
+        // A fight is attack evidence for the industry around it, even once the pack is gone.
+        if (submission.Kind is "shoot" or "move" && observation.Position is { } actor && observation.Enemies.Count > 0)
+            fights.Record(new(observation.Tick, submission.Kind == "shoot" ? "shoot" : "retreat", actor,
+                (target ?? observation.Enemies.MinBy(e => actor.DistanceTo(e.Position)))!.Position, observation.Enemies.Count));
         try
         {
             OperationReceipt receipt = await operations.SubmitAsync(submission, token);
@@ -97,6 +106,16 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
             uncertainOperation = submission.OperationId;
             throw;
         }
+    }
+
+    private async Task<(SpatialSnapshot Map, RetreatPlan Plan)> PlanRetreatAsync(SafetyObservation observation, CancellationToken token)
+    {
+        var map = await new SpatialClient(game).CaptureAsync(cancellationToken: token);
+        var plan = new RetreatPlanner().Find(observation, map, token);
+        await journal.AppendAsync("retreat-plan", new { map.Scope, map.CollectedTick, observation.Health, plan,
+            reason = RetreatPlanner.Needed(observation) ? "danger" : "outnumbered-cover",
+            interpretation = "Observed paths toward loaded-turret coverage or increased enemy separation; no guarantee against unseen or faster threats." }, token);
+        return (map, plan);
     }
 
     public async Task RunAsync(TimeSpan duration, CancellationToken token = default)

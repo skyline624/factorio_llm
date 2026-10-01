@@ -74,6 +74,7 @@ internal sealed class SmeltingPreparationController(IGameClient game, IControlle
             if (site is null)
             {
                 string ore = options[0].Recipe.Ingredients[0].Name;
+                await new SurvivalKitController(game, journal).BeforeTripAsync("smelting-preparation-exploration", token);
                 var next = await controller.FindExplorationWaypointAsync(exploration, catalog, ore, token: token);
                 await journal.AppendAsync("smelting-preparation-exploration", new { item, ore, next }, token);
                 await controller.NavigateAsync(next.Position, cancellationToken: token);

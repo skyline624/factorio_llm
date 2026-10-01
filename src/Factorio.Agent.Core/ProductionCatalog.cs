@@ -18,10 +18,16 @@ public sealed record NativeRecipe(string Name, bool Enabled, string Category, do
     [property: JsonConverter(typeof(NativeArrayConverter<NativeMaterial>))] IReadOnlyList<NativeMaterial> Ingredients,
     [property: JsonConverter(typeof(NativeArrayConverter<NativeMaterial>))] IReadOnlyList<NativeMaterial> Products,
     bool HandCraftingDisabled);
+/// <summary>RoundDamage: native target damage of one round of player ammunition.</summary>
 public sealed record NativeItem(double FuelValue, int StackSize, string? FuelCategory = null, string? PlaceEntity = null, string? PlaceEntityType = null,
-    string? AmmoCategory = null, int? MagazineSize = null);
+    string? AmmoCategory = null, int? MagazineSize = null, double? RoundDamage = null);
 public sealed record NativeTurret(string EntityName, double Range,
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> AmmoCategories);
+/// <summary>Native attack parameters of a hand gun: cooldown in ticks between shots.</summary>
+public sealed record NativeGun(double Range, double Cooldown, double DamageModifier,
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> AmmoCategories, double MinRange = 0, bool Projectile = true);
+/// <summary>Native physical resistance of an armor (biters deal physical damage) and its main inventory bonus.</summary>
+public sealed record NativeArmor(double PhysicalDecrease, double PhysicalPercent, int InventoryBonus);
 public sealed record NativeFurnace(string EntityName, IReadOnlyDictionary<string, bool> Categories,
     IReadOnlyDictionary<string, bool> FuelCategories, double CraftingSpeed);
 public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
@@ -30,7 +36,8 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
     IReadOnlyDictionary<string, NativeFurnace> Machines, IReadOnlyDictionary<string, bool> HandCategories,
     IReadOnlyDictionary<string, NativeAssembler>? Assemblers = null,
     IReadOnlyDictionary<string, string>? MiningSourceTypes = null, IReadOnlyDictionary<string, NativeTurret>? Turrets = null,
-    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? TerrainFluids = null)
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? TerrainFluids = null,
+    IReadOnlyDictionary<string, NativeGun>? Guns = null, IReadOnlyDictionary<string, NativeArmor>? Armors = null)
 {
     public bool CanHandCraft(NativeRecipe recipe) => !recipe.HandCraftingDisabled && HandCategories.ContainsKey(recipe.Category);
 
@@ -45,6 +52,11 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
             || catalog.Items.Values.Any(i => !double.IsFinite(i.FuelValue) || i.FuelValue < 0 || i.StackSize < 1
                 || i.MagazineSize is <= 0 || (i.AmmoCategory is null) != (i.MagazineSize is null))
             || catalog.Turrets?.Values.Any(t => !double.IsFinite(t.Range) || t.Range <= 0 || t.AmmoCategories.Count == 0) == true
+            || catalog.Items.Values.Any(i => i.RoundDamage is { } damage && (!double.IsFinite(damage) || damage < 0))
+            || catalog.Guns?.Values.Any(g => !double.IsFinite(g.Range) || g.Range < 0 || !double.IsFinite(g.Cooldown) || g.Cooldown < 0
+                || !double.IsFinite(g.DamageModifier) || g.DamageModifier < 0) == true
+            || catalog.Armors?.Values.Any(a => !double.IsFinite(a.PhysicalDecrease) || !double.IsFinite(a.PhysicalPercent)
+                || a.PhysicalPercent is < 0 or > 1 || a.InventoryBonus < 0) == true
             || catalog.Machines.Values.Any(m => !double.IsFinite(m.CraftingSpeed) || m.CraftingSpeed <= 0)
             || catalog.Assemblers?.Values.Any(m => !double.IsFinite(m.CraftingSpeed) || m.CraftingSpeed <= 0
                 || !double.IsFinite(m.EnergyPerTick) || m.EnergyPerTick <= 0) == true)

@@ -111,6 +111,63 @@ public sealed class DefenseControllerTests
         ammoRounds = 100, collectedTick = 100L } };
 
     [Fact]
+    public async Task OutnumberedHealthyActorReachesObservedTurretCoverBeforeFighting()
+    {
+        // Campaign 2026-10-01 (seed 20261002): against packs the pistol-armed actor died in about seven seconds; retreating
+        // only once hurt left the biters time to catch it.
+        var fake = new GameStub { EnemyCount = 3, Defenses = Refuge() };
+        var reflexes = new ReflexEventLog();
+        Assert.Equal("defending", (await new DefenseController(fake, new JournalStub(), reflexes).StepAsync()).State);
+        Assert.Equal("move", fake.Submission?.Kind);
+        Assert.True(fake.Submission!.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!.X < 0);
+        var fight = Assert.Single(reflexes.Since(0));
+        Assert.Equal(("retreat", 3, new MapPosition(4, 0)), (fight.Kind, fight.Enemies, fight.Enemy));
+    }
+
+    [Fact]
+    public async Task OutnumberedActorFightsWhenNoObservedTurretCanBeReached()
+    {
+        // A refuge behind an impassable wall must not interrupt a fight with a pointless local escape.
+        var fake = new GameStub { EnemyCount = 3, Defenses = Refuge(), RefugeBlocked = true };
+        await new DefenseController(fake, new JournalStub(), new ReflexEventLog()).StepAsync();
+        Assert.Equal("shoot", fake.Submission?.Kind);
+        Assert.Equal(["observe", "spatial", "submit"], fake.Calls);
+    }
+
+    [Fact]
+    public async Task OutnumberedActorStopsItsBurstOnlyOnceCoverIsReachable()
+    {
+        var fake = new GameStub();
+        var reflexes = new ReflexEventLog();
+        var defense = new DefenseController(fake, new JournalStub(), reflexes);
+        await defense.StepAsync();
+        Assert.Equal("shoot", fake.Submission?.Kind);
+        Assert.Equal(("shoot", new MapPosition(4, 0)), (reflexes.Since(0).Single().Kind, reflexes.Since(0).Single().Enemy));
+        fake.EnemyCount = 3;
+        fake.Defenses = Refuge();
+        Assert.Equal("preempted", (await defense.StepAsync()).State);
+        Assert.Contains("cancel", fake.Calls);
+    }
+
+    [Fact]
+    public void ReloadsTheLongestRangeGunAndPrefersTheStrongestCarriedAmmunition()
+    {
+        // The submachine gun (range 18) outranges the pistol (15); piercing rounds deal 8 native damage against 5.
+        var loadout = new EquipmentState([new(1, true, 15, 9, true, "pistol", "firearm-magazine"), new(2, true, 18, 0, false, "submachine-gun")],
+            [new(3, "firearm-magazine", "ammo", 10, true, 0, 100, 5), new(5, "piercing-rounds-magazine", "ammo", 4, true, 0, 40, 8)]);
+        var state = new SafetyObservation(100, new("world", "session", "actor", 1, 1), true, "ai", false, new(0, 0), 250,
+            WeaponState.Unavailable, [], null, loadout, 250);
+        var reload = EquipmentPolicy.Select(state)!;
+        Assert.Equal("equip", reload.Kind);
+        var args = Protocol.ToElement(reload.Arguments);
+        Assert.Equal((2, 5, "piercing-rounds-magazine"), (args.GetProperty("slot").GetInt32(), args.GetProperty("sourceSlot").GetInt32(),
+            args.GetProperty("item").GetString()));
+        var loaded = state with { Loadout = loadout with { Slots = [loadout.Slots[0], loadout.Slots[1] with { Ammo = "firearm-magazine", Rounds = 10, Ready = true }] } };
+        var select = EquipmentPolicy.Select(loaded)!;
+        Assert.Equal(("select_weapon", 2), (select.Kind, Protocol.ToElement(select.Arguments).GetProperty("slot").GetInt32()));
+    }
+
+    [Fact]
     public async Task TerminalEquipmentWithoutTransferEvidenceCannotBeCalledSuccessful()
     {
         var fake = new GameStub { Armed = false, Loadout = Loadout(null, "gun", false), CompleteSubmission = true };
@@ -353,7 +410,8 @@ public sealed class DefenseControllerTests
         public bool Stopping { get; init; }
         public bool Armed { get; init; } = true;
         public double Health { get; set; } = 250;
-        public object? Defenses { get; init; }
+        public int EnemyCount { get; set; } = 1;
+        public object? Defenses { get; set; }
         public bool StaleSpatial { get; init; }
         public bool RefugeBlocked { get; init; }
         public double Distance { get; init; } = 4;
@@ -383,10 +441,8 @@ public sealed class DefenseControllerTests
                         ["agent"] = new { alive = Alive, controlMode = Mode, stopUnconfirmed = Stopping,
                             position = new MapPosition(0, 0), health = Health, maxHealth = 250, weapon = new { ready = Armed, rounds = Armed ? 100 : 0, range = 15 }, loadout = Loadout },
                         ["defenses"] = Defenses ?? new { },
-                        ["enemies"] = EnemiesEmptyObject ? new { } : (object)new[]
-                        {
-                            new { id = "near", position = new MapPosition(Distance, 0), collectedTick = ObservationTick }
-                        }
+                        ["enemies"] = EnemiesEmptyObject ? new { } : (object)Enumerable.Range(0, EnemyCount).Select(i =>
+                            new { id = i == 0 ? "near" : $"near-{i}", position = new MapPosition(Distance + i, 0), collectedTick = ObservationTick }).ToArray()
                     };
                     if (Active is not null) observed["operation"] = Active.Value;
                     data = observed;

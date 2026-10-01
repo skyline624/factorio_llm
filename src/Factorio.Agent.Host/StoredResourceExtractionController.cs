@@ -131,6 +131,7 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
                 map = await MapAsync(); state = await ObserveAsync();
                 selected = await PlanAsync(state);
                 if (selected is not null) break;
+                await new SurvivalKitController(game, journal).BeforeTripAsync("stored-extraction-exploration", token);
                 var next = await controller.FindExplorationWaypointAsync(exploration, catalog, item, token: token);
                 await journal.AppendAsync("stored-extraction-exploration", new { item, next }, token);
                 await controller.NavigateAsync(next.Position, cancellationToken: token);

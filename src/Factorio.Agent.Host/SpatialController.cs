@@ -54,6 +54,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 await NavigateAsync(destination, arrivalDistance, token);
                 return;
             }
+            // A trip beyond the local area may leave defended ground: equip first (cheap when the loadout is unchanged).
+            if (segment == 0) await new SurvivalKitController(game, journal).BeforeTripAsync("travel", token);
             ExplorationWaypoint next = await FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
             await NavigateAsync(next.Position, cancellationToken: token);
         }

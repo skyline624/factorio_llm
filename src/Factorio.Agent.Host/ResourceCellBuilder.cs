@@ -160,6 +160,7 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
                 }
                 if (attempt >= explorationBudget)
                     throw new TimeoutException($"No observed {supply.Resource} deposit holds a resource row within the exploration budget ({search.Status}).");
+                await new SurvivalKitController(game, journal).BeforeTripAsync("resource-row-exploration", token);
                 var waypoint = await controller.FindExplorationWaypointAsync(exploration, catalog, supply.Resource, token: token);
                 await journal.AppendAsync("resource-row-exploration", new { product, supply.Resource, waypoint }, token);
                 await controller.NavigateAsync(waypoint.Position, cancellationToken: token);

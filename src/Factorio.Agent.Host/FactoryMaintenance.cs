@@ -31,6 +31,8 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         int actions = 0;
         var snapshot = await CaptureAsync();
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        // Rebuilding erases the evidence of an attack inside a goal; record it first for the between-goals response.
+        await new AttackMonitor(directory, journal).RecordQuietlyAsync(state, snapshot, token);
         var recovered = RecoverPlans(state, snapshot, catalog);
         if (recovered.Count > 0)
         {

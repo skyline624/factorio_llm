@@ -27,17 +27,23 @@ public static class EquipmentReceipt
             int moved = effect.GetProperty("transferred").GetInt32();
             var before = effect.GetProperty("equipmentBefore");
             var after = effect.GetProperty("equipmentAfter");
-            string inventory = compartment == "gun" ? "guns" : "ammo";
+            string inventory = compartment switch { "gun" => "guns", "armor" => "armor", _ => "ammo" };
             if (effect.GetProperty("slot").GetInt32() != slot
                 || effect.GetProperty("sourceSlot").GetInt32() != args.GetProperty("sourceSlot").GetInt32()
                 || effect.GetProperty("item").GetString() != item || effect.GetProperty("compartment").GetString() != compartment
                 || effect.GetProperty("requested").GetInt32() != requested || moved < 1 || moved > requested
                 || receipt.Status == "completed" && moved != requested
-                || after.GetProperty("selectedSlot").GetInt32() != slot
+                || compartment != "armor" && after.GetProperty("selectedSlot").GetInt32() != slot
                 || Stock(before, "main", item) - Stock(after, "main", item) != moved
                 || Stock(after, inventory, item) - Stock(before, inventory, item) != moved
                 || Rounds(before) != Rounds(after))
                 throw new InvalidDataException("Native equipment stock, destination or ammunition accounting is inconsistent.");
+            // A worn armor is swapped, never destroyed: it must reappear in the main inventory.
+            string? replaces = args.TryGetProperty("replaces", out var expected) && expected.ValueKind == JsonValueKind.String ? expected.GetString() : null;
+            string? replaced = effect.TryGetProperty("replaced", out var actual) && actual.ValueKind == JsonValueKind.String ? actual.GetString() : null;
+            if (compartment == "armor" && (replaced != replaces || replaces is not null
+                && (Stock(before, "armor", replaces) - Stock(after, "armor", replaces) != 1 || Stock(after, "main", replaces) - Stock(before, "main", replaces) != 1)))
+                throw new InvalidDataException("The replaced armor was not returned to the main inventory.");
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or OverflowException or FormatException)
         {

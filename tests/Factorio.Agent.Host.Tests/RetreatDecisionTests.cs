@@ -19,4 +19,20 @@ public sealed class RetreatDecisionTests
             null, MaxHealth: 250, LocalEnemiesComplete: true);
         Assert.Equal(retreat, RetreatPlanner.Needed(state));
     }
+
+    [Theory]
+    [InlineData(3, -20, true)]   // Outnumbered and healthy: reach the loaded turret before fighting.
+    [InlineData(2, -20, false)]  // Two biters are fought where the actor stands.
+    [InlineData(3, -3, false)]   // Already within the turret's inner coverage: fight beside it.
+    public void OutnumberedActorSeeksObservedTurretCoverBeforeAFightItCannotWin(int enemies, double turretX, bool cover)
+    {
+        // Campaign 2026-10-01 (seed 20261002): the pistol-armed actor went from full health to death in about seven seconds
+        // against packs; it retreated only once hurt and the biters outran it.
+        var state = new SafetyObservation(100, new("world", "session", "actor", 1, 1), true, "ai", false, new(0, 0), 250,
+            new WeaponState(true, 10, 15), Enumerable.Range(0, enemies).Select(i => new VisibleThreat($"biter-{i}", new(6 + i, 0))).ToArray(),
+            null, MaxHealth: 250, Defenses: [new DefensiveRefuge("turret", new(turretX, 0), 18, 100, 100)], LocalEnemiesComplete: true);
+        Assert.Equal(cover, RetreatPlanner.SeeksCover(state));
+        Assert.False(RetreatPlanner.Needed(state));
+        Assert.False(RetreatPlanner.SeeksCover(state with { Defenses = [] }));
+    }
 }

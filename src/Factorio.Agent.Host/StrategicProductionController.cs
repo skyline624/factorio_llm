@@ -26,6 +26,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         var factoryState = factoryDirectory is null ? null : await new FactoryRegistry(factoryDirectory).LoadAsync(scope.WorldId, token);
         var cells = factoryState is null ? [] : factoryState.Cells.Where(c => c.Status == "ready").ToArray();
         JsonElement agent = observation.Data.GetProperty("agent");
+        var defenseSituation = await AttackResponseFacts.ReadAsync(factoryDirectory, factoryState, factory, defenses, agent, token);
         string observationId = $"{observation.Data.GetProperty("snapshotId").GetInt64()}:{observation.Tick}";
         // Whitelist factual fields: no session credentials, player names or coordinates leave the machine.
         // The planner rejects contexts above 24,000 characters; a large factory drops the least decisive lists first.
@@ -61,6 +62,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 exposedIndustrialAnchors = defenses.Anchors.Count(a => DefenseDeploymentPlanner.Coverage(a, defenses.Turrets) == 0),
                 interpretation = "Known own industry on the current surface only; coverage uses native effective firing range of active loaded turrets. Turret ammunition is reserved, not available to ordinary production."
             },
+            defenseSituation,
             nativeFluidIdentifiers = catalog.Recipes.SelectMany(r => r.Ingredients.Concat(r.Products)).Where(m => m.Type == "fluid")
                 .Select(m => m.Name).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             availableFluidConversions = catalog.Recipes.Where(r => r.Enabled && r.Ingredients.Count == 1 && r.Products.Count == 1

@@ -87,6 +87,8 @@ local function capture(args)
       metadata.defenseRange = defense and defense.range
     end
     if entity.burner then metadata.burnerRemainingJoules = entity.burner.remaining_burning_fuel end
+    -- Buildings never regenerate: health below the native maximum is durable evidence of an attack on own industry.
+    if entity.is_entity_with_health then metadata.health, metadata.maxHealth = entity.health, entity.max_health end
     -- Native electric network identity lets C# prove that poles and machines reach a generator anywhere in the known factory.
     if entity.type == "electric-pole" or entity.prototype.electric_energy_source_prototype then
       local ok, network = pcall(function() return entity.electric_network_id end)
