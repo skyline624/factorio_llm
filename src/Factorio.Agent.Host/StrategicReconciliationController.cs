@@ -60,7 +60,9 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         {
             OperationReceipt receipt;
             try { receipt = await operations.QueryAsync(id, token); }
-            catch (GameRpcException error) when (error.Error.Code == "operation_unknown" && !lastIsJournaled)
+            // The receipt window proof holds whether or not the engine's latest operation is journaled: on 2026-10-01
+            // (seed 20261002) a move cancelled before sending followed a journaled completed move, and refusing it ended the run.
+            catch (GameRpcException error) when (error.Error.Code == "operation_unknown")
             {
                 await ProveNeverDispatchedAsync(id);
                 absent.Add(id);

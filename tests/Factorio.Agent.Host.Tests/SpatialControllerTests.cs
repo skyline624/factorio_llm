@@ -139,6 +139,54 @@ public sealed class SpatialControllerTests
         Assert.InRange(game.Queries, 1, 20);
     }
 
+    [Fact]
+    public async Task AnOwnedOperationThatNeverReachedTheEngineDoesNotHideTheOriginalFailure()
+    {
+        using var interruption = new CancellationTokenSource();
+        var game = new UnsubmittedGame(interruption);
+        var journal = new Journal();
+        var controller = new SpatialController(game, journal);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => controller.NavigateAsync(new(5, 0), cancellationToken: interruption.Token));
+        await controller.DisposeAsync();
+        Assert.Contains("owned-operation-unsubmitted", journal.Types);
+        Assert.Equal(0, game.Cancels);
+    }
+
+    /// <summary>The submit call is cancelled before it reaches the engine, which therefore knows no such operation.</summary>
+    private sealed class UnsubmittedGame(CancellationTokenSource interruption) : IGameClient
+    {
+        public int Cancels { get; private set; }
+
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            SpatialSnapshot map = SpatialPlannerTests.Map([]);
+            if (request.Action == "submit")
+            {
+                interruption.Cancel();
+                throw new OperationCanceledException(interruption.Token);
+            }
+            if (request.Action == "cancel") Cancels++;
+            if (request.Action is "operation" or "cancel")
+                return Task.FromResult(new GameResponse(1, request.RequestId, false, 100, Protocol.ToElement(new { }),
+                    new GameError("operation_unknown", "Receipt absent or expired; reconcile before retrying")));
+            object data = request.Action switch
+            {
+                "observe" => new
+                {
+                    map.Scope, collectedTick = 100,
+                    coverage = new { atomic = true, collectionStartTick = 100, collectionEndTick = 100,
+                        enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
+                    agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = map.Actor.Position,
+                        health = 250, weapon = new { ready = false, rounds = 0, range = 0 } },
+                    enemies = Array.Empty<object>()
+                },
+                "spatial" => map,
+                _ => throw new InvalidOperationException(request.Action)
+            };
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, 100, Protocol.ToElement(data)));
+        }
+    }
+
     private sealed class MalformedReceiptGame : IGameClient
     {
         private string? operationId;

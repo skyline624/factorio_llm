@@ -335,6 +335,23 @@ public sealed class StrategicReconciliationTests : IDisposable
     }
 
     [Fact]
+    public async Task ASubmissionAfterTheEnginesLastJournaledOperationIsProvenAbsentToo()
+    {
+        // Campaign 2026-10-01 (seed 20261002): a move cancelled before sending followed a journaled completed move.
+        var game = await PrepareAsync(true);
+        var unsent = OperationSubmission.Create(Scope, "move", new { position = new MapPosition(40, -8), tolerance = 0.15 }, 36200);
+        await new ControllerJournal(Journal).AppendAsync("submission", unsent, default);
+        game.UnknownId = unsent.OperationId;
+        game.Bounded = true;
+        await new StrategicReconciliationController(game, Memory).ReconcileAsync(Journal);
+        var memory = await ReadMemoryAsync();
+        Assert.False(memory.Pending);
+        Assert.Contains("never_dispatched", memory.PreviousResult);
+        Assert.Contains("receipt_window", game.Calls);
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
+    [Fact]
     public async Task SubmissionThatNeverReachedTheEngineIsProvenAbsentByTheReceiptWindow()
     {
         var game = await PrepareAsync(false);
@@ -422,6 +439,8 @@ public sealed class StrategicReconciliationTests : IDisposable
         public string OperationId = initialOperationId;
         public long AcceptedTick = 110, UpdatedTick = 36100;
         public string? Failure;
+        public string? UnknownId;
+        public bool Bounded;
         public bool AfterDeath;
         public int DeadObservations;
         public long NativeIncarnation = 2, LastDeathTick = 37000;
@@ -438,12 +457,15 @@ public sealed class StrategicReconciliationTests : IDisposable
             Calls.Add(request.Action);
             Assert.Contains(request.Action, new[] { "observe", "operation", "receipt_window" });
             if (request.Action == "receipt_window")
-                return Task.FromResult(new GameResponse(1, request.RequestId, true, 40000 + Calls.Count, Protocol.ToElement(Failure == "absent"
+                return Task.FromResult(new GameResponse(1, request.RequestId, true, 40000 + Calls.Count, Protocol.ToElement(Failure == "absent" || Bounded
                     ? new { count = 12, capacity = 2048, evicted = false, oldestAcceptedTick = 50L }
                     : new { count = 2048, capacity = 2048, evicted = true, oldestAcceptedTick = 39000L })));
             if (request.Action == "operation")
             {
-                Assert.Equal(OperationId, request.Arguments.GetProperty("operationId").GetString());
+                string? requested = request.Arguments.GetProperty("operationId").GetString();
+                if (requested == UnknownId)
+                    return Task.FromResult(new GameResponse(1, request.RequestId, false, 40000, default, new("operation_unknown", "Absent receipt")));
+                Assert.Equal(OperationId, requested);
                 return Task.FromResult(Failure is "unknown" or "absent" or "evicted"
                     ? new GameResponse(1, request.RequestId, false, 40000, default, new("operation_unknown", "Absent receipt"))
                     : new GameResponse(1, request.RequestId, true, 40000, Receipt()));

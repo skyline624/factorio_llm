@@ -353,7 +353,18 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         {
             if (ownedOperation is not null)
             {
-                OperationReceipt receipt = await QueryKnownAsync(ownedOperation, stopDeadline.Token);
+                OperationReceipt receipt;
+                try { receipt = await QueryKnownAsync(ownedOperation, stopDeadline.Token); }
+                catch (GameRpcException error) when (error.Error.Code == "operation_unknown")
+                {
+                    // The mod records every submission it receives before validating it and evicts only its oldest receipts,
+                    // so the newest owned operation being unknown means its submission never reached the engine (a call
+                    // cancelled before sending): there is nothing to stop. On 2026-10-01 (seed 20261002) this disposal
+                    // error hid the goal's own failure and ended the campaign run.
+                    await journal.AppendAsync("owned-operation-unsubmitted", new { operationId = ownedOperation }, stopDeadline.Token);
+                    ownedOperation = null;
+                    return;
+                }
                 if (!receipt.IsTerminal)
                 {
                     await journal.AppendAsync("cancel-intent", new
