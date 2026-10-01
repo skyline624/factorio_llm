@@ -233,7 +233,14 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         {
             var entity = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == entityId);
             var position = entity.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
-            await controller.ApproachEntityAsync(entityId, position, catalog, token);
+            try { await controller.ApproachEntityAsync(entityId, position, catalog, token); }
+            catch (EntityMissingException)
+            {
+                // The photograph is older than the world: on 2026-10-01 (seed 20261002) biters destroyed a furnace before the
+                // actor arrived to fuel it. Maintenance rebuilds registered parts; this transfer is simply skipped.
+                await journal.AppendAsync("factory-transfer-target-missing", new { kind, entityId, item, count }, token);
+                return 0;
+            }
             var receipt = await controller.WorkAsync(kind, new { entityId, inventory, item, count = checked((int)Math.Min(count, 100000)) }, 600, token: token);
             actions++;
             if (receipt.Status is not ("completed" or "partial"))

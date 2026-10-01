@@ -7,6 +7,13 @@ namespace Factorio.Agent.Host;
 
 public sealed record ExplorationWaypoint(MapPosition Position, long CollectedTick);
 
+/// <summary>A known own entity is absent from a complete local view at its known position, for instance destroyed by enemies.</summary>
+public sealed class EntityMissingException(string entityId, MapPosition knownPosition)
+    : InvalidOperationException($"Entity {entityId} is not observed at its known position {knownPosition}.")
+{
+    public string EntityId { get; } = entityId;
+}
+
 /// <summary>Executes C# spatial plans while yielding actor operations to the deterministic defense loop.</summary>
 public sealed class SpatialController(IGameClient game, IControllerJournal journal, int maximumMoveDistance = 24) : IAsyncDisposable
 {
@@ -20,13 +27,14 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     {
         SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while approaching an entity.");
-        if (!map.Entities.Any(e => e.Id == entityId))
+        // Standing near the known position already proves the entity is gone; otherwise travel there and look again.
+        if (!map.Entities.Any(e => e.Id == entityId) && map.Actor.Position.DistanceTo(knownPosition) > 8)
         {
             await TravelAsync(knownPosition, 8, catalog, token);
             map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while approaching an entity.");
         }
-        var entity = map.Entities.Single(e => e.Id == entityId);
+        var entity = map.Entities.SingleOrDefault(e => e.Id == entityId) ?? throw new EntityMissingException(entityId, knownPosition);
         MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map), entity)
             ?? throw new InvalidOperationException("No reachable interaction position for the observed entity.");
         // Interaction geometry is observed over 48 tiles; navigation uses smaller local snapshots.
