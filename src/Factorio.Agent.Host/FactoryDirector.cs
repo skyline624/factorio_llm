@@ -111,6 +111,46 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         }
     }
 
+    /// <summary>Resource cells reopened by an attack that one call rebuilds at most; each rebuild may produce its parts.</summary>
+    public const int MaximumResumes = 3;
+
+    /// <summary>
+    /// Rebuilds resource cells that cell health reopened after a part was destroyed, fewest attempts first. Until now only
+    /// growth resumed them: on 2026-10-01 (seed 20261002) nine iron cells stayed open for hours while the mining area was
+    /// raided, their capacity uncounted. A failure is journaled and counts one of the cell's attempts, as any build does.
+    /// </summary>
+    internal async Task<int> ResumeResourceCellsAsync(ActorScope scope, CancellationToken token)
+    {
+        var registry = new FactoryRegistry(directory);
+        var builder = new ResourceCellBuilder(game, journal, directory);
+        // A cell where the actor recently died waits for its death zone to expire, like a corpse there. The registry's cells
+        // all stand on the first surface (nauvis).
+        long tick = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token)).CollectedTick;
+        var zones = game is IDangerZoneReader reader ? await reader.ReadActiveDeathsAsync(scope, 1, tick, token) : [];
+        bool Safe(FactoryCell cell) => cell.Plan?.Values.All(p => !zones.Any(z => DangerZones.Covers(z, p.Position))) ?? true;
+        int resumed = 0;
+        for (int call = 0; call < MaximumResumes; call++)
+        {
+            var open = (await registry.LoadAsync(scope.WorldId, token)).Cells
+                .Where(c => c.IsResource && c.Status == "building" && c.Attempts < ResourceCellBuilder.MaximumAttempts && c.Recipe is not null && Safe(c))
+                .OrderBy(c => c.Attempts).ThenBy(c => c.Tick).FirstOrDefault();
+            if (open is null) break;
+            try
+            {
+                // The builder resumes an interrupted cell of this product before it would plan any new one.
+                await builder.BuildNextAsync(open.Recipe!, 1, token, explorationBudget: 0);
+                resumed++;
+            }
+            catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+            {
+                if (ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token)).Scope != scope) throw;
+                await journal.AppendAsync("resource-cell-resume-failed", new { open.Id, open.Recipe, error = error.GetType().Name, error.Message }, token);
+            }
+        }
+        if (resumed > 0) await journal.AppendAsync("resource-cells-resumed", new { resumed }, token);
+        return resumed;
+    }
+
     /// <summary>Minutes of the planned rate that carried stock must cover before a raw item can go without a resource cell.</summary>
     public const double SeedHorizonMinutes = 10;
 
