@@ -94,12 +94,17 @@ public sealed class DefenseControllerTests
     }
 
     [Fact]
-    public async Task ARefugeAcrossAnImpassableWallDoesNotCauseABlindMove()
+    public async Task ARefugeAcrossAnImpassableWallFallsBackToAProvenLocalEscape()
     {
+        // Campaign 2026-10-01 (seed 20261002): with turrets only far away, routes to them exhausted the search budget and
+        // the actor stayed until it died; local escapes were only tried when no turret existed at all.
         var fake = new GameStub { Armed = false, Defenses = Refuge(), RefugeBlocked = true };
         await new DefenseController(fake, new JournalStub()).StepAsync();
         Assert.Contains("spatial", fake.Calls);
-        Assert.DoesNotContain("submit", fake.Calls);
+        Assert.Equal("move", fake.Submission?.Kind);
+        var next = fake.Submission!.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+        Assert.True(next.X > -1.5, "The escape never crosses or touches the wall toward the unreachable refuge.");
+        Assert.True(next.DistanceTo(new(4, 0)) > 4, "The escape increases separation from the enemy.");
     }
 
     private static object Refuge() => new[] { new { id = "safe", position = new MapPosition(-8, 0), range = 8d,

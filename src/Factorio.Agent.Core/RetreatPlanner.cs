@@ -25,6 +25,8 @@ public sealed class RetreatPlanner
 {
     /// <summary>Visible enemies from which the actor stops trading health for kills.</summary>
     public const int OutnumberedEnemies = 3;
+    /// <summary>Route attempts toward turret refuges before local escapes are tried.</summary>
+    public const int RefugeAttempts = 6;
 
     /// <summary>
     /// Retreat at critical health, when unarmed, or when outnumbered and already hurt: on 2026-10-01 (seed 20261002) a pack
@@ -43,6 +45,8 @@ public sealed class RetreatPlanner
             || map.Actor.ControlMode != "ai" || map.Actor.Position.DistanceTo(state.Position!) > .5)
             throw new InvalidDataException("Retreat geometry no longer matches the current native safety observation.");
         var field = new SpatialCollisionField(map);
+        // Destinations cut off by walls or water would spend the route budget on searches that cannot succeed.
+        var reachable = Reachable(field, map.Actor.Position, 32);
         var start = map.Actor.Position;
         double Separation(MapPosition point) => state.Enemies.Min(e => point.DistanceTo(e.Position));
         double initialSeparation = Separation(start);
@@ -56,29 +60,31 @@ public sealed class RetreatPlanner
                 for (int y = (int)Math.Ceiling(refuge.Position.Y - radius); y <= Math.Floor(refuge.Position.Y + radius); y++)
                 {
                     var point = new MapPosition(x, y);
-                    if (point.DistanceTo(refuge.Position) > radius || start.DistanceTo(point) > 32
+                    if (point.DistanceTo(refuge.Position) > radius || start.DistanceTo(point) > 32 || !reachable.Contains((x, y))
                         || Separation(point) < initialSeparation + 2 || !field.Walkable(point)) continue;
                     candidates.Add((refuge.Id, point, start.DistanceTo(point) + point.DistanceTo(refuge.Position) * .5));
                 }
         }
-        if (state.Defenses is not { Count: > 0 })
-        {
-            // A local escape is useful even without turret coverage. It proves increased
-            // separation on observed terrain, not safety from pursuit or hidden enemies.
-            for (int x = (int)Math.Ceiling(start.X - 12); x <= Math.Floor(start.X + 12); x++)
-                for (int y = (int)Math.Ceiling(start.Y - 12); y <= Math.Floor(start.Y + 12); y++)
-                {
-                    var point = new MapPosition(x, y);
-                    double distance = start.DistanceTo(point), gain = Separation(point) - initialSeparation;
-                    if (distance is < 4 or > 12 || gain < 2 || !field.Walkable(point)) continue;
-                    candidates.Add((null, point, distance - 2 * gain));
-                }
-        }
+        // A local escape is useful without turret coverage and when no observed turret can be reached in time. It proves
+        // increased separation on observed terrain, not safety from pursuit or hidden enemies. On 2026-10-01 (seed 20261002)
+        // escapes were only tried when no turret existed anywhere: routes to distant turrets spent the budget and the actor died.
+        var escapes = new List<(string? RefugeId, MapPosition Destination, double Cost)>();
+        for (int x = (int)Math.Ceiling(start.X - 12); x <= Math.Floor(start.X + 12); x++)
+            for (int y = (int)Math.Ceiling(start.Y - 12); y <= Math.Floor(start.Y + 12); y++)
+            {
+                var point = new MapPosition(x, y);
+                double distance = start.DistanceTo(point), gain = Separation(point) - initialSeparation;
+                if (distance is < 4 or > 12 || gain < 2 || !reachable.Contains((x, y))) continue;
+                escapes.Add((null, point, distance - 2 * gain));
+            }
         long began = Stopwatch.GetTimestamp();
         int attempted = 0;
         bool limited = false;
-        foreach (var candidate in candidates.OrderBy(c => c.Cost).ThenBy(c => c.RefugeId, StringComparer.Ordinal)
-            .ThenBy(c => c.Destination.X).ThenBy(c => c.Destination.Y))
+        // Turret refuges come first but may only use half the attempts, so a local escape is always tried in time.
+        var ordered = candidates.OrderBy(c => c.Cost).ThenBy(c => c.RefugeId, StringComparer.Ordinal)
+            .ThenBy(c => c.Destination.X).ThenBy(c => c.Destination.Y).Take(RefugeAttempts)
+            .Concat(escapes.OrderBy(c => c.Cost).ThenBy(c => c.Destination.X).ThenBy(c => c.Destination.Y));
+        foreach (var candidate in ordered)
         {
             if (++attempted > 12 || Stopwatch.GetElapsedTime(began) > TimeSpan.FromMilliseconds(200)) return new("search-budget");
             var route = new RoutePlanner().Find(field, candidate.Destination, maximumNodes: 5000,
@@ -103,6 +109,33 @@ public sealed class RetreatPlanner
             return new(candidate.RefugeId is null ? "separation" : "found", candidate.RefugeId, candidate.Destination, next, route);
         }
         return new(limited ? "search-budget" : "no-safe-candidate");
+    }
+
+    /// <summary>
+    /// Integer points within the radius connected to the actor through walkable points of the observed field: a cheap
+    /// flood fill that tells which refuges and escapes a route can reach at all.
+    /// </summary>
+    internal static HashSet<(int X, int Y)> Reachable(SpatialCollisionField field, MapPosition start, int radius)
+    {
+        int ox = (int)Math.Round(start.X), oy = (int)Math.Round(start.Y);
+        var reached = new HashSet<(int X, int Y)>();
+        var queue = new Queue<(int X, int Y)>();
+        // The actor may stand beside an entity: any walkable point next to it starts the fill.
+        for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++)
+                if (field.Walkable(new MapPosition(ox + dx, oy + dy)) && reached.Add((ox + dx, oy + dy))) queue.Enqueue((ox + dx, oy + dy));
+        while (queue.Count > 0)
+        {
+            var (x, y) = queue.Dequeue();
+            foreach (var (nx, ny) in new[] { (x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1) })
+            {
+                if (Math.Abs(nx - ox) > radius || Math.Abs(ny - oy) > radius || reached.Contains((nx, ny))
+                    || !field.Walkable(new MapPosition(nx, ny))) continue;
+                reached.Add((nx, ny));
+                queue.Enqueue((nx, ny));
+            }
+        }
+        return reached;
     }
 
     private static double SegmentDistance(MapPosition point, MapPosition from, MapPosition to)
