@@ -12,6 +12,11 @@ public sealed record ResourceRow(int Id, string Kind, string Product, string Res
     MapPosition Origin, int Direction, int Pitch, int Cells, double CellPerMinute);
 public enum ResourceRowSearchStatus { Found, NoSite, SearchBudgetExhausted }
 public sealed record ResourceRowSearch(ResourceRowSearchStatus Status, ResourceRow? Row = null, IReadOnlyList<SpatialEntity>? Clearance = null);
+/// <summary>
+/// Where a row opens: each planned cell's output chest by slot index, the unit vector along the row, the unit vector from the
+/// chests toward their walkway, and that walkway with its open end tiles.
+/// </summary>
+public sealed record ResourceRowAccess(IReadOnlyList<MapPosition> Chests, MapPosition Along, MapPosition Outward, WorldBox Walkway);
 
 /// <summary>
 /// Synthesizes drill cells on observed deposits from native geometry: the drill output vector chooses the receiver tile,
@@ -65,11 +70,23 @@ public sealed class ResourceCellPlanner
     public static WorldBox Walkway(SpatialSnapshot map, ResourceRow row) => Checked(map, row).Walkway(row.Cells, ends: true).Translate(row.Origin);
 
     /// <summary>Tiles of every planned entity plus the row walkway; power links and later rows must leave them free.</summary>
-    public static IReadOnlyList<WorldBox> Reservation(SpatialSnapshot map, ResourceRow row)
+    public static IReadOnlyList<WorldBox> Reservation(SpatialSnapshot map, ResourceRow row) => [.. Footprints(map, row), Walkway(map, row)];
+
+    /// <summary>Tiles of every planned entity of the row, built or not, without its walkway.</summary>
+    public static IReadOnlyList<WorldBox> Footprints(SpatialSnapshot map, ResourceRow row)
     {
         Template template = Checked(map, row);
         return Enumerable.Range(0, row.Cells).SelectMany(i => template.Parts.Select(p => template.Tiles(p).Translate(template.Corner(row.Origin, i))))
-            .Append(template.Walkway(row.Cells, ends: true).Translate(row.Origin)).ToArray();
+            .ToArray();
+    }
+
+    /// <summary>The row's chests, axis and walkway from the same native template its cells were built from.</summary>
+    public static ResourceRowAccess Access(SpatialSnapshot map, ResourceRow row)
+    {
+        Template template = Checked(map, row);
+        MapPosition chest = template.Parts.Single(p => p.Entity.Role == "output-chest").Entity.Position;
+        return new(Enumerable.Range(0, row.Cells).Select(i => Add(chest, template.Corner(row.Origin, i))).ToArray(),
+            template.Frame.Along, new(template.Frame.Fx, template.Frame.Fy), template.Walkway(row.Cells, ends: true).Translate(row.Origin));
     }
 
     /// <summary>

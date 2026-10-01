@@ -110,6 +110,8 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
                 if ((await director.EnsureRawAsync(item, demand, token, maximumNewCells: 1, explorationBudget: RawCapacityGrowth.ExplorationBudget)).Built > 0)
                 {
                     growth.Grew(item);
+                    // A new cell on a served row gets its feeder; a new distant row may get its own line.
+                    await director.EnsureSupplyLineAsync(token);
                     return true;
                 }
             }

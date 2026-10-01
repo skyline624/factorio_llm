@@ -20,6 +20,14 @@ public sealed class FactoryBandPlanner
     public static int Pitch(EntityGeometry machine) => Math.Max(machine.TileWidth, 3);
     public static int BandHeight(EntityGeometry machine) => 2 * machine.TileHeight + 6;
 
+    /// <summary>The two-tile walkway both rows of a band share, along its whole length, as <see cref="Layout"/> places it.</summary>
+    public static WorldBox Walkway(MapPosition origin, int slots, int pitch, int bandHeight)
+    {
+        // A band is two machine rows, two inserter rows, two chest rows and the walkway; the north machine, arm and chest come first.
+        double top = origin.Y + (bandHeight - 6) / 2 + 2;
+        return new(new(origin.X, top), new(origin.X + slots * pitch, top + 2));
+    }
+
     public CellLayout Layout(SpatialSnapshot map, CellEquipment equipment, MapPosition origin, CellSlot slot,
         bool input = true, bool output = true)
     {

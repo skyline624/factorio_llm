@@ -98,7 +98,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 bag[item] = bag.GetValueOrDefault(item) - moved;
                 if (moved > 0) await journal.AppendAsync("factory-surplus-deposited", new { item, moved, chest = home }, token);
             }
-        foreach (string chest in OutputChests(cells))
+        foreach (string chest in CollectedChests(cells, snapshot))
         {
             foreach (var (item, count) in Items(snapshot, chest).Where(p => p.Value > 0))
             {
@@ -263,6 +263,18 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// <summary>Output chests of ready cells: assembler products, smelted plates and mined resources alike.</summary>
     internal static IReadOnlyList<string> OutputChests(IEnumerable<FactoryCell> cells) => cells
         .Where(c => c.Status == "ready" && c.Entities.ContainsKey("output-chest")).Select(c => c.Entities["output-chest"]).ToArray();
+
+    /// <summary>
+    /// Output chests the actor empties itself: every ready cell's, supply line depots included, except row cells whose output a ready
+    /// line's feeder already carries to its depot. On 2026-10-01 (seed 20261002) every round walked to dozens of row chests far west
+    /// of the bands, 23 to 43 actions and 1.5 to 3 minutes per round, and the actor died on those trips.
+    /// </summary>
+    internal static IReadOnlyList<string> CollectedChests(IReadOnlyCollection<FactoryCell> cells, FactorySnapshot snapshot)
+    {
+        var lines = cells.Where(c => c.Kind == SupplyLinePlanner.Kind).SelectMany(c => c.Entities.Values);
+        var served = SupplyLines.Served(cells, FactoryMaintenance.Unpowered(snapshot, lines).ToHashSet(StringComparer.Ordinal));
+        return OutputChests(cells.Where(c => !(c.IsResource && served.Contains((c.Slot.Band, c.Slot.Index)))));
+    }
 
     /// <summary>
     /// Boilers and every fuelled entity of a cell (furnaces, burner drills) with the fuel they hold, by native id.

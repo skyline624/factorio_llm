@@ -60,6 +60,23 @@ public sealed class FactoryBandPlannerTests
         Assert.True(first.Role("pole")!.Position.DistanceTo(south.Role("pole")!.Position) <= pole.MaxWireDistance);
     }
 
+    [Theory]
+    [InlineData("assembling-machine-1")]
+    [InlineData("stone-furnace")]
+    public void TheBandWalkwayIsTheOneEveryCellLayoutLeavesFree(string machine)
+    {
+        var map = FactoryMaps.Grass(60);
+        var geometry = map.Prototypes[machine];
+        var origin = new MapPosition(-20, -15);
+        var walkway = FactoryBandPlanner.Walkway(origin, 4, FactoryBandPlanner.Pitch(geometry), FactoryBandPlanner.BandHeight(geometry));
+        var layouts = Enumerable.Range(0, 4).SelectMany(i => new[] { true, false }.Select(north =>
+            new FactoryBandPlanner().Layout(map, Assembler with { Machine = machine }, origin, new(0, i, north)))).ToArray();
+        // Every slot's walkway is a piece of the band's, which spans the four slots exactly.
+        Assert.All(layouts, l => Assert.True(walkway.Contains(l.Walkway)));
+        Assert.Equal(4 * FactoryBandPlanner.Pitch(geometry), walkway.Width);
+        Assert.Equal(2, walkway.Height);
+    }
+
     [Fact]
     public void TwoTileFurnacesUseTheGapColumnForTheirPole()
     {
@@ -199,7 +216,10 @@ internal static class FactoryMaps
                     new(new(new(-1, -2), new(1, -1)), new([], false, false, false), new(["water_tile"], false, false, false))]),
             ["gun-turret"] = new("gun-turret", "ammo-turret", Box(0.7), Solid, 2, 2),
             ["stone-wall"] = new("stone-wall", "wall", Box(0.29), Solid, 1, 1),
-            ["rocket-silo"] = new("rocket-silo", "rocket-silo", Box(4.2), Solid, 9, 9)
+            ["rocket-silo"] = new("rocket-silo", "rocket-silo", Box(4.2), Solid, 9, 9),
+            // collision-mask-defaults.lua: belts collide with buildings, water and other belts, never with the character.
+            ["transport-belt"] = new("transport-belt", "transport-belt", Box(0.4),
+                new(["floor", "meltable", "object", "transport_belt", "water_tile"], false, false, false), 1, 1, BeltSpeed: 0.03125)
         };
         var items = new Dictionary<string, PlaceableItem>
         {
@@ -216,7 +236,8 @@ internal static class FactoryMaps
             ["steam-engine"] = new("steam-engine", 10),
             ["offshore-pump"] = new("offshore-pump", 20),
             ["gun-turret"] = new("gun-turret", 10),
-            ["stone-wall"] = new("stone-wall", 100)
+            ["stone-wall"] = new("stone-wall", 100),
+            ["transport-belt"] = new("transport-belt", 100)
         };
         var rows = new List<TileRun>();
         for (int y = -half; y < half; y++)

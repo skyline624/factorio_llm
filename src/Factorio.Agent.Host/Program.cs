@@ -37,6 +37,8 @@ try
           verify-factory-cells|verify-factory-research|verify-resource-cells|verify-power-expansion --session FILE
           verify-furnace-bands --session FILE
           resource-cells --session FILE --item NAME --quantity PER_MINUTE
+          supply-line --session FILE [--row ID]
+          verify-supply-lines --session FILE
           power-expand --session FILE
           perimeter-defense --session FILE [--item WALL] [--layers 1|2]
           verify-perimeter --session FILE [--layers 1|2]
@@ -139,6 +141,26 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new ResourceCellQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "supply-line":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            using var lease = ActorControlLease.Acquire(session.Directory);
+            await using var game = session.CreateClient(lease);
+            string journalPath = Path.Combine(session.Directory, $"supply-line-{Guid.NewGuid():N}.jsonl");
+            var journal = new ControllerJournal(journalPath);
+            // An explicit row is built as asked and its failure reported; without one the director chooses and journals failures.
+            FactoryCell? line = Option("row") is { } row
+                ? await new SupplyLineBuilder(game, journal, session.Directory).BuildAsync(int.Parse(row, CultureInfo.InvariantCulture), shutdown.Token)
+                : await new FactoryDirector(game, journal, session.Directory).EnsureSupplyLineAsync(shutdown.Token);
+            Print(new { line, journalPath });
+            break;
+        }
+        case "verify-supply-lines":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new SupplyLineQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "power-expand":
