@@ -54,16 +54,15 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             for (int count = 0; count < missing; count++)
                 await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
         }
-        // The bands now consume the plan's plates: a distant row they come from gets its belt to them.
-        await EnsureSupplyLineAsync(token);
         return plan;
     }
 
     /// <summary>
     /// Builds, resumes or extends at most one supply line, for the row <see cref="SupplyLines.Next"/> chooses: a smelter row whose
     /// plates the bands consume, with ready cells farther than <see cref="SupplyLinePlanner.MinimumDistance"/> from every band
-    /// walkway. A failure is journaled and leaves the row to direct collection, so the caller's goal goes on; a changed actor
-    /// identity stays fatal. Returns the line worked on, or null.
+    /// walkway. Production goals call it once their bands stand: research when it starts and after raw growth, automation goals
+    /// before their logistics round. A failure is journaled and leaves the row to direct collection, so the caller's goal goes on; a
+    /// changed actor identity stays fatal. Returns the line worked on, or null.
     /// </summary>
     public async Task<FactoryCell?> EnsureSupplyLineAsync(CancellationToken token)
     {

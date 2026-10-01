@@ -87,13 +87,38 @@ public sealed class SupplyLinesTests
         [
             Row("submission", new { operationId = "m1", kind = "move", preconditions = new { position = new MapPosition(0, 0) } }),
             Row("receipt", new { operationId = "m1", effects = new { position = new MapPosition(3, 4) } }),
-            Row("submission", new { operationId = "t1", kind = "take", preconditions = new { } }),
+            Row("submission", new { operationId = "t1", kind = "take", args = new { item = "iron-plate" }, preconditions = new { } }),
             Row("receipt", new { operationId = "t1", effects = new { position = new MapPosition(3, 4) } }),
             Row("submission", new { operationId = "m2", kind = "move", preconditions = new { position = new MapPosition(3, 4) } }),
             Row("receipt", new { operationId = "m2", effects = new { position = new MapPosition(3, 10) } }),
-            Row("submission", new { operationId = "i1", kind = "insert", preconditions = new { } })
+            Row("submission", new { operationId = "t2", kind = "take", args = new { item = "iron-gear-wheel" }, preconditions = new { } }),
+            Row("submission", new { operationId = "i1", kind = "insert", args = new { item = "iron-plate" }, preconditions = new { } })
         ];
-        Assert.Equal(new SupplyLineQualification.Travel(11, 2, 1, 1), SupplyLineQualification.Measure(rows));
+        // Two moves walk 5 and 6 tiles; one of the three transfers takes plates.
+        Assert.Equal(new SupplyLineQualification.Travel(11, 2, 1, 3), SupplyLineQualification.Measure(rows));
+    }
+
+    [Fact]
+    public void TheLedgerBalancesFinishedPlatesAgainstFurnaceOutputsChestsTransitAndTheDepot()
+    {
+        var smelter = new FactoryCell("s", 0, new(1, 0, true), "smelter", "electric-mining-drill", "iron-plate",
+            new Dictionary<string, string> { ["furnace"] = "f", ["output-chest"] = "c", ["output-inserter"] = "o", ["drill"] = "d" }, "ready", 1);
+        var line = new FactoryCell("l", 0, new(1, 0, true), SupplyLinePlanner.Kind, "transport-belt", "iron-plate", new Dictionary<string, string>
+        {
+            ["feeder-0"] = "fe", ["collector-000"] = "b", ["depot-inserter"] = "di", ["output-chest"] = "depot", ["link-0"] = "p"
+        }, "ready", 1);
+        static JsonElement Plates(long count) => Protocol.ToElement(new { items = new Dictionary<string, long> { ["iron-plate"] = count } });
+        FactorySnapshot Photograph(long finished, long furnace, long chest, long belt, long hand, long depot) => new("snapshot", Scope, 1, 2,
+            Protocol.ToElement(new { }), [
+                new("work:f", "work", "f", "machine-craft", Protocol.ToElement(new { productsFinished = finished })),
+                new("inventory:f:3", "inventory", "f", "furnace_result", Plates(furnace)),
+                new("inventory:c:1", "inventory", "c", "chest", Plates(chest)),
+                new("transport:b:1", "transit", "b", "transport-line", Plates(belt)),
+                new("held:fe", "transit", "fe", "inserter-hand", Plates(hand)),
+                new("inventory:depot:1", "inventory", "depot", "chest", Plates(depot))]);
+        // Eight plates finished: one left the furnace, three left the chest, seven more ride the line and five reached the depot.
+        Assert.Equal(new SupplyLineQualification.LineLedger(8, 8, 5, 7, -3),
+            SupplyLineQualification.Ledger(Photograph(10, 1, 5, 3, 0, 0), Photograph(18, 0, 2, 9, 1, 5), [smelter], line));
     }
 
     private static IReadOnlyDictionary<int, IReadOnlyList<MapPosition>> Chests() => new Dictionary<int, IReadOnlyList<MapPosition>>

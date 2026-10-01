@@ -41,7 +41,8 @@ public sealed class SupplyLineQualification(RuntimeSession session)
             var setup = await NativeAsync(Prepare);
             File.Delete(new FactoryRegistry(session.Directory).Path); // The fixture area was just emptied.
             artificial.AddRange([
-                "chunks generated around the area; area (-96,-48)-(48,48) emptied of every entity and paved with grass; actor teleported to (24,0)",
+                "chunks generated around the area; area (-96,-48)-(48,48) emptied of every entity and paved with grass, except a water stripe "
+                    + "x -32..-29, y -6..13 across the straight path between the patch and the band; actor teleported to (24,0)",
                 "electric-energy-interface injected at (20,0) with a small pole at (18.5,0.5)",
                 "steam-power, electronics, automation and electric-mining-drill researched",
                 "iron ore 14x16 injected at x -62..-48, y -8..8, 5000 per tile",
@@ -70,9 +71,10 @@ public sealed class SupplyLineQualification(RuntimeSession session)
             var bandEnd = SupplyLinePlanner.End(walkway, new((rowWalkway.Min.X + rowWalkway.Max.X) / 2, (rowWalkway.Min.Y + rowWalkway.Max.Y) / 2));
 
             // Priming: the first round fuels the furnaces from the bag; then a direct round is measured from the band end.
+            var furnaces = smelters.Select(c => c.Entities["furnace"]).ToArray();
             var logistics = new FactoryLogistics(game, journal, session.Directory);
             var prime = await logistics.ServiceAsync(40, token);
-            var direct = await MeasuredRoundAsync();
+            var direct = await MeasuredRoundAsync(Finished(await SnapshotAsync(), furnaces));
             evidence.Add(new { check = "direct-collection", prime, direct.Round, direct.Travel });
             Require(direct.Round.Collected.GetValueOrDefault(Plate) >= 20, "The direct round collected too few plates to measure.");
 
@@ -84,11 +86,22 @@ public sealed class SupplyLineQualification(RuntimeSession session)
             if (built is not { Status: "ready", Kind: SupplyLinePlanner.Kind } line || line.Slot.Band != resourceRow.Id)
                 throw new InvalidDataException("The director did not build a ready supply line for the iron row.");
             Require(smelters.All(c => line.Entities.ContainsKey(SupplyLinePlanner.FeederRole(c.Slot.Index))), "A ready row cell has no feeder.");
-            Require(line.Plan is { } plan && line.Entities.Keys.All(plan.ContainsKey), "A line part has no plan for maintenance.");
+            var linePlan = line.Plan ?? throw new InvalidDataException("The line has no plan for maintenance.");
+            Require(line.Entities.Keys.All(linePlan.ContainsKey), "A line part has no plan for maintenance.");
+            // The trunk follows observed terrain: around the water stripe, longer than the straight run between its ends.
+            var trunk = SupplyLines.FlowRoles(linePlan.Keys).Where(SupplyLines.IsTrunk).Select(r => linePlan[r].Position).ToArray();
+            int straight = (int)(Math.Abs(trunk[^1].X - trunk[0].X) + Math.Abs(trunk[^1].Y - trunk[0].Y)) + 1;
+            evidence.Add(new { check = "trunk-route", belts = trunk.Length, straight, from = trunk[0], to = trunk[^1],
+                minY = trunk.Min(p => p.Y), maxY = trunk.Max(p => p.Y), onWater = trunk.Count(p => p.X is >= -32 and < -28 && p.Y is >= -6 and < 14) });
+            Require(trunk.Length > straight && !trunk.Any(p => p.X is >= -32 and < -28 && p.Y is >= -6 and < 14),
+                "The trunk did not route around the water stripe.");
 
-            // Drain: one round empties what reached the depot during construction, so the measured round covers the same wait.
+            // Drain: the chests' backlog from the construction time first rides the belt to the depot (64 tiles take about 34 s at
+            // native yellow belt speed), then one round empties the depot, so the measured round covers the same wait as the direct one.
+            await WaitAsync(3600);
             var drain = await logistics.ServiceAsync(40, token);
-            var collected = FactoryLogistics.CollectedChests(state.Cells.Where(c => c.Status == "ready").ToArray(), await SnapshotAsync());
+            var drained = await SnapshotAsync();
+            var collected = FactoryLogistics.CollectedChests(state.Cells.Where(c => c.Status == "ready").ToArray(), drained);
             evidence.Add(new { check = "depot-replaces-row-chests", drain, collected, depot = line.Entities[SupplyLinePlanner.DepotChestRole] });
             Require(collected.Contains(line.Entities[SupplyLinePlanner.DepotChestRole])
                 && smelters.All(c => !collected.Contains(c.Entities["output-chest"])), "Logistics still empties the served row chests or skips the depot.");
@@ -102,17 +115,24 @@ public sealed class SupplyLineQualification(RuntimeSession session)
             Require(ledger.Produced > 0 && ledger.Produced == ledger.Held && ledger.Depot > 0,
                 "Plates finished by the furnaces do not reappear exactly in the row chests, the line and the depot.");
 
-            var served = await MeasuredRoundAsync();
-            evidence.Add(new { check = "depot-collection", served.Round, served.Travel });
+            var served = await MeasuredRoundAsync(Finished(drained, furnaces));
+            evidence.Add(new { check = "depot-collection", served.Round, served.Travel, served.Produced });
             Require(served.Round.Collected.GetValueOrDefault(Plate) >= 20, "The depot round collected too few plates to measure.");
             double directPerPlate = direct.Travel.Distance / direct.Round.Collected[Plate];
             double servedPerPlate = served.Travel.Distance / served.Round.Collected[Plate];
+            // Plates collected also hold what was in transit when the window began, so travel is also given per plate the furnaces
+            // finished in the window, read from their native counters.
+            object Summary((LogisticsResult Round, Travel Travel, long Produced) measured, long since) => new
+            {
+                measured.Travel, plates = measured.Round.Collected[Plate], measured.Produced, productionTicks = measured.Round.Tick - since,
+                tilesPerPlate = Math.Round(measured.Travel.Distance / measured.Round.Collected[Plate], 3),
+                tilesPerProducedPlate = Math.Round(measured.Travel.Distance / Math.Max(1, measured.Produced), 3),
+                plateTakesPerPlate = Math.Round((double)measured.Travel.PlateTakes / measured.Round.Collected[Plate], 4), actions = measured.Round.Actions
+            };
             travel = new
             {
-                waitTicks = MeasuredWait,
-                start = bandEnd,
-                direct = new { direct.Travel, plates = direct.Round.Collected[Plate], tilesPerPlate = Math.Round(directPerPlate, 3) },
-                line = new { served.Travel, plates = served.Round.Collected[Plate], tilesPerPlate = Math.Round(servedPerPlate, 3) },
+                waitTicks = MeasuredWait, start = bandEnd,
+                direct = Summary(direct, prime.Tick), line = Summary(served, drain.Tick),
                 ratio = Math.Round(servedPerPlate / directPerPlate, 3)
             };
             Require(servedPerPlate < directPerPlate / 2, "The depot round did not halve the actor's travel per collected plate.");
@@ -148,14 +168,16 @@ public sealed class SupplyLineQualification(RuntimeSession session)
             passed = true;
             return path;
 
-            async Task<(LogisticsResult Round, Travel Travel)> MeasuredRoundAsync()
+            // From the band end, after the same wait: the round's walking and transfers, and the plates finished since the given count.
+            async Task<(LogisticsResult Round, Travel Travel, long Produced)> MeasuredRoundAsync(long since)
             {
                 await TravelAsync(bandEnd);
                 await WaitAsync(MeasuredWait);
+                long finished = Finished(await SnapshotAsync(), furnaces);
                 int start = (await File.ReadAllLinesAsync(journalPath, token)).Length;
                 var round = await logistics.ServiceAsync(40, token);
                 var rows = (await File.ReadAllLinesAsync(journalPath, token)).Skip(start).Select(Parse).ToArray();
-                return (round, Measure(rows));
+                return (round, Measure(rows), finished - since);
             }
         }
         finally
@@ -191,8 +213,8 @@ public sealed class SupplyLineQualification(RuntimeSession session)
         }
     }
 
-    /// <summary>Walking measured from move receipts, and the actor's chest transfers, in one logistics round.</summary>
-    public sealed record Travel(double Distance, int Moves, int Takes, int Inserts);
+    /// <summary>Walking measured from move receipts, the takes of plates and every chest transfer in one logistics round.</summary>
+    public sealed record Travel(double Distance, int Moves, int PlateTakes, int Transfers);
 
     /// <summary>
     /// Plates the row's furnaces finished between two photographs, and the growth of every place a plate can be between a furnace and
@@ -209,22 +231,25 @@ public sealed class SupplyLineQualification(RuntimeSession session)
         var movers = smelters.Select(c => c.Entities["output-inserter"])
             .Concat(line.Entities.Where(e => !e.Key.StartsWith("link-", StringComparison.Ordinal) && e.Key != SupplyLinePlanner.DepotChestRole).Select(e => e.Value))
             .ToHashSet(StringComparer.Ordinal);
-        long Finished(FactorySnapshot s) => furnaces.Sum(id => s.Records.Single(r => r.Kind == "work" && r.EntityId == id).Data.GetProperty("productsFinished").GetInt64());
         long Stock(FactorySnapshot s, IEnumerable<string> ids) => ids.Sum(id => FactoryLogistics.Items(s, id).GetValueOrDefault(Plate));
         long Moving(FactorySnapshot s) => s.Records.Where(r => r.Kind == "transit" && movers.Contains(r.EntityId))
             .Sum(r => r.Data.GetProperty("items").TryGetProperty(Plate, out var count) ? count.GetInt64() : 0);
         long rowChests = Stock(after, chests) - Stock(before, chests), transit = Moving(after) - Moving(before);
         long depotGrowth = Stock(after, [depot]) - Stock(before, [depot]);
         long furnaceOutputs = Stock(after, furnaces) - Stock(before, furnaces);
-        return new(Finished(after) - Finished(before), furnaceOutputs + rowChests + transit + depotGrowth, depotGrowth, transit, rowChests);
+        return new(Finished(after, furnaces) - Finished(before, furnaces), furnaceOutputs + rowChests + transit + depotGrowth, depotGrowth, transit, rowChests);
     }
 
-    /// <summary>Distance walked from each move's submission position to its receipt position, and the round's transfers.</summary>
+    /// <summary>Products the furnaces finished in their lifetime, from the native counters of one photograph.</summary>
+    internal static long Finished(FactorySnapshot snapshot, IEnumerable<string> furnaces) => furnaces.Sum(id =>
+        snapshot.Records.Single(r => r.Kind == "work" && r.EntityId == id).Data.GetProperty("productsFinished").GetInt64());
+
+    /// <summary>Distance walked from each move's submission position to its receipt position, plate takes and all transfers.</summary>
     internal static Travel Measure(IReadOnlyList<JsonElement> rows)
     {
         var starts = new Dictionary<string, MapPosition>(StringComparer.Ordinal);
         double distance = 0;
-        int moves = 0, takes = 0, inserts = 0;
+        int moves = 0, plateTakes = 0, transfers = 0;
         foreach (var row in rows)
         {
             var data = row.GetProperty("data");
@@ -234,8 +259,8 @@ public sealed class SupplyLineQualification(RuntimeSession session)
                     string kind = data.GetProperty("kind").GetString()!;
                     if (kind == "move")
                         starts[data.GetProperty("operationId").GetString()!] = data.GetProperty("preconditions").GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
-                    takes += kind == "take" ? 1 : 0;
-                    inserts += kind == "insert" ? 1 : 0;
+                    transfers += kind is "take" or "insert" ? 1 : 0;
+                    plateTakes += kind == "take" && data.GetProperty("args").GetProperty("item").GetString() == Plate ? 1 : 0;
                     break;
                 case "receipt" when starts.Remove(data.GetProperty("operationId").GetString()!, out var start)
                     && data.GetProperty("effects").TryGetProperty("position", out var end):
@@ -244,7 +269,7 @@ public sealed class SupplyLineQualification(RuntimeSession session)
                     break;
             }
         }
-        return new(Math.Round(distance, 2), moves, takes, inserts);
+        return new(Math.Round(distance, 2), moves, plateTakes, transfers);
     }
 
     private static JsonElement Parse(string line)
@@ -261,7 +286,7 @@ public sealed class SupplyLineQualification(RuntimeSession session)
     // Generated chunks paved with grass, an energy interface east, an iron patch sixty tiles west and the construction items. The
     // worn light armor, loaded pistol and twenty spare magazines leave the survival kit nothing to craft from collected plates.
     private const string Prepare = """
-        /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; s.request_to_generate_chunks({-24,0},5); s.force_generate_chunk_requests(); for _,e in pairs(s.find_entities_filtered{area={{-96,-48},{48,48}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-96,48 do for y=-48,48 do tiles[#tiles+1]={name='grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({24,0})); c.health=c.max_health; c.get_main_inventory().clear(); for _,t in pairs{'steam-power','electronics','automation','electric-mining-drill'} do f.technologies[t].researched=true end; local armor=c.get_inventory(defines.inventory.character_armor); armor.clear(); assert(armor.insert{name='light-armor',count=1}==1); local guns=c.get_inventory(defines.inventory.character_guns); guns.clear(); assert(guns.insert{name='pistol',count=1}==1); local ammo=c.get_inventory(defines.inventory.character_ammo); ammo.clear(); assert(ammo.insert{name='firearm-magazine',count=10}==10); local main=c.get_main_inventory(); for name,count in pairs{['electric-mining-drill']=3,['stone-furnace']=3,inserter=10,['iron-chest']=6,['small-electric-pole']=40,['transport-belt']=150,['assembling-machine-1']=1,coal=200,['firearm-magazine']=20} do assert(main.insert{name=name,count=count}==count) end; local source=s.create_entity{name='electric-energy-interface',position={20,0},force=f}; assert(source); source.electric_buffer_size=1000000000; source.power_production=2000000; source.energy=1000000000; assert(s.create_entity{name='small-electric-pole',position={18.5,0.5},force=f}); local ore=0; for x=-62,-49 do for y=-8,7 do assert(s.create_entity{name='iron-ore',position={x+0.5,y+0.5},amount=5000}); ore=ore+1 end end; rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,ore=ore,plates=c.get_item_count('iron-plate'),players=#game.connected_players})
+        /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; s.request_to_generate_chunks({-24,0},5); s.force_generate_chunk_requests(); for _,e in pairs(s.find_entities_filtered{area={{-96,-48},{48,48}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-96,48 do for y=-48,48 do tiles[#tiles+1]={name=(x>=-32 and x<=-29 and y>=-6 and y<=13) and 'water' or 'grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({24,0})); c.health=c.max_health; c.get_main_inventory().clear(); for _,t in pairs{'steam-power','electronics','automation','electric-mining-drill'} do f.technologies[t].researched=true end; local armor=c.get_inventory(defines.inventory.character_armor); armor.clear(); assert(armor.insert{name='light-armor',count=1}==1); local guns=c.get_inventory(defines.inventory.character_guns); guns.clear(); assert(guns.insert{name='pistol',count=1}==1); local ammo=c.get_inventory(defines.inventory.character_ammo); ammo.clear(); assert(ammo.insert{name='firearm-magazine',count=10}==10); local main=c.get_main_inventory(); for name,count in pairs{['electric-mining-drill']=3,['stone-furnace']=3,inserter=10,['iron-chest']=6,['small-electric-pole']=40,['transport-belt']=150,['assembling-machine-1']=1,coal=200,['firearm-magazine']=20} do assert(main.insert{name=name,count=count}==count) end; local source=s.create_entity{name='electric-energy-interface',position={20,0},force=f}; assert(source); source.electric_buffer_size=1000000000; source.power_production=2000000; source.energy=1000000000; assert(s.create_entity{name='small-electric-pole',position={18.5,0.5},force=f}); local ore=0; for x=-62,-49 do for y=-8,7 do assert(s.create_entity{name='iron-ore',position={x+0.5,y+0.5},amount=5000}); ore=ore+1 end end; rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,ore=ore,plates=c.get_item_count('iron-plate'),players=#game.connected_players})
         """;
 
     // Where an entity stands, its direction and, for a crafting machine, its native finished products.
