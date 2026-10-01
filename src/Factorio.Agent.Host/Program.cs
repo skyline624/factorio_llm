@@ -49,7 +49,7 @@ try
           verify-furnace-fleet --session FILE [--item steel-plate|stone-brick]
           verify-electric-extraction --session FILE [--item iron-ore|iron-plate]
           verify-smelting-fuel --session FILE
-          verify-death-recovery --session FILE [--stationary-threat] [--recovery-death]
+          verify-death-recovery --session FILE [--stationary-threat] [--recovery-death] [--danger-zone]
           verify-equipment --session FILE
           verify-retreat --session FILE
           verify-uncovered-retreat --session FILE
@@ -323,7 +323,7 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new DeathRecoveryQualification(session, Option("stationary-threat") is not null,
-                Option("recovery-death") is not null).RunAsync(shutdown.Token) });
+                Option("recovery-death") is not null, Option("danger-zone") is not null).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-equipment":
