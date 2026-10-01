@@ -152,14 +152,19 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
             RequireAi(map);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during exploration clearance.");
+            // A caller's destination is its own choice. Exploration targets keep out of the zones of recent own deaths.
+            IReadOnlyList<NativeDeathTransition>? deaths = destination is not null ? null : game is IDangerZoneReader zones
+                ? await zones.ReadActiveDeathsAsync(map.Scope, map.SurfaceIndex, map.CollectedTick, token) : [];
+            bool Safe(MapPosition position) => deaths is null || !deaths.Any(d => DangerZones.Covers(d, position));
             ResourceMemorySnapshot? memory = game is IResourceMemoryReader reader ? await reader.ReadResourceMemoryAsync(map, token) : null;
-            ResourceSighting? remembered = destination is null ? memory?.Nearest(wanted, catalog, map.Actor.Position) : null;
+            ResourceSighting? remembered = destination is null ? memory?.Nearest(wanted, catalog, map.Actor.Position, Safe) : null;
             ResourceSearchHint? hint = null;
             if (destination is null && remembered is null && memory is not null && wanted.Length > 0)
             {
                 ProductionState known = await new ProductionController(game, journal).ObserveAsync(token);
                 if (known.Scope != map.Scope) throw new InvalidDataException("Actor changed while reading resource search landmarks.");
                 hint = memory.ProcessingAreaHint(wanted, catalog, known.Entities.Select(e => (e.Id, e.Recipe ?? e.PreviousRecipe, e.Position)), map);
+                if (hint is not null && !Safe(hint.Position)) hint = null;
                 if (hint is not null)
                     await journal.AppendAsync("factory-resource-search-hint", new
                     {
@@ -181,10 +186,24 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                     remembered,
                     interpretation = "historical-destination-requires-local-reobservation"
                 }, token);
-            try { return new(planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position, memory?.SurveyedCells), map.CollectedTick); }
+            if (deaths is { Count: > 0 })
+                await journal.AppendAsync("exploration-death-zones", new { map.Scope, map.CollectedTick, wanted, deaths,
+                    radius = DangerZones.Radius }, token);
+            try
+            {
+                return new(planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position,
+                    memory?.SurveyedCells, deaths), map.CollectedTick);
+            }
             catch (ExplorationBlockedException) when (cleared < 16)
             {
                 if (!await ClearTreeAsync(map, catalog, destination, token)) throw;
+            }
+            catch (ExplorationDangerException error)
+            {
+                // Reported, never retried here: the strategic layer chooses another goal or waits for the zones to expire.
+                await journal.AppendAsync("exploration-danger-excluded", new { map.Scope, map.CollectedTick, map.Actor.Position,
+                    wanted, deaths, map.StationaryThreats, error.Message }, token);
+                throw;
             }
         }
     }

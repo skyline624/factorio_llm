@@ -92,6 +92,8 @@ function M.observe(args)
     corpse.id, corpse.deathTick = id, record.deathTick
     corpse.incarnation, corpse.actorUnitNumber = record.incarnation, record.actorUnitNumber
     corpse.surfaceIndex = record.entity.surface.index
+    -- Native prototype lifetime in ticks; 0 means never (the base 2.0.77 character-corpse).
+    corpse.timeToLive = record.entity.prototype.time_to_live
     result.recovery.corpses[#result.recovery.corpses + 1] = corpse
   end
   if not c then return result end

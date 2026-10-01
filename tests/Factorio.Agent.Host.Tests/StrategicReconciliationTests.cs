@@ -138,15 +138,32 @@ public sealed class StrategicReconciliationTests : IDisposable
         Assert.Equal(secondDeath ? 3 : 2, (await ReadMemoryAsync()).Scope.Incarnation);
     }
 
-    private sealed class RecoveryStub(Func<NativeDeathTransition, ActorScope, Task> action) : ICorpseRecovery
+    private sealed class RecoveryStub(Func<NativeDeathTransition, ActorScope, Task> action, CorpseRecoveryResult? result = null) : ICorpseRecovery
     {
         public int Calls;
         public async Task<CorpseRecoveryResult> RunAsync(NativeDeathTransition death, ActorScope scope, CancellationToken token)
         {
             Calls++;
             await action(death, scope);
-            return new(40000, "collected", new Dictionary<string, long>(), new Dictionary<string, long>(), []);
+            return result ?? new(40000, "collected", new Dictionary<string, long>(), new Dictionary<string, long>(), []);
         }
+    }
+
+    [Fact]
+    public async Task RecoveryDeferredByADeathZoneSchedulesItsRetry()
+    {
+        var game = await PrepareAsync(false);
+        game.AfterDeath = true;
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize((await ReadMemoryAsync()) with { PendingJournal = Journal }, Protocol.Json));
+        long retry = 37000 + DangerZones.LifetimeTicks;
+        var recovery = new RecoveryStub((_, _) => Task.CompletedTask, new(40000, "unsafe-corpses-deferred", new Dictionary<string, long>(),
+            new Dictionary<string, long> { ["iron-plate"] = 17 }, ["corpse:17:37000:1"], retry));
+        var next = new NextGoal();
+        await new StrategicCampaignController(game, next, Memory, Path.Combine(directory, "recovery.jsonl"), recovery).RunAsync(1);
+        Assert.Equal(1, recovery.Calls);
+        Assert.Contains("\"automaticRetryTick\":" + retry, next.Previous);
+        // Not due yet: the next goal ran and the retry stays scheduled for the same death.
+        Assert.Equal(new DeferredRecovery(new(1, 37000, 17, 1, new(12, 8)), retry), (await ReadMemoryAsync()).Deferred);
     }
 
     [Fact]
@@ -307,6 +324,62 @@ public sealed class StrategicReconciliationTests : IDisposable
     }
 
     [Fact]
+    public async Task ExplorationRefusedForDangerReachesTheNextDecisionAsItsOwnFailure()
+    {
+        var game = await PrepareAsync(true);
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize((await ReadMemoryAsync()) with { Pending = false }, Protocol.Json));
+        string nextJournal = Path.Combine(directory, "next.jsonl");
+        var runner = new FailingThenNext(async () =>
+        {
+            var journal = new ControllerJournal(nextJournal);
+            await journal.AppendAsync("strategic-context", new { facts = "{\"observedTick\":40001}" }, default);
+            await journal.AppendAsync("strategic-goal", new { category = 1, target = "oil-processing", quantity = 1, unit = 4 }, default);
+        }, new ExplorationDangerException("All 12 exploration frontiers lie within a recent death zone."));
+        await new StrategicCampaignController(game, runner, Memory, nextJournal).RunAsync(2);
+        Assert.Contains("exploration_danger_excluded", runner.Next.Previous);
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DeferredRecoveryRunsOnceItsZonesExpireAndIsKeptUntilThen(bool due)
+    {
+        // Campaign 2026-10-01 (seed 20261002): corpses left in recent death zones must stay recoverable once the zones expire.
+        var game = new Game("terminal") { AfterDeath = true };
+        var deferred = new DeferredRecovery(new NativeDeathTransition(1, 37000, 17, 1, new(12, 8)), due ? 40000 : 90000);
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize(new StrategicMemory(1,
+            Scope with { SessionId = "new-session", Incarnation = 2, Generation = 4 }, 39999, false, "a previous goal", Deferred: deferred),
+            Protocol.Json));
+        var recovery = new RecoveryStub((_, _) => Task.CompletedTask);
+        var next = new NextGoal();
+        await new StrategicCampaignController(game, next, Memory, Journal, recovery).RunAsync(1);
+        Assert.Equal(due ? 1 : 0, recovery.Calls);
+        var memory = await ReadMemoryAsync();
+        Assert.Null(memory.Recovery);
+        Assert.Equal(due ? null : deferred, memory.Deferred);
+        Assert.Contains(due ? "death-recovery-observed" : "a previous goal", next.Previous);
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeferredRecoverySurvivesReconciliationUntilANewDeathSupersedesIt(bool death)
+    {
+        var game = await PrepareAsync(false);
+        game.AfterDeath = death;
+        var deferred = new DeferredRecovery(new NativeDeathTransition(1, 90, 16, 1, new(80, 0)), 90000);
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize((await ReadMemoryAsync()) with { Deferred = deferred }, Protocol.Json));
+        await new StrategicReconciliationController(game, Memory).ReconcileAsync(Journal, afterDeath: death);
+        var memory = await ReadMemoryAsync();
+        // The recovery of the new death covers every known corpse; it is not a death during recovery.
+        Assert.Equal(death ? null : deferred, memory.Deferred);
+        Assert.Equal(death, memory.Recovery is not null);
+        Assert.False(memory.RecoveryDeathObserved);
+    }
+
+    [Fact]
     public async Task LinkedAttemptRejectsAReplacementJournal()
     {
         var game = await PrepareAsync(true);
@@ -405,7 +478,7 @@ public sealed class StrategicReconciliationTests : IDisposable
                 UnsupportedReason: "Synthetic next decision without native mutation"));
         }
     }
-    private sealed class FailingThenNext(Func<Task> prepare) : IStrategicGoalRunner
+    private sealed class FailingThenNext(Func<Task> prepare, Exception? failure = null) : IStrategicGoalRunner
     {
         private bool failed;
         public NextGoal Next { get; } = new();
@@ -414,7 +487,7 @@ public sealed class StrategicReconciliationTests : IDisposable
             if (failed) return await Next.RunOnceAsync(token, previousResult);
             failed = true;
             await prepare();
-            throw new InvalidOperationException("Synthetic known partial craft failure");
+            throw failure ?? new InvalidOperationException("Synthetic known partial craft failure");
         }
     }
     private sealed class Game(string initialOperationId) : IGameClient

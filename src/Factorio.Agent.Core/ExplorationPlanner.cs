@@ -2,11 +2,26 @@ namespace Factorio.Agent.Core;
 
 public sealed class ExplorationBlockedException(string message) : InvalidOperationException(message);
 
-/// <summary>Local frontier selection. Only observed terrain and historical solid resources are remembered.</summary>
+/// <summary>Every remaining exploration target or step enters a recent death zone or the margin of a known stationary threat.</summary>
+public sealed class ExplorationDangerException(string message) : InvalidOperationException(message);
+
+/// <summary>
+/// Local frontier selection. Only observed terrain, historical solid resources and stationary threats seen during this search
+/// are remembered. When exploring (no caller destination), targets and steps keep away from recent death zones, and frontiers
+/// from worms by <see cref="ThreatMargin"/> beyond their range.
+/// </summary>
 public sealed class ExplorationPlanner
 {
+    /// <summary>
+    /// Much wider than the two-tile routing margin: base biters see 30 tiles and nests stand beside worms. On 2026-10-01
+    /// (seed 20261002) exploration steps died 37 to 38 tiles from visible range-25 worms.
+    /// </summary>
+    public const double ThreatMargin = 24;
+    /// <summary>A frontier nearer than this to a hazard boundary costs up to as many extra tiles of walking.</summary>
+    public const double PreferredClearance = 32;
     private readonly HashSet<(int X, int Y)> observed = [];
     private readonly Dictionary<string, SpatialEntity> resources = [];
+    private readonly Dictionary<string, StationaryThreat> threats = [];
     private readonly Dictionary<(int X, int Y), int> visits = [];
     private readonly Dictionary<(int X, int Y), int> frontierAttempts = [];
     private MapPosition? origin;
@@ -14,7 +29,9 @@ public sealed class ExplorationPlanner
     private double frontierDistance;
     private int stalledFrontierSteps;
 
-    public MapPosition Choose(SpatialSnapshot map, string wanted, ProductionCatalog catalog, MapPosition? destination = null, IReadOnlyList<SurveyedCell>? surveyed = null)
+    /// <param name="deaths">Active death zones while exploring; null when <paramref name="destination"/> is the caller's own choice.</param>
+    public MapPosition Choose(SpatialSnapshot map, string wanted, ProductionCatalog catalog, MapPosition? destination = null,
+        IReadOnlyList<SurveyedCell>? surveyed = null, IReadOnlyList<NativeDeathTransition>? deaths = null)
     {
         origin ??= map.Actor.Position;
         foreach (var cell in surveyed ?? []) observed.Add((cell.X, cell.Y));
@@ -22,9 +39,17 @@ public sealed class ExplorationPlanner
             resources.Remove(id);
         foreach (SpatialEntity entity in map.Entities.Where(e => catalog.Mining.ContainsKey(e.Name)))
             resources[entity.Id] = entity;
+        // A remembered worm absent from a current view of its position no longer exists.
+        foreach (string id in threats.Where(p => map.Bounds.Contains(p.Value.Position)).Select(p => p.Key).ToArray())
+            threats.Remove(id);
+        foreach (StationaryThreat threat in map.StationaryThreats ?? []) threats[threat.Id] = threat;
         for (int x = (int)Math.Ceiling(map.Bounds.Min.X / 4); x < map.Bounds.Max.X / 4; x++)
             for (int y = (int)Math.Ceiling(map.Bounds.Min.Y / 4); y < map.Bounds.Max.Y / 4; y++) observed.Add((x, y));
-        MapPosition? known = destination ?? resources.Values.Where(e => catalog.Mining[e.Name].Any(p => p.Name == wanted && p.DeterministicItem))
+        bool exploring = deaths is not null;
+        bool InDeathZone(MapPosition p) => exploring && deaths!.Any(d => DangerZones.Covers(d, p));
+        bool NearThreat(MapPosition p) => exploring && threats.Values.Any(t => p.DistanceTo(t.Position) <= t.Range + ThreatMargin);
+        MapPosition? known = destination ?? resources.Values.Where(e => catalog.Mining[e.Name].Any(p => p.Name == wanted && p.DeterministicItem)
+                && !InDeathZone(e.Position))
             .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).Select(e => e.Position).FirstOrDefault();
         var field = new SpatialCollisionField(map);
         if (known is not null) frontierGoal = null;
@@ -33,7 +58,7 @@ public sealed class ExplorationPlanner
             double distance = frontierGoal.DistanceTo(map.Actor.Position);
             stalledFrontierSteps = frontierDistance - distance < 1 ? stalledFrontierSteps + 1 : 0;
             frontierDistance = distance;
-            if (distance > 8 && stalledFrontierSteps < 4
+            if (distance > 8 && stalledFrontierSteps < 4 && !InDeathZone(frontierGoal) && !NearThreat(frontierGoal)
                 && (!map.Bounds.Contains(frontierGoal) || field.Walkable(frontierGoal))) known = frontierGoal;
             else frontierGoal = null;
         }
@@ -43,31 +68,47 @@ public sealed class ExplorationPlanner
             foreach (var cell in observed)
                 foreach (var neighbor in new[] { (cell.X + 1, cell.Y), (cell.X - 1, cell.Y), (cell.X, cell.Y + 1), (cell.X, cell.Y - 1) })
                     if (!observed.Contains(neighbor) && frontierAttempts.GetValueOrDefault(neighbor) < 4) frontier.Add(neighbor);
+            if (frontier.Count == 0) throw new InvalidOperationException("Exploration exhausted its attempted frontiers.");
+            var safe = frontier.Where(p => !InDeathZone(Center(p)) && !NearThreat(Center(p))).ToArray();
+            if (safe.Length == 0)
+                throw new ExplorationDangerException($"All {frontier.Count} exploration frontiers lie within a recent death zone or "
+                    + $"{ThreatMargin} tiles beyond a known stationary threat's range; this local refusal does not prove the resource absent.");
             // Prefer nearby frontiers while retaining a modest home-distance cost. Pure nearest
             // selection drifts along one axis when tile rounding makes that border slightly nearer.
-            var selected = frontier.OrderBy(p => new MapPosition(p.X * 4, p.Y * 4).DistanceTo(map.Actor.Position)
-                    + 0.25 * new MapPosition(p.X * 4, p.Y * 4).DistanceTo(origin))
-                .ThenBy(p => new MapPosition(p.X * 4, p.Y * 4).DistanceTo(origin)).ThenBy(p => p.Y).ThenBy(p => p.X).FirstOrDefault();
-            if (frontier.Count == 0) throw new InvalidOperationException("Exploration exhausted its attempted frontiers.");
-            known = new(selected.X * 4, selected.Y * 4);
+            // Frontiers just outside a hazard cost extra walking, so farther safe ones can win.
+            var selected = safe.OrderBy(p => Center(p).DistanceTo(map.Actor.Position) + 0.25 * Center(p).DistanceTo(origin)
+                    + Math.Max(0, PreferredClearance - Clearance(Center(p))))
+                .ThenBy(p => Center(p).DistanceTo(origin)).ThenBy(p => p.Y).ThenBy(p => p.X).First();
+            known = Center(selected);
             frontierGoal = known;
             frontierDistance = known.DistanceTo(map.Actor.Position);
             stalledFrontierSteps = 0;
             frontierAttempts[selected] = frontierAttempts.GetValueOrDefault(selected) + 1;
         }
+        bool towardFrontier = known == frontierGoal;
         var candidates = new List<(MapPosition Point, double Score, (int, int) Cell)>();
+        int hazardous = 0;
         for (int x = (int)Math.Ceiling(map.Bounds.Min.X / 4) + 1; x < map.Bounds.Max.X / 4 - 1; x++)
             for (int y = (int)Math.Ceiling(map.Bounds.Min.Y / 4) + 1; y < map.Bounds.Max.Y / 4 - 1; y++)
             {
                 var point = new MapPosition(x * 4, y * 4);
                 double distance = point.DistanceTo(map.Actor.Position);
                 if (distance is < 16 or > 28 || !field.Walkable(point)) continue;
+                if (exploring && (deaths!.Any(d => Enters(map, point, d.Position, DangerZones.Radius))
+                    || towardFrontier && threats.Values.Any(t => Enters(map, point, t.Position, t.Range + ThreatMargin))))
+                {
+                    hazardous++;
+                    continue;
+                }
                 int gain = 0;
                 for (int dx = -7; dx <= 7; dx++)
                     for (int dy = -7; dy <= 7; dy++) if (!observed.Contains((x + dx, y + dy))) gain++;
                 double score = known is null ? gain - distance * 0.1 : -point.DistanceTo(known) * 5 + gain * 0.1;
                 candidates.Add((point, score - visits.GetValueOrDefault((x, y)) * 100, (x, y)));
             }
+        if (candidates.Count == 0 && hazardous > 0)
+            throw new ExplorationDangerException($"All {hazardous} local exploration steps enter a recent death zone or "
+                + $"{ThreatMargin} tiles beyond a known stationary threat's range.");
         bool searchBudgetExceeded = false;
         foreach (var candidate in candidates.OrderByDescending(c => c.Score).ThenBy(c => c.Point.Y).ThenBy(c => c.Point.X))
         {
@@ -82,5 +123,20 @@ public sealed class ExplorationPlanner
         }
         if (searchBudgetExceeded) throw new InvalidOperationException("Exploration route search exceeded its budget; reachability remains unknown.");
         throw new ExplorationBlockedException("No reachable exploration frontier in the current collision map.");
+
+        // Distance from a point to the nearest hazard boundary; negative inside.
+        double Clearance(MapPosition p) => !exploring ? double.PositiveInfinity
+            : deaths!.Select(d => p.DistanceTo(d.Position) - DangerZones.Radius)
+                .Concat(threats.Values.Select(t => p.DistanceTo(t.Position) - t.Range - ThreatMargin))
+                .DefaultIfEmpty(double.PositiveInfinity).Min();
+    }
+
+    private static MapPosition Center((int X, int Y) cell) => new(cell.X * 4, cell.Y * 4);
+
+    // A hazard may be left, never entered: an actor already inside may only step farther from its centre.
+    private static bool Enters(SpatialSnapshot map, MapPosition point, MapPosition centre, double radius)
+    {
+        double from = map.Actor.Position.DistanceTo(centre), to = point.DistanceTo(centre);
+        return to <= radius && !(from <= radius && to > from);
     }
 }

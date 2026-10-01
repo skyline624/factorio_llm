@@ -106,7 +106,9 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
             throw new InvalidDataException("Strategic memory or journal changed during reconciliation.");
         await LocalJson.WriteAsync(memoryPath, new StrategicMemory(1, scope, after.Tick, false, feedback,
             Recovery: death ?? memory.Recovery,
-            RecoveryDeathObserved: memory.RecoveryDeathObserved || afterDeath && memory.Recovery is not null), token);
+            RecoveryDeathObserved: memory.RecoveryDeathObserved || afterDeath && memory.Recovery is not null,
+            // The recovery of a new death covers every known corpse, including those deferred earlier.
+            Deferred: death is null ? memory.Deferred : null), token);
         return new(reportPath, audit.Submissions.Count, after.Tick);
 
         // Receipts are evicted oldest first. While the oldest retained acceptance precedes this attempt,

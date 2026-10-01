@@ -4,8 +4,9 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
+/// <summary>A recovery outcome. RetryTick is when the first corpse left in a recent death zone becomes approachable.</summary>
 public sealed record CorpseRecoveryResult(long Tick, string Outcome, IReadOnlyDictionary<string, long> Collected,
-    IReadOnlyDictionary<string, long> Remaining, IReadOnlyList<string> CorpseIds);
+    IReadOnlyDictionary<string, long> Remaining, IReadOnlyList<string> CorpseIds, long? RetryTick = null);
 
 public interface ICorpseRecovery
 {
@@ -15,6 +16,9 @@ public interface ICorpseRecovery
 /// <summary>Moves only existing items from engine-proven corpses; routes and defense remain under the actor lease.</summary>
 public sealed class CorpseRecoveryController(IGameClient game, IControllerJournal journal) : ICorpseRecovery
 {
+    /// <summary>The native observation maximum, two chunks: always inside the character's guaranteed 5x5-chunk sight.</summary>
+    public const int InspectionRadius = 64;
+
     public async Task<CorpseRecoveryResult> RunAsync(NativeDeathTransition death, ActorScope scope, CancellationToken token)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -24,6 +28,9 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
         ProductionCatalog? catalog = null;
         var collected = new Dictionary<string, long>(StringComparer.Ordinal);
         var unavailable = new HashSet<(string Corpse, string Item)>();
+        // Verdicts of this attempt only: a later attempt observes the zones again.
+        var verdicts = new Dictionary<NativeDeathTransition, string>();
+        IReadOnlyList<NativeDeathTransition> zones = [];
         long lastTick = death.DeathTick;
         for (int step = 0; step < 256; step++)
         {
@@ -33,17 +40,33 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             var actor = data.GetProperty("agent");
             var corpses = ReadObservedCorpses(response, death, scope, lastTick);
             lastTick = response.Tick;
-            if (step == 0) await journal.AppendAsync("corpse-recovery-start", new
-                { scope, response.Tick, death, actorMainInventory = actor.GetProperty("inventory"), corpseIds = corpses.Select(c => c.Id) }, token);
+            if (step == 0)
+            {
+                zones = game is IDangerZoneReader reader
+                    ? await reader.ReadActiveDeathsAsync(scope, death.SurfaceIndex, response.Tick, token) : [];
+                await journal.AppendAsync("corpse-recovery-start", new
+                {
+                    scope, response.Tick, death, actorMainInventory = actor.GetProperty("inventory"), corpseIds = corpses.Select(c => c.Id),
+                    activeDeathZones = zones
+                }, token);
+            }
             var remaining = corpses.SelectMany(c => c.Items).GroupBy(p => p.Key, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => checked(g.Sum(p => p.Value)), StringComparer.Ordinal);
             var position = actor.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
-            var selected = corpses.OrderBy(c => c.Position.DistanceTo(position)).ThenBy(c => c.Id, StringComparer.Ordinal)
+            // A corpse in a recent death zone, or behind one on the straight way, waits unless this attempt saw the zone free.
+            NativeDeathTransition[] Blocking(Corpse corpse) => zones.Where(z => verdicts.GetValueOrDefault(z) != "clear"
+                && (DangerZones.Covers(z, corpse.Position) || DangerZones.Crosses(z, position, corpse.Position))).ToArray();
+            var holding = corpses.Where(c => c.Items.Values.Any(n => n > 0)).ToArray();
+            foreach (var zone in holding.SelectMany(Blocking).Distinct().Where(z => !verdicts.ContainsKey(z)).ToArray())
+                verdicts[zone] = await InspectAsync(zone, position, scope, lastTick, token);
+            var blocked = holding.Where(c => Blocking(c).Length > 0).ToArray();
+            var selected = corpses.Except(blocked).OrderBy(c => c.Position.DistanceTo(position)).ThenBy(c => c.Id, StringComparer.Ordinal)
                 .SelectMany(c => c.Items.Where(p => p.Value > 0 && !unavailable.Contains((c.Id, p.Key)))
                     .OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => (Corpse: c, Item: p.Key, Count: p.Value)))
                 .FirstOrDefault();
             if (selected.Corpse is null)
             {
+                if (blocked.Length > 0) return await DeferBlockedAsync(response.Tick, blocked, Blocking, verdicts, collected, remaining, corpses, token);
                 var result = new CorpseRecoveryResult(response.Tick,
                     remaining.Values.Any(n => n > 0) ? "items-deferred" : corpses.Count == 0 ? "no-surviving-corpse" : "collected",
                     collected, remaining, corpses.Select(c => c.Id).ToArray());
@@ -97,6 +120,65 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
         return result;
     }
 
+    // One normal observation from where the actor stands; it never walks closer to look.
+    private async Task<string> InspectAsync(NativeDeathTransition zone, MapPosition position, ActorScope scope, long earliestTick,
+        CancellationToken token)
+    {
+        if (position.DistanceTo(zone.Position) + DangerZones.Radius > InspectionRadius)
+        {
+            await journal.AppendAsync("danger-zone-inspection", new
+            {
+                zone, verdict = "out-of-sight", observer = position, distance = position.DistanceTo(zone.Position), observed = false
+            }, token);
+            return "out-of-sight";
+        }
+        var response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = InspectionRadius, limit = 200 }), token);
+        var safety = SafetyObservation.Parse(response);
+        if (safety.Scope != scope || safety.Tick < earliestTick || !safety.Alive || safety.Position is null)
+            throw new InvalidDataException("Danger zone inspection lost its living actor or native scope.");
+        var types = response.Data.GetProperty("enemies") is { ValueKind: JsonValueKind.Array } nodes
+            ? nodes.EnumerateArray().ToDictionary(n => n.GetProperty("id").GetString()!, n => n.GetProperty("type").GetString() ?? "",
+                StringComparer.Ordinal)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+        double radius = response.Data.GetProperty("coverage").GetProperty("radius").GetDouble();
+        string verdict = DangerZones.Inspect(zone, safety.Position, radius, safety.LocalEnemiesComplete,
+            safety.Enemies.Select(e => (types[e.Id], e.Position)));
+        await journal.AppendAsync("danger-zone-inspection", new
+        {
+            zone, verdict, safety.Tick, observer = safety.Position, distance = safety.Position.DistanceTo(zone.Position), observed = true,
+            observedRadius = radius, enemiesComplete = safety.LocalEnemiesComplete,
+            visibleEnemiesInZone = safety.Enemies.Where(e => DangerZones.Covers(zone, e.Position)).Select(e => types[e.Id])
+                .GroupBy(t => t, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal)
+        }, token);
+        return verdict;
+    }
+
+    // Nothing is approached: the retry tick is when the zones holding the first corpse expire. Character corpses of the base
+    // game never expire (time_to_live 0); a finite native lifetime ending before that tick is journaled as an accepted loss.
+    private async Task<CorpseRecoveryResult> DeferBlockedAsync(long tick, IReadOnlyList<Corpse> blocked,
+        Func<Corpse, NativeDeathTransition[]> blocking, IReadOnlyDictionary<NativeDeathTransition, string> verdicts,
+        IReadOnlyDictionary<string, long> collected, IReadOnlyDictionary<string, long> remaining, IReadOnlyList<Corpse> corpses,
+        CancellationToken token)
+    {
+        var waits = blocked.Select(c => (Corpse: c, Zones: blocking(c), Free: blocking(c).Max(DangerZones.Expires))).ToArray();
+        long retry = waits.Min(w => w.Free);
+        await journal.AppendAsync("corpse-recovery-danger-deferral", new
+        {
+            tick, retryTick = retry, radius = DangerZones.Radius, lifetimeTicks = DangerZones.LifetimeTicks,
+            corpses = waits.Select(w => new
+            {
+                w.Corpse.Id, w.Corpse.Position, w.Corpse.DeathTick, w.Corpse.TimeToLive, approachableTick = w.Free,
+                corpseExpiresTick = w.Corpse.TimeToLive is > 0 ? w.Corpse.DeathTick + w.Corpse.TimeToLive : null,
+                lostBeforeApproach = w.Corpse.TimeToLive is > 0 && w.Corpse.DeathTick + w.Corpse.TimeToLive <= w.Free
+                    ? w.Corpse.Items.Where(p => p.Value > 0).ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal) : null,
+                zones = w.Zones.Select(z => new { z.DeathTick, z.Position, verdict = verdicts[z], expiresTick = DangerZones.Expires(z) })
+            })
+        }, token);
+        var result = new CorpseRecoveryResult(tick, "unsafe-corpses-deferred", collected, remaining, corpses.Select(c => c.Id).ToArray(), retry);
+        await journal.AppendAsync("corpse-recovery-result", result, token);
+        return result;
+    }
+
     private static IReadOnlyList<Corpse> ReadObservedCorpses(GameResponse response, NativeDeathTransition death,
         ActorScope scope, long earliestTick)
     {
@@ -112,7 +194,8 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
         return ReadCorpses(data.GetProperty("recovery").GetProperty("corpses"), death, response.Tick);
     }
 
-    private sealed record Corpse(string Id, MapPosition Position, IReadOnlyDictionary<string, long> Items);
+    /// <summary><paramref name="TimeToLive"/> is the native prototype lifetime in ticks, 0 for never; absent from older mods.</summary>
+    private sealed record Corpse(string Id, MapPosition Position, IReadOnlyDictionary<string, long> Items, long DeathTick, long? TimeToLive);
 
     private static IReadOnlyList<Corpse> ReadCorpses(JsonElement value, NativeDeathTransition death, long tick)
     {
@@ -124,7 +207,8 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             long incarnation = node.GetProperty("incarnation").GetInt64();
             long deathTick = node.GetProperty("deathTick").GetInt64();
             long unit = node.GetProperty("actorUnitNumber").GetInt64();
-            if (incarnation < 1 || incarnation > death.Incarnation || deathTick < 0 || deathTick > tick || unit < 1
+            long? lifetime = node.TryGetProperty("timeToLive", out var ttl) ? ttl.GetInt64() : null;
+            if (incarnation < 1 || incarnation > death.Incarnation || deathTick < 0 || deathTick > tick || unit < 1 || lifetime < 0
                 || !id.StartsWith($"corpse:{unit}:{deathTick}:", StringComparison.Ordinal)
                 || result.Any(c => c.Id == id)) throw new InvalidDataException("Invalid native corpse provenance.");
             if (node.GetProperty("surfaceIndex").GetInt32() != death.SurfaceIndex)
@@ -132,7 +216,7 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             var items = node.GetProperty("inventories").GetProperty("corpse").GetProperty("items")
                 .Deserialize<Dictionary<string, long>>(Protocol.Json)!;
             if (items.Values.Any(n => n < 0)) throw new InvalidDataException("Negative native corpse stock.");
-            result.Add(new(id, node.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!, items));
+            result.Add(new(id, node.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!, items, deathTick, lifetime));
         }
         return result;
     }

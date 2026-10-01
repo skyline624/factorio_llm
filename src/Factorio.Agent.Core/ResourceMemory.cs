@@ -60,7 +60,8 @@ public sealed record ResourceMemorySnapshot(string WorldId, int SurfaceIndex, lo
             .Select(e => new ResourceSearchHint(e.Id, e.Recipe!, e.Position)).FirstOrDefault();
     }
 
-    public ResourceSighting? Nearest(string item, ProductionCatalog catalog, MapPosition from) => Resources
-        .Where(r => catalog.Mining.TryGetValue(r.Name, out var products) && products.Any(p => p.Name == item && p.DeterministicItem))
+    public ResourceSighting? Nearest(string item, ProductionCatalog catalog, MapPosition from, Func<MapPosition, bool>? allowed = null) => Resources
+        .Where(r => catalog.Mining.TryGetValue(r.Name, out var products) && products.Any(p => p.Name == item && p.DeterministicItem)
+            && (allowed is null || allowed(r.Position)))
         .OrderBy(r => r.Position.DistanceTo(from)).ThenByDescending(r => r.ObservedTick).FirstOrDefault();
 }
