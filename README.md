@@ -86,6 +86,8 @@ Elle observe les ennemis visibles dans la portée de l'arme à balles équipée,
 
 `perimeter-defense --session $sessionFile` entoure le cœur connu de l'usine de nids de tourelles espacés selon la portée native, protégés par des murs extérieurs, avec des ouvertures dont la traversée est prouvée ; chaque tour de logistique reconstruit ensuite les défenses détruites et réarme les tourelles. `verify-perimeter` le qualifie en headless dans une **fixture** préparée, avec une attaque réelle de petits biteurs. Voir le [périmètre défensif](docs/perimeter-defense.md) et ses limites.
 
+Entre les objectifs, `run-campaign` détecte les attaques sur chaque îlot d'industrie (pertes, dégâts, ennemis visibles, combats du réflexe), équipe le personnage (meilleure armure, arme et munitions fabriquées depuis le stock) et pose jusqu'à quatre nids de tourelles sur l'îlot attaqué, murs seulement s'ils sont en stock ; `attack-response` en exécute un tour et `verify-attack-response` le qualifie dans une **fixture**. Voir la [réponse aux attaques](docs/attack-response.md).
+
 Pour lire une photographie complète des inventaires et du transit de l'usine **connue**, collectée à un tick unique :
 
 ```powershell

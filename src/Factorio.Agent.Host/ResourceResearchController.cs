@@ -49,6 +49,8 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
             ResourceMemorySnapshot? memory = game is IResourceMemoryReader reader ? await reader.ReadResourceMemoryAsync(map, token) : null;
             var historical = memory?.Resources.Where(r => r.Name == resourceName && !deferred.Contains(r.EntityId))
                 .OrderBy(r => r.Position.DistanceTo(map.Actor.Position)).FirstOrDefault();
+            // Run 16 (2026-10-01, seed 20261002): the crude-oil search met a pack far east while the actor was unarmored.
+            await new SurvivalKitController(game, journal).BeforeTripAsync("resource-research-search", token);
             var frontier = await controller.FindExplorationWaypointAsync(exploration, catalog, "", historical?.Position, token);
             await journal.AppendAsync("resource-research-search", new { resourceName, historical, frontier,
                 deferredObservedResources = unsuitable }, token);

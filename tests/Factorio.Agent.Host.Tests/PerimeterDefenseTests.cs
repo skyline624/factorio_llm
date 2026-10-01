@@ -50,6 +50,30 @@ public sealed class PerimeterDefenseTests
     }
 
     [Fact]
+    public void AClusterRingProtectsItsBandsAndMemberEntitiesOnly()
+    {
+        var near = new FactoryZone(1, new(-10, -4), 8, 3, 12);
+        var far = new FactoryZone(2, new(200, 200), 8, 3, 12);
+        var state = new FactoryState(1, "world", [near, far], []);
+        var map = FactoryMaps.Grass(40, [At("machine-1", "assembling-machine-1", -8.5, -2.5, 1.2), At("furnace-1", "stone-furnace", 10, 10, .7),
+            At("furnace-2", "stone-furnace", -20, 10, .7)]);
+        var cluster = new IndustryCluster("cluster-1", new(new(-12, -6), new(16, 13)), ["machine-1", "furnace-1", "zone-1"]);
+        Assert.Equal(new[] { near.Box, map.Entities[0].Bounds, map.Entities[1].Bounds }, PerimeterDefenseController.ClusterBoxes(cluster, state, map));
+    }
+
+    [Fact]
+    public void AnAttackResponseBuildsTheNestsCoveringTheAttackedEntitiesFirst()
+    {
+        // Run 16 (2026-10-01, seed 20261002): three deaths inside the base where 3 turrets covered 61 of 151 industrial anchors.
+        PerimeterNest Nest(int index, double x, double y) => new(index, new("turret", "gun-turret", new(x, y), 0), [], new(new(x - 1, y - 1), new(x + 1, y + 1)));
+        PerimeterNest[] nests = [Nest(0, -20, -20), Nest(1, 0, -20), Nest(2, 20, -20), Nest(3, 20, 20), Nest(4, -20, 20)];
+        var focus = new MapPosition[] { new(18, 25), new(22, 30) };
+        Assert.Equal(new[] { 3, 4, 2, 1, 0 }, PerimeterDefenseController.Prioritize(nests, focus, new(0, 0), 18).Select(n => n.Index));
+        // Without an attack the ring is built from the nest nearest the actor, going round.
+        Assert.Equal(new[] { 2, 3, 4, 0, 1 }, PerimeterDefenseController.Prioritize(nests, [], new(19, -19), 18).Select(n => n.Index));
+    }
+
+    [Fact]
     public void OnlyUnbuiltOrDestroyedRolesOfThePlannedRingRemain()
     {
         var turret = new PlannedEntity("turret", "gun-turret", new(-10, -10), 0);

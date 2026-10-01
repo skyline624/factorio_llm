@@ -63,6 +63,7 @@ public sealed class SteamPowerController(IGameClient game, IControllerJournal jo
                 plan = new SteamPowerPlanner().Find(map, equipment);
                 if (plan is not null) break;
             }
+            await new SurvivalKitController(game, journal).BeforeTripAsync("power-exploration", token);
             ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, "", approachingFactory ? factoryAnchor : null, token);
             await journal.AppendAsync("power-exploration", new { next.CollectedTick, frontier = next.Position, approachingFactory }, token);
             await controller.NavigateAsync(next.Position, cancellationToken: token);
@@ -147,6 +148,7 @@ public sealed class SteamPowerController(IGameClient game, IControllerJournal jo
                     await controller.NavigateAsync(destination, distance, token);
                     return;
                 }
+                await new SurvivalKitController(game, journal).BeforeTripAsync("power-travel", token);
                 ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
                 await controller.NavigateAsync(next.Position, cancellationToken: token);
             }

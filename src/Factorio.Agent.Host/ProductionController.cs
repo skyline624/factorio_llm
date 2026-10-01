@@ -125,6 +125,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     await SmeltAsync(step, state, catalog, map);
                     break;
                 case "unavailable":
+                    await new SurvivalKitController(game, journal).BeforeTripAsync("resource-search", deadline.Token);
                     ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, step.Item, token: deadline.Token);
                     await journal.AppendAsync("exploration-frontier", new { step.Item, frontier = next.Position, next.CollectedTick }, deadline.Token);
                     await controller.NavigateAsync(next.Position, cancellationToken: deadline.Token);
@@ -153,6 +154,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     await controller.NavigateAsync(position, distance, deadline.Token);
                     return;
                 }
+                await new SurvivalKitController(game, journal).BeforeTripAsync("production-travel", deadline.Token);
                 ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, "", position, deadline.Token);
                 await journal.AppendAsync("travel-segment", new { position, waypoint = next.Position, next.CollectedTick }, deadline.Token);
                 await controller.NavigateAsync(next.Position, cancellationToken: deadline.Token);

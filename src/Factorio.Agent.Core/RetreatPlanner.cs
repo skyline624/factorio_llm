@@ -38,9 +38,23 @@ public sealed class RetreatPlanner
                 || state.Enemies.Count >= OutnumberedEnemies && state.Health <= maximum * .75)
             || !state.Weapon.Ready && EquipmentPolicy.Select(state) is null);
 
+    /// <summary>
+    /// Outnumbered but still healthy beside an observed loaded turret it is not yet covered by: reach the turret before fighting.
+    /// On 2026-10-01 (seed 20261002) the pistol-armed actor went from full health to death in about seven seconds against
+    /// packs; once hurt, the biters outran its retreat. Only turret refuges are tried in this case: a local escape does not
+    /// outrun biters, so without a reachable refuge the actor keeps fighting.
+    /// </summary>
+    public static bool SeeksCover(SafetyObservation state) => state.Alive && state.ControlMode == "ai" && !state.StopUnconfirmed
+        && state.Health > 0 && state.Position is { } position && state.LocalEnemiesComplete && state.Enemies.Count >= OutnumberedEnemies
+        && state.Defenses is { Count: > 0 } refuges && !refuges.Any(r => position.DistanceTo(r.Position) <= CoverRadius(r));
+
+    /// <summary>Destinations lie in the inner half of a turret's native range, at most twelve tiles from it.</summary>
+    public static double CoverRadius(DefensiveRefuge refuge) => Math.Min(refuge.Range * .5, 12);
+
     public RetreatPlan Find(SafetyObservation state, SpatialSnapshot map, CancellationToken token = default)
     {
-        if (!Needed(state)) return new("not-needed");
+        bool needed = Needed(state);
+        if (!needed && !SeeksCover(state)) return new("not-needed");
         if (map.Scope != state.Scope || map.CollectedTick < state.Tick || map.CollectedTick - state.Tick > 60
             || map.Actor.ControlMode != "ai" || map.Actor.Position.DistanceTo(state.Position!) > .5)
             throw new InvalidDataException("Retreat geometry no longer matches the current native safety observation.");
@@ -55,7 +69,7 @@ public sealed class RetreatPlanner
         {
             var entity = map.Entities.SingleOrDefault(e => e.Id == refuge.Id);
             if (entity is null || map.Prototypes[entity.Name].Type != "ammo-turret" || entity.Position != refuge.Position) continue;
-            double radius = Math.Min(refuge.Range * .5, 12);
+            double radius = CoverRadius(refuge);
             for (int x = (int)Math.Ceiling(refuge.Position.X - radius); x <= Math.Floor(refuge.Position.X + radius); x++)
                 for (int y = (int)Math.Ceiling(refuge.Position.Y - radius); y <= Math.Floor(refuge.Position.Y + radius); y++)
                 {
@@ -68,8 +82,9 @@ public sealed class RetreatPlanner
         // A local escape is useful without turret coverage and when no observed turret can be reached in time. It proves
         // increased separation on observed terrain, not safety from pursuit or hidden enemies. On 2026-10-01 (seed 20261002)
         // escapes were only tried when no turret existed anywhere: routes to distant turrets spent the budget and the actor died.
+        // A healthy actor that only seeks cover never escapes: biters outrun it, so it fights instead.
         var escapes = new List<(string? RefugeId, MapPosition Destination, double Cost)>();
-        for (int x = (int)Math.Ceiling(start.X - 12); x <= Math.Floor(start.X + 12); x++)
+        for (int x = (int)Math.Ceiling(start.X - 12); needed && x <= Math.Floor(start.X + 12); x++)
             for (int y = (int)Math.Ceiling(start.Y - 12); y <= Math.Floor(start.Y + 12); y++)
             {
                 var point = new MapPosition(x, y);

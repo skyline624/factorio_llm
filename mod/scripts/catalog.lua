@@ -1,5 +1,6 @@
 local U = require("scripts.util")
 local Actor = require("scripts.actor")
+local Weapons = require("scripts.weapons")
 local M = {}
 
 local function page(items, args)
@@ -67,7 +68,7 @@ function M.production()
   local c = Actor.get()
   U.check(c ~= nil, "actor_dead", "Production catalog requires a living character")
   local result = {scope = Actor.scope(), collectedTick = game.tick, recipes = {}, items = {}, mining = {}, miningSourceTypes = {}, machines = {}, assemblers = {}, turrets = {},
-    handCategories = c.prototype.crafting_categories}
+    guns = {}, armors = {}, handCategories = c.prototype.crafting_categories}
   for name, recipe in pairs(c.force.recipes) do
     if not recipe.hidden then
       result.recipes[#result.recipes + 1] = {name = name, enabled = recipe.enabled, category = recipe.category,
@@ -82,6 +83,18 @@ function M.production()
       stackSize = item.stack_size}
     if item.type == "ammo" then
       result.items[name].ammoCategory, result.items[name].magazineSize = item.ammo_category.name, item.magazine_size
+      result.items[name].roundDamage = Weapons.round_damage(item)
+    end
+    -- Native hand-gun and armor data let C# choose the actor's survival kit without a hard-coded ranking.
+    if item.type == "gun" and item.attack_parameters then
+      local attack = item.attack_parameters
+      result.guns[name] = {range = attack.range, cooldown = attack.cooldown, damageModifier = attack.damage_modifier or 1,
+        ammoCategories = U.copy(attack.ammo_categories or {}), minRange = attack.min_range or 0, projectile = attack.type == "projectile"}
+    end
+    if item.type == "armor" then
+      local physical = item.resistances and item.resistances.physical
+      result.armors[name] = {physicalDecrease = physical and physical.decrease or 0, physicalPercent = physical and physical.percent or 0,
+        inventoryBonus = item.get_inventory_size_bonus("normal")}
     end
     local entity = item.place_result
     if entity and entity.type == "ammo-turret" and not entity.electric_energy_source_prototype then
