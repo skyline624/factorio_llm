@@ -335,6 +335,14 @@ public sealed class StrategicReconciliationTests : IDisposable
     }
 
     [Fact]
+    public void TheReceiptWindowProofIsAnAllowedNativeAction()
+    {
+        // Campaign 2026-10-01 (seed 20261002): the real client refused "receipt_window" ("Action is not allowed."), which the
+        // test fakes never checked, so the proof that an unknown submission never reached the engine stopped the run.
+        Assert.Contains("receipt_window", Protocol.Actions);
+    }
+
+    [Fact]
     public async Task ASubmissionAfterTheEnginesLastJournaledOperationIsProvenAbsentToo()
     {
         // Campaign 2026-10-01 (seed 20261002): a move cancelled before sending followed a journaled completed move.

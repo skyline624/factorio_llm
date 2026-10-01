@@ -16,7 +16,7 @@ public static class Protocol
     {
         "hello", "observe", "factory_snapshot", "spatial", "validate_placement", "research_state", "rocket_state",
         "submit", "operation", "cancel", "recipes", "technologies", "production_catalog", "mark_fixture", "prepare_checkpoint",
-        "power_state"
+        "power_state", "receipt_window"
     };
 
     public static JsonElement ToElement<T>(T value) => JsonSerializer.SerializeToElement(value, Json);
