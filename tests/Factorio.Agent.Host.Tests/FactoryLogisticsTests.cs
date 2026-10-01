@@ -110,6 +110,18 @@ public sealed class FactoryLogisticsTests
         Assert.DoesNotContain(surplus, s => s.Item == "wood");
     }
 
+    [Fact]
+    public void AnEmptyBagEncodedAsAnEmptyObjectLeavesEveryUsableSlotFree()
+    {
+        // Campaign 2026-10-01 (seed 20261002): after a death the respawned actor's empty "stacks" list arrived as {} and
+        // every maintenance round between goals failed on it.
+        static FactorySnapshot Bag(object stacks) => new("snapshot", Scope, 100, 200, Protocol.ToElement(new { }), [
+            new("actor", "entity", "actor", "character", Protocol.ToElement(new { role = "actor", type = "character", mainInventoryId = "main" })),
+            new("main", "inventory", "actor", "main", Protocol.ToElement(new { role = "actor", items = new { }, usableSlots = 80, stacks }))]);
+        Assert.Equal(80, FactoryLogistics.FreeSlots(Bag(new { })));
+        Assert.Equal(78, FactoryLogistics.FreeSlots(Bag(new object[] { new { name = "coal", count = 50 }, new { name = "wood", count = 3 } })));
+    }
+
     private static FactoryCell Assembler(string id, string recipe) => new(id, 1, new(0, 0, true), "assembler", "assembling-machine-1", recipe,
         new Dictionary<string, string> { ["machine"] = id, ["input-chest"] = id + "-in", ["output-chest"] = id + "-out" }, "ready", 1);
 

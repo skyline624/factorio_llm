@@ -316,14 +316,18 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         Func<string, int> stackSize) => carried.Select(p => (Item: p.Key, Surplus: p.Value - cap(p.Key))).Where(p => p.Surplus > 0)
             .OrderByDescending(p => (double)p.Surplus / stackSize(p.Item)).ThenBy(p => p.Item, StringComparer.Ordinal).ToArray();
 
-    /// <summary>Free slots of the actor's main inventory in the photograph; unknown slots never trigger a deposit.</summary>
+    /// <summary>
+    /// Free slots of the actor's main inventory in the photograph; unknown slots never trigger a deposit. The mod encodes an
+    /// empty Lua list as an empty object: on 2026-10-01 (seed 20261002) the empty bag of a respawned actor failed every
+    /// maintenance round between goals.
+    /// </summary>
     internal static int FreeSlots(FactorySnapshot snapshot)
     {
         var actor = snapshot.Records.Single(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "actor");
         string main = actor.Data.GetProperty("mainInventoryId").GetString()!;
         var inventory = snapshot.Records.Single(r => r.Id == main && r.Kind == "inventory");
-        return inventory.Data.TryGetProperty("usableSlots", out var usable) && inventory.Data.TryGetProperty("stacks", out var stacks)
-            ? usable.GetInt32() - stacks.GetArrayLength() : int.MaxValue;
+        if (!inventory.Data.TryGetProperty("usableSlots", out var usable) || !inventory.Data.TryGetProperty("stacks", out var stacks)) return int.MaxValue;
+        return usable.GetInt32() - (stacks.ValueKind == JsonValueKind.Array ? stacks.GetArrayLength() : 0);
     }
 
     /// <summary>
