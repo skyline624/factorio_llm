@@ -6,7 +6,8 @@ namespace Factorio.Agent.Host;
 /// <summary>Shared native installation and local steam maintenance for powered production machines.</summary>
 public sealed class PoweredMachineController(IGameClient game, IControllerJournal journal)
 {
-    public async Task<string> InstallAsync(string item, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
+    public async Task<string> InstallAsync(string item, ProductionCatalog catalog, SpatialController controller, CancellationToken token,
+        Func<string, PlacementCandidate, string?, Task>? recordBuild = null)
     {
         var production = new ProductionController(game, journal);
         await new ProductionGoalExecutor(game, journal).RunAsync(item, 1, token);
@@ -62,8 +63,13 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
             RequireScope(value.Scope, catalog);
             return value;
         }
-        Task<string> BuildAsync(string buildingItem, PlacementCandidate candidate) =>
-            BuildAtAsync(buildingItem, candidate, catalog, controller, token);
+        async Task<string> BuildAsync(string buildingItem, PlacementCandidate candidate)
+        {
+            if (recordBuild is not null) await recordBuild(buildingItem, candidate, null);
+            string id = await BuildAtAsync(buildingItem, candidate, catalog, controller, token);
+            if (recordBuild is not null) await recordBuild(buildingItem, candidate, id);
+            return id;
+        }
     }
 
     public async Task<string> BuildAtAsync(string item, PlacementCandidate candidate, ProductionCatalog catalog,

@@ -43,7 +43,8 @@ public sealed class ResourceCellQualification(RuntimeSession session)
             var smelters = state.Cells.Where(c => c.Kind == "smelter" && c.Recipe == "iron-plate" && c.Status == "ready").ToArray();
             var miners = state.Cells.Where(c => c.Kind == "miner" && c.Recipe == "coal" && c.Status == "ready").ToArray();
             Require(smelters.Length >= 2 && miners.Length >= 1, "Two iron smelter cells and one coal miner were not completed.");
-            Require(smelters.All(c => c.Entities.Keys.Order().SequenceEqual(["drill", "furnace", "output-chest", "output-inserter", "pole"])),
+            Require(smelters.All(c => c.Entities.Keys.Where(role => !role.StartsWith("link-", StringComparison.Ordinal)).Order(StringComparer.Ordinal)
+                .SequenceEqual(["drill", "furnace", "output-chest", "output-inserter", "pole"]) && c.Entities.Keys.All(c.Plan!.ContainsKey)),
                 "A smelter cell lacks one of its native entities.");
 
             var logistics = new FactoryLogistics(game, journal, session.Directory);

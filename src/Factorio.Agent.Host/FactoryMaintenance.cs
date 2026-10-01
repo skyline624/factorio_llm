@@ -42,10 +42,20 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         }
         var carried = FactoryLogistics.Carried(snapshot);
         var registered = state.Cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
+        var zones = game is IDangerZoneReader reader
+            ? await reader.ReadActiveDeathsAsync(catalog.Scope, 1, snapshot.CollectedTick, token) : [];
         foreach (var missing in Missing(state, Present(snapshot)))
         {
+            // Full resource plans now permit maintenance to rebuild them before cell health reopens them.
+            // Apply the same death-zone deferral as the resource builder before any travel or placement.
+            if (DeferResourceRebuild(missing.Cell, zones))
+            {
+                blocked.Add(missing.PreviousId);
+                await journal.AppendAsync("resource-cell-rebuild-deferred", new { cell = missing.Cell.Id, missing.Role, snapshot.CollectedTick }, token);
+                continue;
+            }
             string item = missing.Plan.Item;
-            string? id = Adopt(missing.Plan);
+            string? id = AtPlan(snapshot, catalog, missing.Plan, registered);
             bool adopted = id is not null;
             if (id is null && carried.GetValueOrDefault(item) < 1)
             {
@@ -133,18 +143,6 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
             return value;
         }
 
-        // An entity built before an interrupted receipt reached the registry is found where the plan expects it.
-        string? Adopt(PlannedEntity plan)
-        {
-            string name = catalog.Items[plan.Item].PlaceEntity ?? plan.Item;
-            return snapshot.Records.Where(r => r.Kind == "entity" && r.Name == name && !registered.Contains(r.EntityId)
-                    && r.Data.GetProperty("role").GetString() == "factory"
-                    && r.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!.DistanceTo(plan.Position) < .01
-                    && (r.Data.GetProperty("type").GetString() is "container" or "electric-pole" or "wall"
-                        || r.Data.GetProperty("direction").GetInt32() == plan.Direction))
-                .Select(r => r.EntityId).FirstOrDefault();
-        }
-
         async Task<long> RearmAsync(InstalledTurret turret, string ammunition, long count)
         {
             await controller.ApproachEntityAsync(turret.Id, turret.Position, catalog, token);
@@ -161,6 +159,38 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
                 throw new InvalidDataException("Turret rearming lacks a matching native transfer receipt.");
             return receipt.Effects.GetProperty("transferred").GetInt64();
         }
+    }
+
+    internal static bool DeferResourceRebuild(FactoryCell cell, IReadOnlyList<NativeDeathTransition> zones) =>
+        cell.IsResource && zones.Count > 0 && !ResourceCellBuilder.Safe(cell, zones);
+
+    /// <summary>Reconciles interrupted construction or a manual replacement against known own entities before procurement.</summary>
+    internal static FactoryCell Reconcile(FactoryCell cell, FactorySnapshot snapshot, ProductionCatalog catalog, IReadOnlySet<string> reserved,
+        bool removeMissing = false)
+    {
+        var present = Present(snapshot);
+        var ids = cell.Entities.Where(p => !removeMissing || present.Contains(p.Value)).ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
+        var used = new HashSet<string>(reserved, StringComparer.Ordinal);
+        foreach (var (role, plan) in cell.Plan ?? new Dictionary<string, PlannedEntity>())
+        {
+            var excluded = new HashSet<string>(used, StringComparer.Ordinal);
+            excluded.UnionWith(ids.Where(p => p.Key != role).Select(p => p.Value));
+            string? id = AtPlan(snapshot, catalog, plan, excluded);
+            if (id is null && removeMissing) ids.Remove(role);
+            else if (id is not null) ids[role] = id;
+        }
+        return cell with { Entities = ids };
+    }
+
+    internal static string? AtPlan(FactorySnapshot snapshot, ProductionCatalog catalog, PlannedEntity plan, IReadOnlySet<string> excluded)
+    {
+        string name = catalog.Items[plan.Item].PlaceEntity ?? plan.Item;
+        return snapshot.Records.Where(r => r.Kind == "entity" && r.Name == name && !excluded.Contains(r.EntityId)
+                && r.Data.GetProperty("role").GetString() == "factory"
+                && r.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!.DistanceTo(plan.Position) < .01
+                && (r.Data.GetProperty("type").GetString() is "container" or "electric-pole" or "wall" or "furnace"
+                    || r.Data.GetProperty("direction").GetInt32() == plan.Direction))
+            .Select(r => r.EntityId).FirstOrDefault();
     }
 
     /// <summary>Destroyed entities of ready cells with a recorded plan: turrets first, then walls, then production.</summary>

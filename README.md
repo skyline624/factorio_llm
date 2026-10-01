@@ -149,6 +149,8 @@ Le manifeste contient un secret RCON local et reste ignoré par Git. Le serveur 
 
 `launch-rocket --session FILE --item rocket-silo` pilote les entrées et les phases natives d'un silo jusqu'à l'augmentation constatée du compteur de lancements. Un [premier essai de silo préparé](docs/rocket-launch.md) a réussi ; il ne constitue pas une campagne autonome depuis le départ. Avec le registre d'usine, `automate --item rocket-part` construit une [cellule de silo persistante](docs/rocket-launch.md#cellule-de-silo-persistante) que la logistique alimente par un bras, et le lancement la préfère ; `verify-silo-cell` la qualifie dans une **fixture** préparée.
 
+Les [correctifs de reprise et leurs preuves du 1er octobre](docs/recovery-review.md) couvrent les cellules de ressources près des zones de mort, les lectures cartographiques tronquées, les radars interrompus et les silos détruits ou remplacés. Les essais réels distinguent headless, client connecté et tentative de campagne normale.
+
 La commande `transport --session FILE --source ID --target ID --item NAME --quantity N` installe ou réutilise une liaison par tapis et bras. Elle vérifie les connexions natives et conserve un bilan des stocks, du transit et des fabrications. Un [essai natif de transport et stockage de sortie](docs/belt-transport.md) a transformé 40 plaques de fer en 20 engrenages stockés dans une fixture préparée. La commande générale d’assemblage utilise maintenant les sources solides observées et leurs tapis : un [nouveau lot de cinq packs rouges](docs/assembly-transport.md) a été produit et collecté avec deux alimentations suivies, dans cette même fixture.
 
 - [Usine persistante : cellules, logistique et recherche automatisée](docs/factory.md)

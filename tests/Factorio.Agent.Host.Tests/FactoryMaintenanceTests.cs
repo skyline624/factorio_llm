@@ -111,6 +111,31 @@ public sealed class FactoryMaintenanceTests
     }
 
     [Fact]
+    public void InterruptedConstructionDropsDestroyedIdsAndAdoptsOnlyMatchingOwnReplacements()
+    {
+        var catalog = SiloCatalogs.Rocket();
+        var cell = new FactoryCell("silo-cell", 1, new(0, 0, true), "silo", "rocket-silo", "rocket-part",
+            new Dictionary<string, string> { ["machine"] = "old-silo", ["pole"] = "old-pole", ["input-inserter"] = "old-arm" }, "building", 10,
+            Plan: new Dictionary<string, PlannedEntity>
+            {
+                ["machine"] = new("machine", "rocket-silo", new(5, 5), 0),
+                ["pole"] = new("pole", "small-electric-pole", new(12.5, 5.5), 0),
+                ["input-inserter"] = new("input-inserter", "inserter", new(10.5, 5.5), 8)
+            });
+        var native = Snapshot(Entity("new-silo", "rocket-silo", "rocket-silo", 5, 5),
+            Entity("wrong-pole", "small-electric-pole", "electric-pole", 13.5, 5.5),
+            Entity("wrong-arm", "inserter", "inserter", 10.5, 5.5, direction: 0));
+        var resumed = FactoryMaintenance.Reconcile(cell, native, catalog, new HashSet<string>(), removeMissing: true);
+        Assert.Equal(new Dictionary<string, string> { ["machine"] = "new-silo" }, resumed.Entities);
+        Assert.Equal(["inserter", "small-electric-pole"], CarriedStock.Unplaced(new(cell.Slot, cell.Plan!.Values.ToArray(),
+            new(new(0, 0), new(15, 15)), new(new(0, 16), new(15, 17))), resumed.Entities).Keys.Order(StringComparer.Ordinal));
+        Assert.Empty(FactoryMaintenance.Reconcile(cell, native, catalog, new HashSet<string> { "new-silo" }, removeMissing: true).Entities);
+        // Ready maintenance retains the missing roles, so it still knows what must be rebuilt.
+        var ready = FactoryMaintenance.Reconcile(cell with { Status = "ready" }, native, catalog, new HashSet<string>());
+        Assert.Equal(2, FactoryMaintenance.Missing(new(1, "world", [], [ready]), FactoryMaintenance.Present(native)).Count);
+    }
+
+    [Fact]
     public void CellsSkippedByTransportListTheirMissingRolesAndWhetherARecordedPlanCanRebuildThem()
     {
         var planned = Cell("planned", "assembler", "ready", ("machine", "1"), ("output-chest", "2"));

@@ -80,6 +80,8 @@ Tests hors ligne : lecture et rejet des réponses incohérentes, correspondance 
 
 ## Limites actuelles
 
+La [relecture et les essais supplémentaires du 1er octobre](recovery-review.md) ajoutent une interruption réelle après construction du radar : son plan durable permet de reprendre le même radar sans doublon. Les identifiants des nouveaux poteaux sont enregistrés avant les vérifications de réseau, avec leurs placements enregistrés avant construction.
+
 Ces fixtures ne valent pas campagne autonome : terrain, gisements, équipements, prérequis et morts y sont préparés. La campagne réelle n'a pas encore utilisé cette lecture. Sa carte devrait contenir les demandes du carré du personnage le long de ses trajets passés, puisqu'elles survivent aux sauvegardes. Un pilote connecté a pu aussi les faire dessiner. Cela reste à constater.
 
 La lecture couvre 512 cases par défaut et 1 024 au plus. Un gisement plus lointain ou un secteur jamais demandé reste inconnu. Un échantillon par secteur ne décrit ni l'étendue exacte du gisement, ni sa constructibilité, ni ses vers. Ceux-ci ne sont découverts qu'à l'arrivée, où le refus local existant s'applique. Un radar ne cartographie qu'environ un secteur toutes les 34 s à pleine puissance. Un réseau surchargé ralentit ce balayage, et l'attente bornée peut finir sans résultat. Un seul radar est construit : son balayage de 14 secteurs dépasse déjà la lecture par défaut. La règle de refus compte les morts actives sans distinguer leur cause ; elle cesse quand ces zones expirent.

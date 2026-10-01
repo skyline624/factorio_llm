@@ -148,6 +148,41 @@ public sealed class SiloCellQualification(RuntimeSession session)
             Require(halt?.StartsWith("unsupported:", StringComparison.Ordinal) == true && restoredFed == 0,
                 "Without ingredients the launch did not stop at procurement, or fed the rebuilt silo by hand.");
 
+            // A manual replacement stands at the recorded plan under a new id. It must stay a cell silo, never become loose.
+            var manual = await NativeAsync(Ids(ReplaceSilo, replacement!, chest, rebuilt));
+            artificial.Add("restored silo destroyed and a native replacement created at the same planned place, without updating the registry");
+            string manualId = manual.GetProperty("silo").GetString()!;
+            int adopting = (await RowsAsync()).Length;
+            string? manualHalt = null;
+            try { await new RocketLaunchController(game, journal, session.Directory).RunAsync(SiloItem, token); }
+            catch (InvalidOperationException error) { manualHalt = error.Message; }
+            var adoptedState = await new FactoryRegistry(session.Directory).LoadAsync(catalog.Scope.WorldId, token);
+            var adopted = adoptedState.Cells.Single(c => c.Id == cell.Id);
+            var adoptedRows = (await RowsAsync()).Skip(adopting).ToArray();
+            var manualStart = adoptedRows.Single(r => r.GetProperty("type").GetString() == "rocket-start").GetProperty("data");
+            evidence.Add(new { check = "manual-silo-replacement-stays-cell-fed", manual, adopted, manualStart, manualHalt });
+            Require(adopted.Entities["machine"] == manualId && manualStart.GetProperty("cell").GetString() == cell.Id
+                && manualHalt?.StartsWith("unsupported:", StringComparison.Ordinal) == true && !Submissions(adoptedRows).Any(s => Into(s, manualId)),
+                "A manual silo replacement bypassed the registered cell's supply path.");
+
+            // An interrupted registry may still record a pole an attack destroyed. Resume must drop the stale id and replace it.
+            var lost = await NativeAsync(ResumePole.Replace("POLE_ID", adopted.Entities["pole"], StringComparison.Ordinal));
+            await new FactoryRegistry(session.Directory).SaveAsync(adoptedState.With(adopted with { Status = "building" }), token);
+            artificial.Add("cell registry marked building to represent interrupted construction; its pole destroyed and one replacement pole supplied");
+            int resuming = (await RowsAsync()).Length;
+            string? resumeHalt = null;
+            try { await new RocketLaunchController(game, journal, session.Directory).RunAsync(SiloItem, token); }
+            catch (InvalidOperationException error) { resumeHalt = error.Message; }
+            var resumedState = await new FactoryRegistry(session.Directory).LoadAsync(catalog.Scope.WorldId, token);
+            restored = resumedState.Cells.Single(c => c.Id == cell.Id);
+            var resumedRows = (await RowsAsync()).Skip(resuming).ToArray();
+            evidence.Add(new { check = "building-silo-replaces-destroyed-pole", lost, restored, resumeHalt });
+            Require(restored.Status == "ready" && restored.Entities["pole"] != adopted.Entities["pole"] && restored.Entities["machine"] == manualId
+                && resumedState.Cells.Count(c => c.Kind == SiloCellPlanner.Kind) == 1
+                && resumeHalt?.StartsWith("unsupported:", StringComparison.Ordinal) == true && !Submissions(resumedRows).Any(s => Into(s, manualId)),
+                "The interrupted silo cell did not recover its destroyed pole without duplicating or hand-feeding its silo.");
+            replacement = manualId;
+
             // Artificial: the whole cell and the registry are removed and a third silo given. With no silo standing and no cell
             // registered, the launch path builds a cell itself and, again without ingredients, stops at procurement.
             var removed = await NativeAsync(Ids(RemoveCell, replacement!, chest, rebuilt).Replace("POLE_ID", restored!.Entities["pole"], StringComparison.Ordinal));
@@ -274,6 +309,14 @@ public sealed class SiloCellQualification(RuntimeSession session)
     // Where a silo stands and its native phase.
     private const string SiloAt = """
         /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local silo; for _,e in pairs(s.find_entities_filtered{type='rocket-silo',force=f}) do if tostring(e.unit_number)=='SILO_ID' then silo=e end end; assert(silo and silo.valid); rcon.print(helpers.table_to_json{tick=game.tick,x=silo.position.x,y=silo.position.y,parts=silo.rocket_parts,network=silo.electric_network_id,silos=#s.find_entities_filtered{type='rocket-silo',force=f}})
+        """;
+
+    private const string ReplaceSilo = """
+        /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local silo; for _,e in pairs(s.find_entities_filtered{type='rocket-silo',force=f}) do if tostring(e.unit_number)=='SILO_ID' then silo=e end end; assert(silo and silo.rocket_parts==0); local at=silo.position; local direction=silo.direction; silo.destroy(); local replacement=s.create_entity{name='rocket-silo',position=at,direction=direction,force=f}; assert(replacement); rcon.print(helpers.table_to_json{tick=game.tick,silo=tostring(replacement.unit_number),x=at.x,y=at.y})
+        """;
+
+    private const string ResumePole = """
+        /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; local pole; for _,e in pairs(s.find_entities_filtered{type='electric-pole',force=f}) do if tostring(e.unit_number)=='POLE_ID' then pole=e end end; assert(c and pole); pole.destroy(); assert(c.insert{name='small-electric-pole',count=1}==1); rcon.print(helpers.table_to_json{tick=game.tick,destroyed='POLE_ID'})
         """;
 
     // The whole cell destroyed, and a third silo and an inserter given for the launch path to build its own cell.

@@ -54,6 +54,79 @@ public sealed class ResourceCellRecoveryTests
     }
 
     [Fact]
+    public void AnExplicitResumeCannotFallBackToAnotherCellOfTheSameProduct()
+    {
+        var row = Row(FactoryMaps.Grass(30), Smelter) with { Cells = 2 };
+        var dangerous = Cell(row, 0, "building", new()) with { Attempts = 1 };
+        var safe = Cell(row, 1, "building", new()) with { Attempts = 1 };
+        var state = new FactoryState(1, "world", [], [dangerous, safe], [row]);
+        Assert.Equal(safe.Id, ResourceCellBuilder.Interrupted(state, row.Kind, row.Product, safe.Id).Resume?.Id);
+        Assert.Throws<InvalidOperationException>(() => ResourceCellBuilder.Interrupted(state, row.Kind, row.Product, "unknown"));
+        Assert.Throws<InvalidOperationException>(() => ResourceCellBuilder.Interrupted(state with
+        {
+            Cells = [dangerous, safe with { Attempts = ResourceCellBuilder.MaximumAttempts }]
+        }, row.Kind, row.Product, safe.Id));
+    }
+
+    [Fact]
+    public async Task TheDirectorDefersAnUnsafeLegacyCellAndPassesTheSafeCellIdToTheBuilder()
+    {
+        string directory = Directory.CreateTempSubdirectory("resource-resume-").FullName;
+        try
+        {
+            var map = FactoryMaps.Grass(30) with { Scope = Scope };
+            var dangerousRow = Row(map, Smelter);
+            var safeRow = dangerousRow with { Id = 2, Origin = new(100, 0) };
+            var dangerous = Cell(dangerousRow, 0, "building", new()) with { Attempts = 1 };
+            var safe = Cell(safeRow, 0, "building", new()) with { Attempts = 1 };
+            await new FactoryRegistry(directory).SaveAsync(new(1, "world", [], [dangerous, safe], [dangerousRow, safeRow]), CancellationToken.None);
+            var journal = new PlanJournal();
+            var game = new ResumeGame(map, new(1, 10, 17, 1, new(0, 0)));
+            Assert.Equal(0, await new FactoryDirector(game, journal, directory).ResumeResourceCellsAsync(Scope, CancellationToken.None));
+            Assert.True(journal.Plans.SequenceEqual([safe.Id]), string.Join("; ", journal.Errors));
+            Assert.DoesNotContain("submit", game.Actions); // Stop before procurement or movement in this regression.
+            var state = await new FactoryRegistry(directory).LoadAsync("world", CancellationToken.None);
+            Assert.Equal(1, state.Cells.Single(c => c.Id == dangerous.Id).Attempts);
+            Assert.Equal(2, state.Cells.Single(c => c.Id == safe.Id).Attempts);
+            Assert.All(state.Cells, c => Assert.Equal(5, c.Plan!.Count));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void APartialLegacyPlanCannotHideADrillInsideADeathZone()
+    {
+        var map = FactoryMaps.Grass(30);
+        var row = Row(map, Smelter);
+        var layout = new ResourceCellPlanner().Layout(map, row, 0);
+        var cell = Cell(row, 0, "building", new());
+        var linked = FactoryCellBuilder.WithLink(cell, "link", new(new(100.5, 100.5), 0, 0), "small-electric-pole");
+        var death = new NativeDeathTransition(1, 10, 17, 1, layout.Role("drill")!.Position);
+        Assert.False(ResourceCellBuilder.Safe(cell, []));
+        Assert.False(ResourceCellBuilder.Safe(linked, [death]));
+        var recovered = ResourceCellBuilder.WithLayout(linked, layout);
+        Assert.Equal(layout.Entities.Count + 1, recovered.Plan!.Count);
+        Assert.Equal(linked.Plan!["link-0"], recovered.Plan["link-0"]);
+        Assert.False(ResourceCellBuilder.Safe(recovered, [death]));
+        Assert.True(ResourceCellBuilder.Safe(recovered, []));
+    }
+
+    [Fact]
+    public void MaintenanceCannotBypassTheDeathZoneDeferralOfAReadyResourceCell()
+    {
+        var map = FactoryMaps.Grass(30);
+        var row = Row(map, Smelter);
+        var layout = new ResourceCellPlanner().Layout(map, row, 0);
+        var cell = ResourceCellBuilder.WithLayout(Cell(row, 0, "ready", new()), layout);
+        var death = new NativeDeathTransition(1, 10, 17, 1, layout.Role("drill")!.Position);
+        Assert.True(FactoryMaintenance.DeferResourceRebuild(cell, [death]));
+        Assert.True(FactoryMaintenance.DeferResourceRebuild(cell with { Plan = null }, [death]));
+        Assert.False(FactoryMaintenance.DeferResourceRebuild(cell, []));
+        Assert.False(FactoryMaintenance.DeferResourceRebuild(cell, [death with { Position = new(100, 100) }]));
+        Assert.False(FactoryMaintenance.DeferResourceRebuild(cell with { Kind = "turret" }, [death]));
+    }
+
+    [Fact]
     public void ResumeDropsRecordedPartsThatNoLongerStandAtTheirPlannedPosition()
     {
         var map = FactoryMaps.Grass(30);
@@ -138,6 +211,36 @@ public sealed class ResourceCellRecoveryTests
         {
             Requests.Add((item, targetStock));
             return Task.FromResult(new StockGoalResult("recorded", item, targetStock, 0, targetStock, 0, 0));
+        }
+    }
+
+    private sealed class ResumeGame(SpatialSnapshot map, NativeDeathTransition death) : IGameClient, IDangerZoneReader
+    {
+        public List<string> Actions { get; } = [];
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            Actions.Add(request.Action);
+            return request.Action switch
+            {
+                "production_catalog" => Task.FromResult(new GameResponse(1, request.RequestId, true, map.CollectedTick,
+                    Protocol.ToElement(Catalogs.Raw() with { Scope = Scope, CollectedTick = map.CollectedTick }))),
+                "spatial" => Task.FromResult(new GameResponse(1, request.RequestId, true, map.CollectedTick, Protocol.ToElement(map))),
+                _ => throw new InvalidOperationException("Regression stops before any game mutation.")
+            };
+        }
+        public Task<IReadOnlyList<NativeDeathTransition>> ReadActiveDeathsAsync(ActorScope scope, int surfaceIndex, long tick, CancellationToken token = default)
+            => Task.FromResult<IReadOnlyList<NativeDeathTransition>>([death]);
+    }
+
+    private sealed class PlanJournal : IControllerJournal
+    {
+        public List<string> Plans { get; } = [];
+        public List<string> Errors { get; } = [];
+        public Task AppendAsync(string type, object data, CancellationToken token)
+        {
+            if (type == "resource-cell-plan") Plans.Add(Protocol.ToElement(data).GetProperty("id").GetString()!);
+            if (type == "resource-cell-resume-failed") Errors.Add(Protocol.ToElement(data).GetProperty("message").GetString()!);
+            return Task.CompletedTask;
         }
     }
 }

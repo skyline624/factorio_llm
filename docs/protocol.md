@@ -46,6 +46,8 @@ Dans un secteur lu, seules les entités `resource` des noms demandés sont relue
 
 `coverage` contient `visibility:"force-charted-or-requested-chunks"`, `consideredChunks`, `chartedChunks`, `requestedChunks`, `entities`, `truncated` et `completeRadius`. Le C# vérifie l'appartenance des noms à la requête, l'unicité des couples nom/secteur, l'échantillon contenu dans son secteur, l'ordre et le rayon, les comptes et les sommes, avant toute utilisation. Le client vérifie aussi que la réponse correspond à la requête. Une lecture est une destination, jamais la preuve d'un site constructible, sûr ou encore présent. La visibilité des ennemis reste celle décrite plus bas.
 
+Plusieurs secteurs peuvent partager la distance de coupure : les agrégats déjà lus à cette distance sont valides, mais cette frontière n'est pas intégralement couverte. `Covers` reste strict sur une lecture tronquée, pour conserver en mémoire les destinations omises du même anneau. Voir les [régressions de reprise](recovery-review.md).
+
 ## Kinds implémentés
 
 La liste `hello.data.capabilities` est l'autorité sur les kinds disponibles. Leur présence signifie implémentation, pas qualification réussie sur le moteur.

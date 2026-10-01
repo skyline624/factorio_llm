@@ -95,8 +95,10 @@ internal sealed class SiloCellSupply(IGameClient game, IControllerJournal journa
         if (owned is null) return null;
         if (owned.Status == "building")
         {
+            var known = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            if (known.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while resuming the silo cell.");
             // A placed silo already draws on the network; only an unplaced one still needs its power budgeted.
-            if (!owned.Entities.ContainsKey("machine"))
+            if (owned.Entities.GetValueOrDefault("machine") is not { } machine || !FactoryMaintenance.Present(known).Contains(machine))
                 await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync(siloItem, 1, true, token);
             return await new FactoryCellBuilder(game, journal, directory).BuildAsync(SiloCellPlanner.Kind, siloItem, prototype.Recipe, token);
         }

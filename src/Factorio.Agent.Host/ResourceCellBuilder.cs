@@ -21,15 +21,17 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
     /// The interrupted cell of this product to resume, counting one more attempt, and the interrupted cells whose attempts
     /// are spent: those are abandoned where they stand and keep their slot.
     /// </summary>
-    internal static (FactoryCell? Resume, IReadOnlyList<FactoryCell> Abandoned) Interrupted(FactoryState state, string kind, string product)
+    internal static (FactoryCell? Resume, IReadOnlyList<FactoryCell> Abandoned) Interrupted(FactoryState state, string kind, string product, string? cellId = null)
     {
         var interrupted = state.Cells.Where(c => c.IsResource && c.Status == "building" && c.Kind == kind && c.Recipe == product).ToArray();
-        var resume = interrupted.FirstOrDefault(c => c.Attempts < MaximumAttempts);
+        var resume = interrupted.FirstOrDefault(c => c.Attempts < MaximumAttempts && (cellId is null || c.Id == cellId));
+        if (cellId is not null && resume is null) throw new InvalidOperationException("The selected resource cell can no longer be resumed.");
         return (resume is null ? null : resume with { Attempts = resume.Attempts + 1 },
             interrupted.Where(c => c.Attempts >= MaximumAttempts).Select(c => c with { Status = Abandoned }).ToArray());
     }
 
-    public async Task<FactoryCell> BuildNextAsync(string product, double perMinute, CancellationToken token = default, int explorationBudget = 16)
+    public async Task<FactoryCell> BuildNextAsync(string product, double perMinute, CancellationToken token = default, int explorationBudget = 16,
+        string? resumeCellId = null)
     {
         if (!double.IsFinite(perMinute) || perMinute <= 0 || perMinute > 10000) throw new ArgumentOutOfRangeException(nameof(perMinute));
         if (explorationBudget is < 0 or > 64) throw new ArgumentOutOfRangeException(nameof(explorationBudget));
@@ -45,13 +47,12 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
         await using var controller = new SpatialController(game, journal);
 
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-        var (cell, spent) = Interrupted(state, supply.Kind, product);
+        var (cell, spent) = Interrupted(state, supply.Kind, product, resumeCellId);
         foreach (var worn in spent) await AbandonAsync(worn, "The cell spent its build attempts.");
         ResourceRow row;
         if (cell is not null)
         {
             row = state.Rows!.Single(r => r.Id == cell.Slot.Band);
-            await SaveAsync(cell);
         }
         else
         {
@@ -63,6 +64,11 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
         }
         string[] items = Items(row.Equipment);
         CellLayout layout = planner.Layout(await MapAsync(items, 8), row, cell.Slot.Index);
+        cell = WithLayout(cell, layout);
+        var zones = game is IDangerZoneReader reader
+            ? await reader.ReadActiveDeathsAsync(catalog.Scope, 1, catalog.CollectedTick, token) : [];
+        if (!Safe(cell, zones)) throw new InvalidOperationException("The resource cell waits for its recent death zone to clear.");
+        await SaveAsync(cell);
         // CellLayout.Machine names assembler cells only; resource cells journal their parts explicitly.
         await journal.AppendAsync("resource-cell-plan", new { cell.Id, cell.Attempts, row, layout.Slot, layout.Entities, layout.Footprint, layout.Walkway }, token);
         if (cell.Entities.Count > 0) await ReconcileAsync();
@@ -263,6 +269,29 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
             return map;
         }
     }
+
+    /// <summary>Recovers the full planned footprint of legacy cells, even when only power links were recorded.</summary>
+    internal async Task<FactoryCell> PrepareResumeAsync(FactoryCell cell, FactoryState state, ActorScope scope, CancellationToken token)
+    {
+        var row = (state.Rows ?? []).SingleOrDefault(r => r.Id == cell.Slot.Band)
+            ?? throw new InvalidDataException("The resource cell has no recorded row to recover its plan.");
+        var map = await new SpatialClient(game).CaptureAsync(Items(row.Equipment), 8, token);
+        if (map.Scope != scope) throw new InvalidDataException("Actor identity changed while recovering a resource cell plan.");
+        var planned = WithLayout(cell, new ResourceCellPlanner().Layout(map, row, cell.Slot.Index));
+        var registry = new FactoryRegistry(directory);
+        await registry.SaveAsync((await registry.LoadAsync(scope.WorldId, token)).With(planned), token);
+        return planned;
+    }
+
+    internal static FactoryCell WithLayout(FactoryCell cell, CellLayout layout) => cell with
+    {
+        Plan = layout.Entities.Concat((cell.Plan?.Values ?? []).Where(p => layout.Entities.All(e => e.Role != p.Role)))
+            .ToDictionary(e => e.Role, StringComparer.Ordinal)
+    };
+
+    internal static bool Safe(FactoryCell cell, IReadOnlyList<NativeDeathTransition> zones) =>
+        cell.Plan is { Count: > 0 } && cell.Plan.ContainsKey("drill") && cell.Plan.ContainsKey("output-chest")
+        && cell.Plan.Values.All(p => !zones.Any(z => DangerZones.Covers(z, p.Position)));
 
     /// <summary>
     /// Reconnects ready resource cells whose pole stands on an island without a generator, registering the new link poles.

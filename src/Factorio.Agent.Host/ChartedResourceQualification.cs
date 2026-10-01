@@ -84,6 +84,26 @@ public sealed class ChartedResourceQualification(RuntimeSession session, bool ra
             Require(chartedBefore == !hidden, hidden ? "The hidden deposit was already charted before any radar." : "The deposit chunk was not charted by the actor's square.");
             Require(zones.Count == (danger ? DeathPlaces.Length : 0), "The active own death zones differ from the prepared deaths.");
 
+            if (hidden)
+            {
+                // Interrupt after the native radar build receipt, before its id is returned to EnsureAsync.
+                // The next call must adopt it from the durable placement plan, with no second construction.
+                var interrupted = new RadarBuildInterruption(journal);
+                var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+                await using (var controller = new SpatialController(game, interrupted))
+                {
+                    try { await new RadarController(game, interrupted, session.Directory).EnsureAsync(catalog, controller, token); }
+                    catch (OperationCanceledException) when (interrupted.Interrupted) { }
+                }
+                var pending = (await new FactoryRegistry(session.Directory).LoadAsync(catalog.Scope.WorldId, token)).Cells.Single(c => c.Kind == RadarController.Kind);
+                var native = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+                var radars = native.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "factory"
+                    && r.Data.GetProperty("type").GetString() == "radar").ToArray();
+                evidence.Add(new { check = "radar-build-interrupted-before-id-registration", interrupted.Interrupted, pending, radars });
+                Require(interrupted.Interrupted && pending.Status == "building" && pending.Plan?.ContainsKey("machine") == true && radars.Length == 1,
+                    "The radar interruption did not leave one native radar and its durable plan.");
+            }
+
             ResourceResearchResult? result = null;
             ExplorationTooDangerousException? refused = null;
             try { result = await new ResourceResearchController(game, journal, session.Directory).RunAsync("oil-processing", token); }
@@ -199,7 +219,8 @@ public sealed class ChartedResourceQualification(RuntimeSession session, bool ra
                     firstSearch ??= data.GetProperty("frontier").GetProperty("collectedTick").GetInt64();
                     break;
                 case "resource-research-too-dangerous": refusals++; break;
-                case "radar-built": radars++; break;
+                case "radar-built":
+                case "radar-resumed": radars++; break;
                 case "radar-charting-wait": waits++; break;
                 case "submission":
                     string? kind = data.GetProperty("kind").GetString();
@@ -214,5 +235,22 @@ public sealed class ChartedResourceQualification(RuntimeSession session, bool ra
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidDataException(message);
+    }
+
+    private sealed class RadarBuildInterruption(IControllerJournal inner) : IControllerJournal
+    {
+        private string? operation;
+        public bool Interrupted { get; private set; }
+        public async Task AppendAsync(string type, object data, CancellationToken token)
+        {
+            await inner.AppendAsync(type, data, token);
+            if (type == "submission" && data is OperationSubmission { Kind: "build" } submission
+                && submission.Args.GetProperty("item").GetString() == "radar") operation = submission.OperationId;
+            if (!Interrupted && type == "receipt" && data is OperationReceipt { Status: "completed" } receipt && receipt.OperationId == operation)
+            {
+                Interrupted = true;
+                throw new OperationCanceledException("Explicit fixture interruption after native radar construction.");
+            }
+        }
     }
 }

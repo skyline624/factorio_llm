@@ -59,6 +59,11 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             Plan = layout.Entities.Concat((cell.Plan?.Values ?? []).Where(p => layout.Entities.All(e => e.Role != p.Role)))
                 .ToDictionary(e => e.Role, StringComparer.Ordinal)
         };
+        var known = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        RequireScope(known.Scope, catalog);
+        cell = FactoryMaintenance.Reconcile(cell, known, catalog,
+            state.Cells.Where(c => c.Id != cell.Id).SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal), removeMissing: true);
+        await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
         await journal.AppendAsync("factory-cell-plan", new { cell.Id, kind, recipe, zone, layout }, token);
         await EnsureItemsAsync(layout.Entities.GroupBy(e => e.Item).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal));
 

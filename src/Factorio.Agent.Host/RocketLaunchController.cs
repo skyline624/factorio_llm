@@ -34,6 +34,19 @@ public sealed class RocketLaunchController(IGameClient game, IControllerJournal 
         var power = new PoweredMachineController(game, journal);
         var registry = factoryDirectory is null ? null : new FactoryRegistry(factoryDirectory);
         var factory = registry is null ? null : await registry.LoadAsync(catalog.Scope.WorldId, token);
+        if (factory is not null)
+        {
+            var known = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            RequireScope(known.Scope);
+            // A silo rebuilt manually at the cell plan keeps its chest/inserter supply contract under the new native id.
+            foreach (var registered in factory.Cells.Where(c => c.Kind == SiloCellPlanner.Kind && c.Plan is not null).ToArray())
+            {
+                var reconciled = FactoryMaintenance.Reconcile(registered, known, catalog,
+                    factory.Cells.Where(c => c.Id != registered.Id).SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal));
+                factory = factory.With(reconciled);
+            }
+            await registry!.SaveAsync(factory, token);
+        }
         var siloCells = factoryDirectory is null ? null : new SiloCellSupply(game, journal, factoryDirectory);
         FactoryCell? cell = factory is null ? null : SiloCellSupply.Registered(factory, initial, prototype);
         var cellSilos = SiloCellSupply.Silos(factory);

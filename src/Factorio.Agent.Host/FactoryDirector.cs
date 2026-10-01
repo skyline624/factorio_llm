@@ -127,23 +127,31 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         // all stand on the first surface (nauvis).
         long tick = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token)).CollectedTick;
         var zones = game is IDangerZoneReader reader ? await reader.ReadActiveDeathsAsync(scope, 1, tick, token) : [];
-        bool Safe(FactoryCell cell) => cell.Plan?.Values.All(p => !zones.Any(z => DangerZones.Covers(z, p.Position))) ?? true;
+        var deferred = new HashSet<string>(StringComparer.Ordinal);
         int resumed = 0;
         for (int call = 0; call < MaximumResumes; call++)
         {
-            var open = (await registry.LoadAsync(scope.WorldId, token)).Cells
-                .Where(c => c.IsResource && c.Status == "building" && c.Attempts < ResourceCellBuilder.MaximumAttempts && c.Recipe is not null && Safe(c))
+            var state = await registry.LoadAsync(scope.WorldId, token);
+            var open = state.Cells
+                .Where(c => c.IsResource && c.Status == "building" && c.Attempts < ResourceCellBuilder.MaximumAttempts && c.Recipe is not null && !deferred.Contains(c.Id))
                 .OrderBy(c => c.Attempts).ThenBy(c => c.Tick).FirstOrDefault();
             if (open is null) break;
             try
             {
-                // The builder resumes an interrupted cell of this product before it would plan any new one.
-                await builder.BuildNextAsync(open.Recipe!, 1, token, explorationBudget: 0);
+                open = await builder.PrepareResumeAsync(open, state, scope, token);
+                if (!ResourceCellBuilder.Safe(open, zones))
+                {
+                    deferred.Add(open.Id);
+                    call--; // A deferred cell spends no reconstruction attempt or resume budget.
+                    continue;
+                }
+                await builder.BuildNextAsync(open.Recipe!, 1, token, explorationBudget: 0, resumeCellId: open.Id);
                 resumed++;
             }
             catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
             {
                 if (ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token)).Scope != scope) throw;
+                deferred.Add(open.Id);
                 await journal.AppendAsync("resource-cell-resume-failed", new { open.Id, open.Recipe, error = error.GetType().Name, error.Message }, token);
             }
         }

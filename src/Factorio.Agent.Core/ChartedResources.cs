@@ -103,7 +103,9 @@ public sealed record ChartedResourceSnapshot(ActorScope Scope, long CollectedTic
                 throw new InvalidDataException("Invalid charted resource deposit.");
             flags[deposit.Chunk] = deposit.Charted;
             double distance = deposit.Chunk.DistanceTo(Center);
-            if (distance > Radius || distance < previous || coverage.Truncated && distance >= coverage.CompleteRadius)
+            // The last retained chunk can share the cut-off distance with the first omitted chunk.
+            // Covers remains strict: the whole ring was not read.
+            if (distance > Radius || distance < previous || coverage.Truncated && distance > coverage.CompleteRadius)
                 throw new InvalidDataException("A charted deposit lies outside its reading or out of distance order.");
             previous = distance;
         }

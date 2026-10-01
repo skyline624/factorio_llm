@@ -123,6 +123,29 @@ public sealed class ChartedResourceTests : IDisposable
     }
 
     [Fact]
+    public void ATruncatedReadingAcceptsRetainedChunksOnTheCutoffRingWithoutErasingOmittedOnes()
+    {
+        // Same distance/y/x ordering as Lua: the default 64-deposit budget cuts within the 128-tile ring.
+        var chunks = Enumerable.Range(-8, 17).SelectMany(y => Enumerable.Range(-8, 17).Select(x => new ChartedChunk(x, y)))
+            .OrderBy(c => c.DistanceTo(new(0, 0))).ThenBy(c => c.Y).ThenBy(c => c.X).Take(65).ToArray();
+        ChartedDeposit Deposit(ChartedChunk chunk) => new("iron-ore", chunk, true,
+            new($"ore-{chunk.X}-{chunk.Y}", new(chunk.X * 32 + .5, chunk.Y * 32 + .5)), 1, 100);
+        double cutoff = chunks[64].DistanceTo(new(0, 0));
+        Assert.Equal(128, cutoff);
+        var reading = ChartedResourceSnapshot.Parse(Reply(300, chunks.Take(64).Select(Deposit).ToArray(), ["iron-ore"], true, cutoff));
+        Assert.Equal(cutoff, reading.Deposits.Last().Chunk.DistanceTo(reading.Center));
+        Assert.False(reading.Covers(reading.Deposits.Last().Sample.Position));
+        var omitted = Deposit(chunks[64]);
+        var map = ResourceMemoryTests.Map();
+        var memory = ResourceMemorySnapshot.Empty(map)
+            .MergeCharted(ChartedResourceSnapshot.Parse(Reply(200, [omitted], ["iron-ore"]))).MergeCharted(reading);
+        Assert.Contains(memory.Resources, r => r.EntityId == omitted.Sample.Id);
+        Assert.Contains(memory.Resources, r => r.EntityId == reading.Deposits.Last().Sample.Id);
+        // A zero-distance cutoff also occurs when several resource names fill the budget at the actor's chunks.
+        Assert.Single(ChartedResourceSnapshot.Parse(Reply(300, [Deposit(new(0, 0))], ["iron-ore"], true, 0)).Deposits);
+    }
+
+    [Fact]
     public void ALocalViewDecidesOverAChartedDestinationInsideItsBounds()
     {
         var map = OilMap();

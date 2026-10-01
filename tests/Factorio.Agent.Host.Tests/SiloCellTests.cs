@@ -171,6 +171,22 @@ public sealed class SiloCellTests
     }
 
     [Fact]
+    public void AManuallyRebuiltSiloAtTheCellPlanKeepsTheInserterSupplyPath()
+    {
+        var cell = Cell() with { Plan = new Dictionary<string, PlannedEntity> { ["machine"] = new("machine", "rocket-silo", new(5, 5), 0) } };
+        var snapshot = new FactorySnapshot("snapshot", Scope, 1, 2, Protocol.ToElement(new { }), [
+            new("new-silo", "entity", "new-silo", "rocket-silo", Protocol.ToElement(new { role = "factory", type = "rocket-silo", position = new MapPosition(5, 5), direction = 0 })),
+            new("arm", "entity", "arm", "inserter", Protocol.ToElement(new { role = "factory" })),
+            new("chest", "entity", "chest", "iron-chest", Protocol.ToElement(new { role = "factory" }))]);
+        var adopted = FactoryMaintenance.Reconcile(cell, snapshot, SiloCatalogs.Rocket(), new HashSet<string>());
+        var rockets = new RocketSnapshot(Scope, 1, 1, 0, true, true, new Dictionary<string, RocketSiloPrototype> { ["rocket-silo"] = SiloCatalogs.Silo },
+            [new("new-silo", "rocket-silo", new(5, 5), "rocket-part", 10, "building_rocket", false, false, 1000,
+                new Dictionary<string, long>(), new Dictionary<string, long>(), 1)]);
+        Assert.Equal(cell.Id, SiloCellSupply.Registered(new(1, "world", [], [adopted]), rockets, SiloCatalogs.Silo)?.Id);
+        Assert.Contains("new-silo", SiloCellSupply.Silos(new(1, "world", [], [adopted])));
+    }
+
+    [Fact]
     public async Task SiloCellFixtureCannotModifyANormalCampaign()
     {
         var session = new RuntimeSession("nonexistent-normal-campaign", "factorio.exe", "config.ini", "mods", "save.zip",

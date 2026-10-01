@@ -10,7 +10,8 @@ namespace Factorio.Agent.Host;
 /// </summary>
 internal sealed class PowerGridController(IGameClient game, IControllerJournal journal)
 {
-    public async Task ConnectAsync(string machineId, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
+    public async Task ConnectAsync(string machineId, ProductionCatalog catalog, SpatialController controller, CancellationToken token,
+        Func<string, PlacementCandidate, string?, Task>? recordBuild = null)
     {
         var production = new ProductionController(game, journal);
         var executor = new ProductionGoalExecutor(game, journal);
@@ -64,7 +65,9 @@ internal sealed class PowerGridController(IGameClient game, IControllerJournal j
                 throw new InvalidOperationException($"Observed grid extension ended with {link.Status}; no global impossibility is inferred.");
             var previous = map.Entities.Single(e => e.Id == link.SourceId);
             await executor.RunAsync(poleItem, 1, token);
+            if (recordBuild is not null) await recordBuild(poleItem, link.Pole, null);
             string added = await power.BuildAtAsync(poleItem, link.Pole, catalog, controller, token);
+            if (recordBuild is not null) await recordBuild(poleItem, link.Pole, added);
             map = await MapAsync();
             var connected = map.Entities.Single(e => e.Id == added);
             if (connected.Power?.NetworkId is not { } actual || actual != map.Entities.Single(e => e.Id == previous.Id).Power?.NetworkId)
