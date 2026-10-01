@@ -68,7 +68,7 @@ try
           transport --session FILE --source ID --target ID --item NAME --quantity N
           fuel-feeder --session FILE --boiler ID [--reserve N] [--ticks N]
           rpc --session FILE --action ACTION [--json-file FILE]
-          connect --session FILE
+          connect --session FILE [--visible]
           submit --session FILE --kind KIND --json-file FILE [--ticks N]
           defend --session FILE [--seconds N]
           verify-native|verify-defense|verify-factory|verify-spatial|verify-crafting --session FILE
@@ -269,7 +269,7 @@ try
         case "connect":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
-            Print(new { clientProcessId = await FactorioRuntime.ConnectClientAsync(session, shutdown.Token) });
+            Print(new { clientProcessId = await FactorioRuntime.ConnectClientAsync(session, shutdown.Token, visible: options.ContainsKey("visible")) });
             break;
         }
         case "assemble":

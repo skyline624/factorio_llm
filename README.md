@@ -76,7 +76,7 @@ dotnet $hostDll observe --session $sessionFile
 dotnet $hostDll connect --session $sessionFile
 ```
 
-`verify-native` prépare explicitement une zone, des ressources et des ennemis artificiels, puis vérifie actions du personnage, construction, conservation des stocks, capacité, cuisson, réglage de recette, prérequis, rotation, tir, mort, réapparition et récupération de plaques dans le corps. Le marquage fixture précède toute préparation. `connect` ouvre le jeu avec un profil isolé ; le bouton IA/Manuel transfère le même personnage. Les commandes `verify-pilot --phase manual`, `--phase ai` et `--phase standalone` vérifient les transitions réalisées dans l'interface et produisent un journal local de preuves. Les phases IA déplacent le personnage de trois cases vers le sud dans la zone préparée.
+`verify-native` prépare explicitement une zone, des ressources et des ennemis artificiels, puis vérifie actions du personnage, construction, conservation des stocks, capacité, cuisson, réglage de recette, prérequis, rotation, tir, mort, réapparition et récupération de plaques dans le corps. Le marquage fixture précède toute préparation. `connect` ouvre le jeu avec un profil isolé, minimisé par défaut ; `connect --session FILE --visible` affiche normalement le client, sans automatisation de l'interface. Le bouton IA/Manuel transfère le même personnage. Les commandes `verify-pilot --phase manual`, `--phase ai` et `--phase standalone` vérifient les transitions réalisées dans l'interface et produisent un journal local de preuves. Les phases IA déplacent le personnage de trois cases vers le sud dans la zone préparée.
 
 Une première boucle de défense C# peut surveiller le personnage pendant une durée bornée :
 

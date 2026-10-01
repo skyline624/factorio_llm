@@ -112,7 +112,7 @@ public static partial class FactorioRuntime
         throw new TimeoutException($"Server startup not confirmed. Session manifest: {session.ManifestPath}");
     }
 
-    public static async Task<int> ConnectClientAsync(RuntimeSession session, CancellationToken token = default)
+    public static async Task<int> ConnectClientAsync(RuntimeSession session, CancellationToken token = default, bool visible = false)
     {
         using var lease = ActorControlLease.Acquire(session.Directory);
         await RequireCurrentManifestAsync(session, token);
@@ -139,7 +139,7 @@ public static partial class FactorioRuntime
             "--mod-directory", Path.Combine(directory, "mods"), "--mp-connect", $"127.0.0.1:{session.GamePort}",
             "--window-size", "1280x720", "--force-graphics-preset", "low", "--disable-audio"]);
         start.UseShellExecute = true;
-        start.WindowStyle = ProcessWindowStyle.Minimized;
+        start.WindowStyle = visible ? ProcessWindowStyle.Normal : ProcessWindowStyle.Minimized;
         using Process process = Process.Start(start)
             ?? throw new IOException("Failed to start client.");
         await File.WriteAllTextAsync(Path.Combine(directory, "process-id.txt"), process.Id.ToString(CultureInfo.InvariantCulture), token);
