@@ -535,7 +535,7 @@ try
                 int maxGoals = int.Parse(Option("max-goals") ?? (runMinutes is null ? "10" : "10000"), CultureInfo.InvariantCulture);
                 try
                 {
-                    var maintenanceJournal = new ControllerJournal(Path.Combine(session.Directory, "factory-maintenance.jsonl"));
+                    var maintenanceJournal = new ControllerJournal(Path.Combine(session.Directory, StrategicReconciliationController.BetweenGoalsJournal));
                     var result = await new StrategicCampaignController(game, controller, memoryPath, journalPath, campaignJournal: campaignJournal,
                         maintenance: async token =>
                         {

@@ -207,6 +207,29 @@ public sealed class StrategicReconciliationTests : IDisposable
         Assert.DoesNotContain("submit", game.Calls);
     }
 
+    [Theory]
+    [InlineData(null, true, true)]       // A terminal maintenance or defense operation ended with the dead actor.
+    [InlineData("running", true, false)] // An operation still active stays unknown.
+    [InlineData(null, false, false)]     // Work submitted by no journal of this campaign stays unowned.
+    public async Task DeathBetweenGoalsAcceptsTerminalWorkOfTheMaintenanceJournal(string? failure, bool maintenance, bool accepted)
+    {
+        // Campaign 2026-10-01 (seed 20261002): biters killed the actor during the maintenance that runs between goals; its
+        // last operation sat in the maintenance journal and the next run refused to start.
+        await File.WriteAllTextAsync(Memory, JsonSerializer.Serialize(new StrategicMemory(1, Scope, 36000, false, null), Protocol.Json));
+        if (maintenance)
+            await new ControllerJournal(Path.Combine(directory, StrategicReconciliationController.BetweenGoalsJournal))
+                .AppendAsync("submission", new { operationId = "maintenance-transfer", kind = "insert" }, default);
+        var game = new Game("maintenance-transfer") { AfterDeath = true, Failure = failure };
+        Task Reconcile() => new StrategicReconciliationController(game, Memory).ReconcileAsync(Journal, afterDeath: true);
+        if (accepted)
+        {
+            await Reconcile();
+            Assert.NotNull((await ReadMemoryAsync()).Recovery);
+        }
+        else await Assert.ThrowsAnyAsync<Exception>(Reconcile);
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
     [Fact]
     public async Task TerminalPartialCraftPreservesStockAndProvidesFailureFeedbackWithoutMutation()
     {

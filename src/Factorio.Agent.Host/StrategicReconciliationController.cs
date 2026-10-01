@@ -11,6 +11,9 @@ public sealed record StrategicReconciliationResult(string ReportPath, int Operat
 /// <summary>Read-only native reconciliation under the caller's actor lease; never resubmits an operation.</summary>
 public sealed class StrategicReconciliationController(IGameClient game, string memoryPath)
 {
+    /// <summary>Journal of the maintenance and defense work run between goals, beside the strategic memory.</summary>
+    public const string BetweenGoalsJournal = "factory-maintenance.jsonl";
+
     public async Task<StrategicReconciliationResult> ReconcileAsync(string journalPath, CancellationToken token = default, bool afterDeath = false)
     {
         string original = await File.ReadAllTextAsync(memoryPath, token);
@@ -39,8 +42,14 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
             string id = last.GetProperty("operationId").GetString()!;
             lastIsJournaled = audit.Submissions.ContainsKey(id);
             if (lastIsJournaled) unresolved.Add(id);
-            else if (last.GetProperty("updatedTick").GetInt64() > memory.Tick
-                || memory.Pending && last.GetProperty("updatedTick").GetInt64() == memory.Tick)
+            // Between goals, maintenance and the defense reflex act and journal outside goal journals; after a death, their
+            // terminal operation ended with the dead actor. On 2026-10-01 (seed 20261002) such a death blocked the next run.
+            // Work found in no journal of this campaign stays unowned and is refused.
+            else if ((last.GetProperty("updatedTick").GetInt64() > memory.Tick
+                    || memory.Pending && last.GetProperty("updatedTick").GetInt64() == memory.Tick)
+                && !(afterDeath && !memory.Pending && last.TryGetProperty("status", out var status)
+                    && status.GetString() is "completed" or "partial" or "failed" or "cancelled" or "rejected"
+                    && await SubmittedBetweenGoalsAsync(id, token)))
                 throw new InvalidDataException("The last native operation is outside the pending journal.");
         }
         // If no journaled operation is the engine's latest, none of them may have been accepted: each must be proven absent.
@@ -235,5 +244,16 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         public JsonElement? Goal { get; set; }
         public string? FailureCode { get; set; }
         public JsonElement? Diagnostic { get; set; }
+    }
+
+    /// <summary>Whether this campaign submitted the operation during between-goal maintenance (owned work).</summary>
+    private async Task<bool> SubmittedBetweenGoalsAsync(string operationId, CancellationToken token)
+    {
+        string path = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(memoryPath))!, BetweenGoalsJournal);
+        if (!File.Exists(path)) return false;
+        await foreach (string line in File.ReadLinesAsync(path, token))
+            if (line.Contains(operationId, StringComparison.Ordinal) && line.Contains("\"type\":\"submission\"", StringComparison.Ordinal))
+                return true;
+        return false;
     }
 }
