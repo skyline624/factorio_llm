@@ -102,6 +102,78 @@ public sealed class SpatialControllerTests
         Assert.Equal(new MapPosition(4, 3), SpatialController.SelectWaypoint(field, route));
     }
 
+    [Fact]
+    public async Task ExtendedSearchFindsACollisionFreeDetourWithoutExecutingTheOldPhotograph()
+    {
+        var map = SpatialPlannerTests.Map([new("wall", "wall", new(3, 0), new(new(2.5, -2), new(3.5, 2)), 0, "own")]);
+        var field = new SpatialCollisionField(map);
+        var game = new PlanningGame(map);
+        var journal = new Journal();
+        await using var controller = new SpatialController(game, journal);
+
+        var route = await controller.DeepenRouteAsync(field, new(8, 0), .4, CancellationToken.None);
+
+        Assert.Equal(RouteStatus.Found, route.Status);
+        Assert.True(route.Length > 8);
+        MapPosition previous = map.Actor.Position;
+        foreach (var point in route.Waypoints)
+        {
+            Assert.True(field.SegmentClear(previous, point));
+            previous = point;
+        }
+        Assert.Equal(new MapPosition(8, 0), previous);
+        Assert.All(game.SubmittedKinds, kind => Assert.Equal("wait", kind));
+        Assert.Contains("route-search-deepened", journal.Types);
+    }
+
+    [Fact]
+    public async Task CancelledExtendedSearchCannotDispatchAnActorOperation()
+    {
+        var map = SpatialPlannerTests.Map([]);
+        var game = new PlanningGame(map);
+        var journal = new Journal();
+        await using var controller = new SpatialController(game, journal);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => controller.DeepenRouteAsync(new(map), new(8, 0), .4,
+            cancellation.Token));
+
+        Assert.Empty(game.SubmittedKinds);
+        Assert.DoesNotContain("route-search-deepened", journal.Types);
+    }
+
+    private sealed class PlanningGame(SpatialSnapshot map) : IGameClient
+    {
+        public List<string> SubmittedKinds { get; } = [];
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            object data = request.Action switch
+            {
+                "spatial" => map,
+                "observe" => new
+                {
+                    map.Scope, collectedTick = map.CollectedTick,
+                    coverage = new { atomic = true, collectionStartTick = map.CollectedTick, collectionEndTick = map.CollectedTick,
+                        enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
+                    agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = map.Actor.Position,
+                        health = 250, weapon = new { ready = false, rounds = 0, range = 0 } },
+                    enemies = Array.Empty<object>()
+                },
+                "submit" => Submitted(request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!),
+                _ => throw new InvalidOperationException(request.Action)
+            };
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, map.CollectedTick, Protocol.ToElement(data)));
+        }
+        private object Submitted(OperationSubmission operation)
+        {
+            SubmittedKinds.Add(operation.Kind);
+            return new { operation.OperationId, operation.Kind, status = "completed", acceptedTick = map.CollectedTick,
+                updatedTick = map.CollectedTick, effects = new { } };
+        }
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]

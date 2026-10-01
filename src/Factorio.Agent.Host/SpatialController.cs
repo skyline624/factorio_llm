@@ -105,6 +105,18 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             plans++;
             await journal.AppendAsync("route-plan", new { map.Scope, map.CollectedTick, destination, arrivalDistance,
                 map.StationaryThreats, reused = reusable, route }, deadline.Token);
+            if (!reusable && route.Status == RouteStatus.BudgetExceeded)
+            {
+                // A short search budget is not proof that a known destination is unreachable. Deepen once, with
+                // defense still arbitrated, then observe again before executing any route from this photograph.
+                route = await DeepenRouteAsync(field, destination, arrivalDistance, deadline.Token);
+                plans++;
+                if (route.Status == RouteStatus.Found && route.Waypoints.Count > 0)
+                {
+                    remaining = Subdivide(map.Actor.Position, route.Waypoints).ToList();
+                    continue;
+                }
+            }
             if (route.Status == RouteStatus.NoRouteOnKnownGrid && clearedTrees < 16)
             {
                 ProductionCatalog catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), deadline.Token));
@@ -131,6 +143,17 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             // Reobserve each segment; preserve valid remaining corners to avoid half-tile seed oscillation.
         }
         throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Navigation exhausted its 256-segment budget.");
+    }
+
+    internal async Task<RoutePlan> DeepenRouteAsync(SpatialCollisionField field, MapPosition destination, double arrivalDistance,
+        CancellationToken token)
+    {
+        var route = await ControllerPlanning.RunAsync(t => new RoutePlanner().Find(field, destination,
+            Math.Max(0, arrivalDistance - 0.2), timeBudget: TimeSpan.FromSeconds(2), token: t),
+            this, TimeSpan.FromSeconds(3), token);
+        await journal.AppendAsync("route-search-deepened", new { field.Map.Scope, field.Map.CollectedTick, destination,
+            arrivalDistance, searchSeconds = 2, maximumNodes = 25000, route }, token);
+        return route;
     }
 
     public static IReadOnlyList<MapPosition> Subdivide(MapPosition start, IReadOnlyList<MapPosition> corners)

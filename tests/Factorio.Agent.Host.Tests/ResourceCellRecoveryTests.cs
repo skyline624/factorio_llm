@@ -68,8 +68,10 @@ public sealed class ResourceCellRecoveryTests
         }, row.Kind, row.Product, safe.Id));
     }
 
-    [Fact]
-    public async Task TheDirectorDefersAnUnsafeLegacyCellAndPassesTheSafeCellIdToTheBuilder()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheDirectorDefersAnUnsafeLegacyCellAndPassesTheSafeCellIdToTheBuilder(bool navigationFailure)
     {
         string directory = Directory.CreateTempSubdirectory("resource-resume-").FullName;
         try
@@ -81,7 +83,8 @@ public sealed class ResourceCellRecoveryTests
             var safe = Cell(safeRow, 0, "building", new()) with { Attempts = 1 };
             await new FactoryRegistry(directory).SaveAsync(new(1, "world", [], [dangerous, safe], [dangerousRow, safeRow]), CancellationToken.None);
             var journal = new PlanJournal();
-            var game = new ResumeGame(map, new(1, 10, 17, 1, new(0, 0)));
+            var game = new ResumeGame(map, new(1, 10, 17, 1, new(0, 0)), navigationFailure
+                ? new NavigationPlanningException(RouteStatus.BudgetExceeded, "A bounded procurement route needs another plan.") : null);
             Assert.Equal(0, await new FactoryDirector(game, journal, directory).ResumeResourceCellsAsync(Scope, CancellationToken.None));
             Assert.True(journal.Plans.SequenceEqual([safe.Id]), string.Join("; ", journal.Errors));
             Assert.DoesNotContain("submit", game.Actions); // Stop before procurement or movement in this regression.
@@ -180,6 +183,10 @@ public sealed class ResourceCellRecoveryTests
         Assert.True(FactoryResearchController.Recoverable(new InvalidDataException("The drill does not drop into its planned receiver."), outer.Token));
         Assert.True(FactoryResearchController.Recoverable(new InvalidOperationException(), outer.Token));
         Assert.True(FactoryResearchController.Recoverable(new TimeoutException(), outer.Token));
+        Assert.True(FactoryResearchController.Recoverable(new NavigationPlanningException(RouteStatus.BudgetExceeded,
+            "A bounded search has not established an executable route."), outer.Token));
+        Assert.True(FactoryResearchController.Recoverable(new NavigationPlanningException(RouteStatus.NoRouteOnKnownGrid,
+            "The observed resource cell cannot currently be reached."), outer.Token));
         // The builder's own deadline cancels only its linked token.
         Assert.True(FactoryResearchController.Recoverable(new TaskCanceledException(), outer.Token));
         Assert.False(FactoryResearchController.Recoverable(new ArgumentException(), outer.Token));
@@ -214,7 +221,7 @@ public sealed class ResourceCellRecoveryTests
         }
     }
 
-    private sealed class ResumeGame(SpatialSnapshot map, NativeDeathTransition death) : IGameClient, IDangerZoneReader
+    private sealed class ResumeGame(SpatialSnapshot map, NativeDeathTransition death, Exception? procurementFailure = null) : IGameClient, IDangerZoneReader
     {
         public List<string> Actions { get; } = [];
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
@@ -225,7 +232,7 @@ public sealed class ResourceCellRecoveryTests
                 "production_catalog" => Task.FromResult(new GameResponse(1, request.RequestId, true, map.CollectedTick,
                     Protocol.ToElement(Catalogs.Raw() with { Scope = Scope, CollectedTick = map.CollectedTick }))),
                 "spatial" => Task.FromResult(new GameResponse(1, request.RequestId, true, map.CollectedTick, Protocol.ToElement(map))),
-                _ => throw new InvalidOperationException("Regression stops before any game mutation.")
+                _ => throw procurementFailure ?? new InvalidOperationException("Regression stops before any game mutation.")
             };
         }
         public Task<IReadOnlyList<NativeDeathTransition>> ReadActiveDeathsAsync(ActorScope scope, int surfaceIndex, long tick, CancellationToken token = default)

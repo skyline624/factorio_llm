@@ -33,6 +33,17 @@ public sealed class SpatialQualification(RuntimeSession session)
             evidence.Add(new { check = "synthetic-spatial-layout", disqualifiedAsCampaign = true,
                 setup = "Cleared a local area, placed 13 walls and 28 water tiles, and supplied a furnace and chest. Only setup teleports the actor.",
                 before, planned });
+            RoutePlan deepened = await controller.DeepenRouteAsync(new(map), new(20, 0), .4, token);
+            SpatialNativeState afterSearch = await ReadNativeAsync(token);
+            Require(deepened.Status == RouteStatus.Found && deepened.Waypoints.Any(p => Math.Abs(p.Y) > 5)
+                && afterSearch.Position == before.Position && afterSearch.CharacterId == before.CharacterId
+                && afterSearch.FurnaceItems == before.FurnaceItems
+                && afterSearch.ChestItems == before.ChestItems && afterSearch.Walls == before.Walls
+                && afterSearch.WaterTiles == before.WaterTiles && afterSearch.ConnectedPlayers == before.ConnectedPlayers
+                && (afterSearch.ConnectedPlayers == 0 || afterSearch.PilotCharacterId == afterSearch.CharacterId),
+                "Supervised extended search moved the actor, changed the fixture, or failed to find its detour.");
+            evidence.Add(new { check = "native-supervised-extended-route-search", deepened, after = afterSearch,
+                interpretation = "The longer pure search preserves the actor and terrain; execution still requires a fresh observation." });
             NavigationResult navigation = await controller.NavigateAsync(new(20, 0), cancellationToken: token);
             SpatialNativeState arrived = await ReadNativeAsync(token);
             Require(arrived.Position.DistanceTo(new(20, 0)) <= 0.4 && arrived.Tick - before.Tick >= 100

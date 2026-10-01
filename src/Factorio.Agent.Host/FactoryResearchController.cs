@@ -152,7 +152,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
     /// and the builder's own deadline. Cancelling the research itself still aborts it.
     /// </summary>
     internal static bool Recoverable(Exception error, CancellationToken outer) =>
-        error is InvalidOperationException or TimeoutException or InvalidDataException
+        error is InvalidOperationException or TimeoutException or InvalidDataException or NavigationPlanningException
         || error is OperationCanceledException && !outer.IsCancellationRequested;
 
     private async Task EnsurePowerAsync(CancellationToken token)
