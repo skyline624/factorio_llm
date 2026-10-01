@@ -1,5 +1,6 @@
 local U = require("scripts.util")
 local Actor = require("scripts.actor")
+local Catalog = require("scripts.catalog")
 local M = {}
 local statuses = {}
 for name, value in pairs(defines.rocket_silo_status) do statuses[value] = name end
@@ -11,11 +12,7 @@ function M.observe()
     rocketsLaunched = c.force.rockets_launched, atomic = true, knownSilosComplete = true, prototypes = {}, silos = {}}
   for item_name, item in pairs(prototypes.item) do
     local prototype = item.place_result
-    if prototype and prototype.type == "rocket-silo" then
-      result.prototypes[item_name] = {entityName = prototype.name, recipe = prototype.fixed_recipe,
-        partsRequired = prototype.rocket_parts_required, craftingSpeed = prototype.get_crafting_speed("normal"),
-        energyPerTick = prototype.get_max_energy_usage("normal")}
-    end
+    if prototype and prototype.type == "rocket-silo" then result.prototypes[item_name] = Catalog.silo(prototype) end
   end
   for id, entity in pairs(s.known) do
     if entity.valid and entity.force == c.force and entity.surface == c.surface and entity.type == "rocket-silo" then

@@ -22,7 +22,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         if (kind == FurnaceCellPlanner.Kind && FurnaceCellPlanner.Failure(catalog, machineItem, recipe, FactoryLogistics.Fuel) is { } refused)
             throw new InvalidOperationException(refused);
         var equipment = Equipment(catalog, machineItem);
-        bool io = kind != "lab";
+        var (input, output) = Sides(kind);
         var registry = new FactoryRegistry(directory);
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
         await using var controller = new SpatialController(game, journal);
@@ -36,6 +36,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         if (cell is not null) zone = state.Zones.Single(z => z.Id == cell.Zone);
         else
         {
+            if (Refusal(state, kind) is { } full) throw new InvalidOperationException(full);
             var geometryMap = await spatial.CaptureAsync(items, 48, token);
             RequireScope(geometryMap.Scope, catalog);
             EntityGeometry machine = geometryMap.Prototypes[geometryMap.Items[machineItem].EntityName];
@@ -50,7 +51,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
 
         var planningMap = await spatial.CaptureAsync(items, 48, token);
         RequireScope(planningMap.Scope, catalog);
-        CellLayout layout = new FactoryBandPlanner().Layout(planningMap, equipment, zone.Origin, cell.Slot, io, io);
+        CellLayout layout = new FactoryBandPlanner().Layout(planningMap, equipment, zone.Origin, cell.Slot, input, output);
         // Recorded roles let maintenance rebuild a destroyed entity exactly where the cell expects it; power links
         // recorded by an interrupted run are kept.
         cell = cell with
@@ -120,12 +121,12 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).FirstOrDefault()
                 ?? throw new InvalidOperationException("A factory zone needs an observed generator network near the actor; build steam power first.");
             var current = await registry.LoadAsync(catalog.Scope.WorldId, token);
-            var site = new FactoryZonePlanner().Find(KeepSteamGrowth(map, current.Zones), machine, powered.Position, ZoneSlots, token);
+            var site = new FactoryZonePlanner().Find(KeepSteamGrowth(map, current.Zones), machine, powered.Position, Slots(kind), token);
             if (site is null && steam is not null)
             {
                 // A band that blocks steam growth is still better than no factory; the journal keeps the trade-off visible.
                 await journal.AppendAsync("factory-zone-steam-growth-blocked", new { map.CollectedTick }, token);
-                site = new FactoryZonePlanner().Find(map, machine, powered.Position, ZoneSlots, token);
+                site = new FactoryZonePlanner().Find(map, machine, powered.Position, Slots(kind), token);
             }
             if (site is null) throw new InvalidOperationException("No dry, deposit-free rectangle for a factory band near the power network.");
             var created = new FactoryZone(current.Zones.Count == 0 ? 1 : current.Zones.Max(z => z.Id) + 1, site.Origin, site.Slots,
@@ -307,8 +308,22 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         return new(machineItem, "inserter", chest, "small-electric-pole");
     }
 
-    /// <summary>Whether the machine is given its recipe; furnaces select theirs from the ingredient they receive.</summary>
-    public static bool Configured(string kind, string? recipe) => recipe is not null && kind != FurnaceCellPlanner.Kind;
+    /// <summary>Whether the machine is given its recipe; furnaces select theirs from the ingredient they receive, a silo's is fixed.</summary>
+    public static bool Configured(string kind, string? recipe) => recipe is not null && kind is not (FurnaceCellPlanner.Kind or SiloCellPlanner.Kind);
+
+    /// <summary>Chest sides of a cell: laboratories take packs by hand, a silo consumes its ingredients without an item product.</summary>
+    public static (bool Input, bool Output) Sides(string kind) => (kind != "lab", kind is not ("lab" or SiloCellPlanner.Kind));
+
+    /// <summary>Slots of a new band: silos get a band of their own, sized for the one a factory builds.</summary>
+    public static int Slots(string kind) => kind == SiloCellPlanner.Kind ? SiloCellPlanner.MaximumCells : ZoneSlots;
+
+    /// <summary>
+    /// Why a new cell of this kind is refused: silo cells in any status, a ready one whose silo is gone included, already fill the
+    /// factory's <see cref="SiloCellPlanner.MaximumCells"/>. A band still has a free row beside its silo, so planning alone cannot stop it.
+    /// </summary>
+    public static string? Refusal(FactoryState state, string kind) =>
+        kind == SiloCellPlanner.Kind && state.Cells.Count(c => c.Kind == kind) >= SiloCellPlanner.MaximumCells
+            ? $"The factory already registers {SiloCellPlanner.MaximumCells} silo cell(s); resume or rebuild it instead of building another." : null;
 
     /// <summary>The role whose network proves the cell is powered: the machine, or the input inserter beside a burner machine.</summary>
     public static string PowerProbe(EntityGeometry machine) => machine.IsElectric ? "machine" : "input-inserter";

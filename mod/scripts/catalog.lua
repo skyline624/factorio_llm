@@ -64,11 +64,17 @@ function M.technologies(args)
   return page(items, args)
 end
 
+-- A silo prototype as C# plans it: fixed recipe, native part count, crafting speed and energy.
+function M.silo(prototype)
+  return {entityName = prototype.name, recipe = prototype.fixed_recipe, partsRequired = prototype.rocket_parts_required,
+    craftingSpeed = prototype.get_crafting_speed("normal"), energyPerTick = prototype.get_max_energy_usage("normal")}
+end
+
 function M.production()
   local c = Actor.get()
   U.check(c ~= nil, "actor_dead", "Production catalog requires a living character")
   local result = {scope = Actor.scope(), collectedTick = game.tick, recipes = {}, items = {}, mining = {}, miningSourceTypes = {}, machines = {}, assemblers = {}, turrets = {},
-    guns = {}, armors = {}, handCategories = c.prototype.crafting_categories}
+    guns = {}, armors = {}, silos = {}, handCategories = c.prototype.crafting_categories}
   for name, recipe in pairs(c.force.recipes) do
     if not recipe.hidden then
       result.recipes[#result.recipes + 1] = {name = name, enabled = recipe.enabled, category = recipe.category,
@@ -106,6 +112,7 @@ function M.production()
         end
       end
     end
+    if entity and entity.type == "rocket-silo" then result.silos[name] = M.silo(entity) end
     if entity and entity.type == "furnace" and entity.burner_prototype then
       result.machines[name] = {entityName = entity.name, categories = entity.crafting_categories,
         fuelCategories = entity.burner_prototype.fuel_categories, craftingSpeed = entity.get_crafting_speed("normal")}

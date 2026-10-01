@@ -215,7 +215,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 string chest = cell.Entities["input-chest"];
                 var inChest = Items(photograph, chest);
                 // Fluid chain cells are sized by their own chain, not by the assembler plan, and keep the caller's buffer.
-                int crafts = cell.Kind is "assembler" or FurnaceCellPlanner.Kind ? BufferCrafts(shares, cell.Recipe!, bufferCrafts) : bufferCrafts;
+                int crafts = CellBufferCrafts(cell, shares, bufferCrafts);
                 return recipe.Ingredients.Where(i => i.DeterministicItem).Select(i => (Chest: chest, Item: i.Name,
                     Loaded: inChest.GetValueOrDefault(i.Name), Target: checked((long)(i.Amount!.Value * crafts))));
             }).ToArray();
@@ -400,6 +400,13 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         : shares.TryGetValue(recipe, out double perCell)
             ? (int)Math.Clamp(Math.Ceiling(perCell * BufferMinutes - 1e-9), Math.Min(MinimumBufferCrafts, maximum), maximum)
             : Math.Min(MinimumBufferCrafts, maximum);
+
+    /// <summary>
+    /// Crafts a cell's input chest holds: assembler, furnace and silo cells are planned stages; fluid chain cells are sized by
+    /// their own chain, not by the assembler plan, and keep the caller's buffer.
+    /// </summary>
+    internal static int CellBufferCrafts(FactoryCell cell, IReadOnlyDictionary<string, double>? shares, int bufferCrafts) =>
+        cell.Kind is "assembler" or FurnaceCellPlanner.Kind or SiloCellPlanner.Kind ? BufferCrafts(shares, cell.Recipe!, bufferCrafts) : bufferCrafts;
 
     /// <summary>
     /// Splits a carried item among input chests: every chest first reaches a quarter of its target, then chests are filled

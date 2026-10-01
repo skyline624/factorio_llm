@@ -18,11 +18,11 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     public static bool Enabled(ProductionCatalog catalog, string item) =>
         catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == item));
 
-    /// <summary>Machines new cells are built with: the best enabled assembler and the fastest enabled furnace burning coal.</summary>
+    /// <summary>Machines new cells are built with: the best enabled assembler, the fastest enabled furnace burning coal and an enabled silo.</summary>
     public static IReadOnlySet<string> MachineItems(ProductionCatalog catalog) =>
         MachinePreference.Where(m => Enabled(catalog, m)).Take(1)
             .Concat(FurnaceCellPlanner.Machine(catalog, FactoryLogistics.Fuel) is { } furnace ? [furnace] : Array.Empty<string>())
-            .ToHashSet(StringComparer.Ordinal);
+            .Concat(SiloCellPlanner.Machines(catalog)).ToHashSet(StringComparer.Ordinal);
 
     public async Task<AutomationPlan> AutomateAsync(string item, double perMinute, CancellationToken token)
     {

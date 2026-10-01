@@ -5,6 +5,9 @@ public sealed record RocketStep(string Kind, int RemainingCycles, IReadOnlyDicti
 /// <summary>Uses native part counters and launch phases; a prepared rocket is never interpreted as a completed launch.</summary>
 public static class RocketPlanner
 {
+    /// <summary>Recipe cycles one hand delivery carries at most; a silo cell is refilled toward its planned buffer instead.</summary>
+    public const int BatchCycles = 5;
+
     /// <summary>At most five cycles per delivery, reduced by loaded stock and the engine's insertable counts.</summary>
     public static IReadOnlyDictionary<string, int> SupplyBatch(RocketSiloPrototype prototype, ObservedRocketSilo silo, NativeRecipe recipe)
     {
@@ -12,7 +15,7 @@ public static class RocketPlanner
         if (step.Kind != "supply") return new Dictionary<string, int>();
         return recipe.Ingredients.GroupBy(p => p.Name).ToDictionary(g => g.Key, g =>
         {
-            double missing = Math.Max(0, Math.Ceiling(g.Sum(p => p.Amount!.Value) * 5) - silo.Inputs.GetValueOrDefault(g.Key));
+            double missing = Math.Max(0, Math.Ceiling(g.Sum(p => p.Amount!.Value) * BatchCycles) - silo.Inputs.GetValueOrDefault(g.Key));
             return checked((int)Math.Min(1000, Math.Min(step.RequiredItems[g.Key],
                 Math.Min(missing, silo.Insertable.GetValueOrDefault(g.Key)))));
         }, StringComparer.Ordinal);

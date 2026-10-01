@@ -77,6 +77,7 @@ Ces fixtures isolent le mécanisme. Elles ne remplacent ni une campagne normale 
 | Extension de l'alimentation vapeur selon la demande mesurée, chaudières alimentées par coffre | [power-expansion.md](power-expansion.md) | `verify-power-expansion` |
 | Périmètre défensif (nids de tourelles, murs extérieurs), réarmement et reconstruction après attaque | [perimeter-defense.md](perimeter-defense.md) | `verify-perimeter`, avec une attaque de biters |
 | Preuve d'alimentation : un poteau doit partager son réseau avec un générateur connu, les îlots isolés sont réparés | présent document | cellules et recherche |
+| Cellule de silo (silo, coffre, bras, poteau) alimentée par la logistique, étape planifiée des pièces de fusée, lancement depuis la cellule | [rocket-launch.md](rocket-launch.md#cellule-de-silo-persistante) | `verify-silo-cell` |
 
 Le 30/09, après la fusion des trois modules, les cinq qualifications (`verify-factory-cells`, `verify-factory-research`, `verify-resource-cells`, `verify-power-expansion`, `verify-perimeter`) ont réussi à la suite sur une même fixture neuve. Deux ajustements de vérification reflètent le code fusionné :
 

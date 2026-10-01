@@ -44,6 +44,7 @@ try
           verify-attack-response --session FILE
           decision-replay --session FILE [--quantity N] [--config FILE]
           verify-rocket --session FILE
+          verify-silo-cell --session FILE
           verify-furnace-fuel --session FILE
           verify-assembly-batches --session FILE
           verify-campaign-journals --session FILE
@@ -283,7 +284,7 @@ try
             using var lease = ActorControlLease.Acquire(session.Directory);
             await using var game = session.CreateClient(lease);
             string journalPath = Path.Combine(session.Directory, $"rocket-{Guid.NewGuid():N}.jsonl");
-            var controller = new RocketLaunchController(game, new ControllerJournal(journalPath));
+            var controller = new RocketLaunchController(game, new ControllerJournal(journalPath), session.Directory);
             Print(new { result = await controller.RunAsync(Required("item"), shutdown.Token), journalPath });
             break;
         }
@@ -297,6 +298,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new RocketQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-silo-cell":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new SiloCellQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-furnace-fleet":

@@ -1,8 +1,8 @@
 namespace Factorio.Agent.Core;
 
-/// <summary>Kind is the cell kind that serves the stage: "assembler", or "furnace" for chest-fed burner furnaces.</summary>
+/// <summary>Kind is the cell kind that serves the stage: "assembler", "furnace" for chest-fed burner furnaces, or "silo" for rocket parts.</summary>
 public sealed record AutomationStage(string Recipe, string Item, string MachineItem, double CraftsPerMinute, int Machines, string Kind = "assembler");
-/// <summary>Assembler and furnace stages for a target rate; raw inputs (ore plates, ores, fluids, unsupported items) are supplied otherwise.</summary>
+/// <summary>Assembler, furnace and silo stages for a target rate; raw inputs (ore plates, ores, fluids, unsupported items) are supplied otherwise.</summary>
 public sealed record AutomationPlan(IReadOnlyList<AutomationStage> Stages, IReadOnlyDictionary<string, double> RawPerMinute);
 
 /// <summary>Sizes chest-fed assembler and furnace cells from native recipe amounts, crafting speed and one basic inserter per side.</summary>
@@ -26,10 +26,10 @@ public static class AutomationPlanner
         foreach (var (item, perMinute) in targets.OrderBy(p => p.Key, StringComparer.Ordinal)) Add(item, perMinute, []);
         var stages = crafts.Values.Select(stage =>
         {
-            bool furnace = catalog.Assemblers?.ContainsKey(stage.Machine) != true;
+            string kind = Kind(catalog, stage.Machine);
             int machines = (int)Math.Ceiling(stage.Crafts / CellCraftsPerMinute(catalog, stage.Recipe, stage.Machine) - 1e-9);
             return new AutomationStage(stage.Recipe.Name, stage.Recipe.Products[0].Name, stage.Machine, stage.Crafts,
-                Math.Clamp(machines, 1, maximumMachinesPerStage), furnace ? FurnaceCellPlanner.Kind : "assembler");
+                Math.Clamp(machines, 1, Maximum(kind, maximumMachinesPerStage)), kind);
         }).OrderBy(s => s.Recipe, StringComparer.Ordinal).ToArray();
         return new(stages, raw);
 
@@ -54,8 +54,12 @@ public static class AutomationPlanner
     /// <summary>Crafts per minute one cell of this machine gives: native crafting speed, capped by one basic inserter per side.</summary>
     public static double CellCraftsPerMinute(ProductionCatalog catalog, NativeRecipe recipe, string machineItem)
     {
-        bool furnace = catalog.Assemblers?.ContainsKey(machineItem) != true;
-        double speed = furnace ? catalog.Machines[machineItem].CraftingSpeed : catalog.Assemblers![machineItem].CraftingSpeed;
+        double speed = Kind(catalog, machineItem) switch
+        {
+            SiloCellPlanner.Kind => catalog.Silos![machineItem].CraftingSpeed,
+            FurnaceCellPlanner.Kind => catalog.Machines[machineItem].CraftingSpeed,
+            _ => catalog.Assemblers![machineItem].CraftingSpeed
+        };
         double machineCrafts = 60 * speed / recipe.EnergySeconds;
         // A furnace's input arm also carries its fuel, a small share next to the ingredient (0.36 coal per steel craft).
         double inputs = recipe.Ingredients.Where(i => i.DeterministicItem).Sum(i => i.Amount!.Value);
@@ -73,13 +77,14 @@ public static class AutomationPlanner
         var recipe = catalog.Recipes.Single(r => r.Name == stage.Recipe);
         double missing = stage.CraftsPerMinute - readyMachineItems.Sum(machine => CellCraftsPerMinute(catalog, recipe, machine));
         int wanted = missing <= 1e-9 ? 0 : (int)Math.Ceiling(missing / CellCraftsPerMinute(catalog, recipe, stage.MachineItem) - 1e-9);
-        return Math.Clamp(wanted, 0, Math.Max(0, maximumMachinesPerStage - readyMachineItems.Count));
+        return Math.Clamp(wanted, 0, Math.Max(0, Maximum(stage.Kind, maximumMachinesPerStage) - readyMachineItems.Count));
     }
 
     /// <summary>
     /// The enabled single-product recipe of an item that an available assembler can craft from solids only, or else
-    /// that an available furnace smelts from a solid that is not mined (steel from plates). Mined items, ore smelting
-    /// (left to resource cells on the patch) and fluid materials are left to other suppliers.
+    /// that an available furnace smelts from a solid that is not mined (steel from plates), or else that is the fixed
+    /// recipe of an available silo (rocket parts). Mined items, ore smelting (left to resource cells on the patch) and
+    /// fluid materials are left to other suppliers.
     /// </summary>
     public static (NativeRecipe Recipe, string MachineItem)? Choose(ProductionCatalog catalog, string item, IReadOnlySet<string> machineItems)
     {
@@ -97,7 +102,16 @@ public static class AutomationPlanner
             if (machine.Key is not null) return (recipe, machine.Key);
             var furnace = furnaces.FirstOrDefault(p => FurnaceCellPlanner.Smeltable(recipe, p.Value));
             if (furnace.Key is not null) return (recipe, furnace.Key);
+            if (SiloCellPlanner.Machine(catalog, recipe, machineItems) is { } silo) return (recipe, silo);
         }
         return null;
     }
+
+    /// <summary>The cell kind a machine serves: a silo, an assembler, or else a chest-fed burner furnace.</summary>
+    private static string Kind(ProductionCatalog catalog, string machineItem) => catalog.Silos?.ContainsKey(machineItem) == true
+        ? SiloCellPlanner.Kind : catalog.Assemblers?.ContainsKey(machineItem) == true ? "assembler" : FurnaceCellPlanner.Kind;
+
+    // One silo serves the whole factory, whatever the planned rate.
+    private static int Maximum(string kind, int maximumMachinesPerStage) =>
+        kind == SiloCellPlanner.Kind ? SiloCellPlanner.MaximumCells : maximumMachinesPerStage;
 }
