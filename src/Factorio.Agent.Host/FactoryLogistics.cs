@@ -25,6 +25,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     public const double StockMinutes = 20;
     /// <summary>Stock that pauses the producers of an item outside the plan.</summary>
     public const long UnplannedStock = 50;
+    /// <summary>Free bag slots below which surplus goes back to its producers' output chests before collecting.</summary>
+    public const int MinimumFreeSlots = 10;
 
     public async Task<LogisticsResult> ServiceAsync(int bufferCrafts = 40, CancellationToken token = default)
     {
@@ -63,20 +65,6 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         foreach (var cell in degraded)
             await journal.AppendAsync("factory-cell-degraded", new { cell.Cell, cell.Missing, rebuildable = cell.Missing.All(m => m.Item is not null) }, token);
 
-        foreach (string chest in OutputChests(cells))
-        {
-            foreach (var (item, count) in Items(snapshot, chest).Where(p => p.Value > 0))
-            {
-                long moved = await TransferAsync("take", chest, item, count);
-                if (moved > 0) collected[item] = collected.GetValueOrDefault(item) + moved;
-            }
-        }
-
-        snapshot = await snapshots.CaptureAsync(cancellationToken: token);
-        Require(snapshot.Scope, catalog);
-        var carried = Carried(snapshot);
-        // Power and burners come first: recipes burning fuel only take what their thresholds leave.
-        long fuelReserve = FuelReserve(snapshot, cells, catalog.Items[Fuel].StackSize);
         var shares = CellShares(catalog, state);
         // Demand pulls production: a producer whose product already holds enough stock is not refilled and drains to a stop.
         var caps = StockCaps(catalog, state);
@@ -87,16 +75,40 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         if (paused.Length > 0)
             await journal.AppendAsync("factory-cells-paused", paused.Select(p => new { p.Cell.Id, p.Cell.Recipe, p.Product,
                 stock = stocks.GetValueOrDefault(p.Product), cap = caps!.GetValueOrDefault(p.Product, UnplannedStock) }), token);
-        var refills = cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest") && paused.All(p => p.Cell.Id != c.Id)).SelectMany(cell =>
+
+        // The bag carries what chests, labs and burners need plus two stacks; a full bag fails every later take.
+        var needs = Refills(snapshot).GroupBy(r => r.Item).ToDictionary(g => g.Key, g => g.Sum(r => Math.Max(0, r.Target - r.Loaded)), StringComparer.Ordinal);
+        int labs = cells.Count(c => c.Kind == "lab");
+        foreach (string pack in catalog.Items.Keys.Where(IsSciencePack)) needs[pack] = needs.GetValueOrDefault(pack) + labs * StackSize(pack);
+        needs[Fuel] = needs.GetValueOrDefault(Fuel) + FuelReserve(snapshot, cells, StackSize(Fuel)) + StackSize(Fuel);
+        long Cap(string item) => CollectCap(needs.GetValueOrDefault(item), StackSize(item));
+        var bag = Carried(snapshot);
+        if (FreeSlots(snapshot) < MinimumFreeSlots)
+            foreach (var (item, surplus) in Surplus(bag, Cap, StackSize))
+            {
+                if (NearestProducerChest(snapshot, cells, catalog, item) is not { } home) continue;
+                long moved = await TransferAsync("insert", home, item, surplus);
+                bag[item] = bag.GetValueOrDefault(item) - moved;
+                if (moved > 0) await journal.AppendAsync("factory-surplus-deposited", new { item, moved, chest = home }, token);
+            }
+        foreach (string chest in OutputChests(cells))
         {
-            NativeRecipe recipe = catalog.Recipes.Single(r => r.Name == cell.Recipe);
-            string chest = cell.Entities["input-chest"];
-            var inChest = Items(snapshot, chest);
-            // Fluid chain cells are sized by their own chain, not by the assembler plan, and keep the caller's buffer.
-            int crafts = cell.Kind is "assembler" or FurnaceCellPlanner.Kind ? BufferCrafts(shares, cell.Recipe!, bufferCrafts) : bufferCrafts;
-            return recipe.Ingredients.Where(i => i.DeterministicItem).Select(i => (Chest: chest, Item: i.Name,
-                Loaded: inChest.GetValueOrDefault(i.Name), Target: checked((long)(i.Amount!.Value * crafts))));
-        }).ToArray();
+            foreach (var (item, count) in Items(snapshot, chest).Where(p => p.Value > 0))
+            {
+                long wanted = Math.Min(count, Cap(item) - bag.GetValueOrDefault(item));
+                if (wanted <= 0) continue;
+                long moved = await TransferAsync("take", chest, item, wanted);
+                bag[item] = bag.GetValueOrDefault(item) + moved;
+                if (moved > 0) collected[item] = collected.GetValueOrDefault(item) + moved;
+            }
+        }
+
+        snapshot = await snapshots.CaptureAsync(cancellationToken: token);
+        Require(snapshot.Scope, catalog);
+        var carried = Carried(snapshot);
+        // Power and burners come first: recipes burning fuel only take what their thresholds leave.
+        long fuelReserve = FuelReserve(snapshot, cells, catalog.Items[Fuel].StackSize);
+        var refills = Refills(snapshot);
         // Scarce items are shared before any chest is filled; transfers still go chest by chest to keep one visit each.
         var allotted = new Dictionary<(string Chest, string Item), long>();
         foreach (var item in refills.GroupBy(r => r.Item))
@@ -186,6 +198,21 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
 
         bool IsSciencePack(string item) => item.EndsWith("-science-pack", StringComparison.Ordinal);
 
+        int StackSize(string item) => catalog.Items.TryGetValue(item, out var native) ? native.StackSize : 100;
+
+        // Input chest targets of the cells refilled this round: planned buffers, paused producers left out.
+        (string Chest, string Item, long Loaded, long Target)[] Refills(FactorySnapshot photograph) =>
+            cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest") && paused.All(p => p.Cell.Id != c.Id)).SelectMany(cell =>
+            {
+                NativeRecipe recipe = catalog.Recipes.Single(r => r.Name == cell.Recipe);
+                string chest = cell.Entities["input-chest"];
+                var inChest = Items(photograph, chest);
+                // Fluid chain cells are sized by their own chain, not by the assembler plan, and keep the caller's buffer.
+                int crafts = cell.Kind is "assembler" or FurnaceCellPlanner.Kind ? BufferCrafts(shares, cell.Recipe!, bufferCrafts) : bufferCrafts;
+                return recipe.Ingredients.Where(i => i.DeterministicItem).Select(i => (Chest: chest, Item: i.Name,
+                    Loaded: inChest.GetValueOrDefault(i.Name), Target: checked((long)(i.Amount!.Value * crafts))));
+            }).ToArray();
+
         // Tops a chest up from carried stock and returns what moved; what the actor lacks is shortfall unless the caller judges it.
         async Task<long> RefillAsync(string chest, string item, long need, bool reportShort = true)
         {
@@ -272,6 +299,41 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         if (state.Targets is not { Count: > 0 } targets || machines.Count == 0) return null;
         return AutomationPlanner.Plan(catalog, targets, machines).Stages.ToDictionary(s => s.Recipe, s => s.CraftsPerMinute
             / Math.Max(1, state.Cells.Count(c => c.Kind == s.Kind && c.Recipe == s.Recipe && c.Status == "ready")), StringComparer.Ordinal);
+    }
+
+    /// <summary>What the bag may hold of an item after collection: its need plus two stacks of slack for construction.</summary>
+    internal static long CollectCap(long need, int stackSize) => need + 2L * stackSize;
+
+    /// <summary>Carried items beyond their cap, largest surplus in stacks first.</summary>
+    internal static IReadOnlyList<(string Item, long Surplus)> Surplus(IReadOnlyDictionary<string, long> carried, Func<string, long> cap,
+        Func<string, int> stackSize) => carried.Select(p => (Item: p.Key, Surplus: p.Value - cap(p.Key))).Where(p => p.Surplus > 0)
+            .OrderByDescending(p => (double)p.Surplus / stackSize(p.Item)).ThenBy(p => p.Item, StringComparer.Ordinal).ToArray();
+
+    /// <summary>Free slots of the actor's main inventory in the photograph; unknown slots never trigger a deposit.</summary>
+    internal static int FreeSlots(FactorySnapshot snapshot)
+    {
+        var actor = snapshot.Records.Single(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "actor");
+        string main = actor.Data.GetProperty("mainInventoryId").GetString()!;
+        var inventory = snapshot.Records.Single(r => r.Id == main && r.Kind == "inventory");
+        return inventory.Data.TryGetProperty("usableSlots", out var usable) && inventory.Data.TryGetProperty("stacks", out var stacks)
+            ? usable.GetInt32() - stacks.GetArrayLength() : int.MaxValue;
+    }
+
+    /// <summary>
+    /// The output chest of a ready cell producing the item nearest to the actor: surplus returns where logistics would
+    /// collect it again, still counted in the known factory stock.
+    /// </summary>
+    internal static string? NearestProducerChest(FactorySnapshot snapshot, IEnumerable<FactoryCell> cells, ProductionCatalog catalog, string item)
+    {
+        var actor = snapshot.Records.Single(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "actor");
+        var at = actor.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+        return cells.Where(c => c.Entities.ContainsKey("output-chest") && c.Recipe is not null
+                && (catalog.Recipes.FirstOrDefault(r => r.Name == c.Recipe)?.Products[0].Name ?? c.Recipe) == item)
+            .Select(c => c.Entities["output-chest"])
+            .Select(id => (Id: id, Record: snapshot.Records.FirstOrDefault(r => r.Kind == "entity" && r.EntityId == id)))
+            .Where(p => p.Record is not null)
+            .OrderBy(p => p.Record!.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!.DistanceTo(at))
+            .Select(p => p.Id).FirstOrDefault();
     }
 
     /// <summary>

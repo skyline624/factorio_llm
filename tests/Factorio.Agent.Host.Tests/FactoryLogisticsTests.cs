@@ -94,6 +94,22 @@ public sealed class FactoryLogisticsTests
         Assert.False(FactoryLogistics.Paused(null, "automation-science-pack", stock: 100000));
     }
 
+    [Fact]
+    public void CollectionKeepsTwoStacksBeyondWhatChestsAndLabsNeed()
+    {
+        // Campaign 2026-10-01 (seed 20261002): every output chest was emptied into the bag each round; after a corpse recovery
+        // returned 4286 iron plates the full bag refused later takes with transfer_blocked.
+        Assert.Equal(330, FactoryLogistics.CollectCap(need: 130, stackSize: 100));
+        Assert.Equal(200, FactoryLogistics.CollectCap(need: 0, stackSize: 100));
+        var caps = new Dictionary<string, long> { ["iron-plate"] = 330, ["copper-cable"] = 400 };
+        var surplus = FactoryLogistics.Surplus(new Dictionary<string, long> { ["iron-plate"] = 4286, ["copper-cable"] = 437, ["wood"] = 3 },
+            item => caps.GetValueOrDefault(item, 200), item => item == "copper-cable" ? 200 : 100);
+        // Largest surplus in stacks first; items within their cap stay carried.
+        Assert.Equal([("iron-plate", 3956L)], surplus.Where(s => s.Item == "iron-plate").ToArray());
+        Assert.Equal(["iron-plate", "copper-cable"], surplus.Select(s => s.Item));
+        Assert.DoesNotContain(surplus, s => s.Item == "wood");
+    }
+
     private static FactoryCell Assembler(string id, string recipe) => new(id, 1, new(0, 0, true), "assembler", "assembling-machine-1", recipe,
         new Dictionary<string, string> { ["machine"] = id, ["input-chest"] = id + "-in", ["output-chest"] = id + "-out" }, "ready", 1);
 
