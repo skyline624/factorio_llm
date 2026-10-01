@@ -6,14 +6,33 @@ namespace Factorio.Agent.Host;
 public sealed record RawCellCapacity(string Item, string Kind, int Cells, double PerMinute, int Built);
 /// <summary>What the resource cells of one raw item deliver: ready capacity, depleted cells and the drills that mine it.</summary>
 public sealed record RawSupplyFact(string Item, int ReadyCells, double PerMinute, int DepletedCells, IReadOnlyList<string> Drills);
+public sealed record FactoryEquipmentUnlock(string Technology, bool Enabled, bool Available, string[] Equipment);
+public sealed record FactoryAutomationReadiness(string[] MissingEquipment, FactoryEquipmentUnlock[] UnlockResearch)
+{
+    public string Interpretation => "Missing equipment blocks persistent assembler cells. Unlock research is matched by native recipe products and unlock effects, not technology-name guesses. Enabled equipment does not prove installed machines, power or production. Coverage gaps alone do not establish a defense emergency.";
+}
 
 /// <summary>Grows the persistent factory: sizes assembler and furnace chains for a target rate, adds laboratories and raw resource cells.</summary>
 public sealed class FactoryDirector(IGameClient game, IControllerJournal journal, string directory)
 {
     public static readonly string[] MachinePreference = ["assembling-machine-2", "assembling-machine-1"];
+    private static readonly string[] AutomationEquipment = ["assembling-machine-1", "inserter", "small-electric-pole", "lab"];
 
     public static bool Available(ProductionCatalog catalog) =>
-        new[] { "assembling-machine-1", "inserter", "small-electric-pole", "lab" }.All(item => Enabled(catalog, item));
+        AutomationEquipment.All(item => Enabled(catalog, item));
+
+    public static FactoryAutomationReadiness Readiness(ProductionCatalog catalog, IReadOnlyDictionary<string, NativeTechnology> technologies)
+    {
+        string[] missing = AutomationEquipment.Where(item => !Enabled(catalog, item)).ToArray();
+        var unlocks = technologies.Values.Where(t => !t.Researched).Select(t =>
+        {
+            var recipes = TechnologyPlanner.RecipeUnlocks(t.Effects).ToHashSet(StringComparer.Ordinal);
+            string[] equipment = missing.Where(item => catalog.Recipes.Any(r => recipes.Contains(r.Name)
+                && r.Products.Any(p => p.DeterministicItem && p.Name == item))).ToArray();
+            return new FactoryEquipmentUnlock(t.Name, t.Enabled, t.Available, equipment);
+        }).Where(t => t.Equipment.Length > 0).OrderBy(t => t.Technology, StringComparer.Ordinal).ToArray();
+        return new(missing, unlocks);
+    }
 
     public static bool Enabled(ProductionCatalog catalog, string item) =>
         catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == item));

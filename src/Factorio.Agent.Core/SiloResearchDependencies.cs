@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace Factorio.Agent.Core;
 
 /// <summary>Observed technology edges for silo recipes; not a production or launch feasibility plan.</summary>
@@ -17,7 +15,8 @@ public sealed record SiloResearchDependencies(string[] SiloRecipes, string[] Unl
             .Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
         string[] recipes = catalog.Recipes.Where(r => r.Products.Any(p => p.DeterministicItem && siloItems.Contains(p.Name)))
             .Select(r => r.Name).Order(StringComparer.Ordinal).ToArray();
-        string[] roots = technologies.Values.Where(t => UnlocksSilo(t.Effects)).Select(t => t.Name).Order(StringComparer.Ordinal).ToArray();
+        string[] roots = technologies.Values.Where(t => TechnologyPlanner.RecipeUnlocks(t.Effects).Any(recipes.Contains))
+            .Select(t => t.Name).Order(StringComparer.Ordinal).ToArray();
         var dependencies = new SortedDictionary<string, string[]>(StringComparer.Ordinal);
         var visiting = new HashSet<string>(StringComparer.Ordinal);
         foreach (string root in roots) Visit(root);
@@ -25,12 +24,6 @@ public sealed record SiloResearchDependencies(string[] SiloRecipes, string[] Unl
         return new(recipes, roots, dependencies, remaining,
             remaining.Where(n => technologies[n].Enabled && technologies[n].Available).ToArray(),
             remaining.Where(n => !technologies[n].Enabled).ToArray());
-
-        bool UnlocksSilo(JsonElement? effects) => effects is { ValueKind: JsonValueKind.Array } array
-            && array.EnumerateArray().Any(e => e.ValueKind == JsonValueKind.Object
-                && e.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String && type.GetString() == "unlock-recipe"
-                && e.TryGetProperty("recipe", out var recipe) && recipe.ValueKind == JsonValueKind.String
-                && recipes.Contains(recipe.GetString(), StringComparer.Ordinal));
 
         void Visit(string name)
         {

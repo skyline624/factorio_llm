@@ -15,6 +15,14 @@ public sealed record TechnologyStep(string Kind, string Technology, string? Item
 /// <summary>Resolves native technology dependencies without granting research or guessing unlocks.</summary>
 public sealed class TechnologyPlanner
 {
+    /// <summary>Exact recipe identifiers from observed native effects, without guessing technology names.</summary>
+    public static string[] RecipeUnlocks(JsonElement? effects) => effects is { ValueKind: JsonValueKind.Array } list
+        ? list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object && e.TryGetProperty("type", out var type)
+                && type.ValueKind == JsonValueKind.String && type.GetString() == "unlock-recipe"
+                && e.TryGetProperty("recipe", out var recipe) && recipe.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetProperty("recipe").GetString()!).ToArray()
+        : [];
+
     public TechnologyStep Next(string target, IReadOnlyDictionary<string, NativeTechnology> technologies)
     {
         var path = new HashSet<string>(StringComparer.Ordinal);

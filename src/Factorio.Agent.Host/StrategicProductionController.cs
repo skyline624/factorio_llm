@@ -23,6 +23,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         if (catalog.Scope != scope || science.Scope != scope || factory.Scope != scope) throw new InvalidDataException("Strategic observations span different actor scopes.");
         var defenses = catalog.Turrets is { Count: > 0 } ? DefenseFactoryState.Read(factory, catalog) : null;
         bool automation = factoryDirectory is not null && FactoryDirector.Available(catalog);
+        var automationReadiness = FactoryDirector.Readiness(catalog, science.Technologies);
         var factoryState = factoryDirectory is null ? null : await new FactoryRegistry(factoryDirectory).LoadAsync(scope.WorldId, token);
         var cells = factoryState is null ? [] : factoryState.Cells.Where(c => c.Status == "ready").ToArray();
         JsonElement agent = observation.Data.GetProperty("agent");
@@ -88,6 +89,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             automatedFactory = new
             {
                 available = automation,
+                prerequisites = automationReadiness,
                 assemblerCells = cells.Where(c => c.Kind == "assembler").GroupBy(c => c.Recipe!).OrderBy(g => g.Key, StringComparer.Ordinal)
                     .Select(g => new { recipe = g.Key, cells = g.Count() }).ToArray(),
                 furnaceCells = cells.Where(c => c.Kind == FurnaceCellPlanner.Kind).GroupBy(c => c.Recipe!).OrderBy(g => g.Key, StringComparer.Ordinal)
@@ -277,11 +279,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
     /// armor, ammunition or wall. On 2026-10-01 (seed 20261002) the pistol-armed actor died 23 times while military research
     /// stayed unchosen.
     /// </summary>
-    internal static string[] Unlocks(JsonElement? effects) => effects is { ValueKind: JsonValueKind.Array } list
-        ? list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object && e.TryGetProperty("type", out var type)
-                && type.GetString() == "unlock-recipe" && e.TryGetProperty("recipe", out var recipe) && recipe.ValueKind == JsonValueKind.String)
-            .Select(e => e.GetProperty("recipe").GetString()!).Take(12).ToArray()
-        : [];
+    internal static string[] Unlocks(JsonElement? effects) => TechnologyPlanner.RecipeUnlocks(effects).Take(12).ToArray();
 
     private static string[] Names(JsonElement value) => value.ValueKind == JsonValueKind.Array
         ? value.EnumerateArray().Select(e => e.GetProperty("name").GetString()!).Distinct(StringComparer.Ordinal).Order().ToArray()

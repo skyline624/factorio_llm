@@ -18,7 +18,7 @@ Depuis la demande explicite du 1er octobre 2026, une campagne peut aussi sélect
 - Stocks exacts de toute l'usine propre connue. Périmètre, date, capacités, réservations, transit, fabrication engagée et débits mesurés sont distincts. La source de vérité est le moteur.
 - Visibilité ennemie normale du personnage/radars ; informations historiques marquées anciennes, aucune révélation par un observateur supplémentaire.
 - Identité des opérations, déduplication, préconditions revérifiées, effets partiels et preuves. Un timeout réseau donne un résultat inconnu, jamais un échec autorisant une répétition aveugle.
-- Survie, défense, récupération et production ont cet ordre de priorité. Arbitre unique du personnage et préemption explicite ; défense indépendante du LLM.
+- Les besoins urgents de survie, défense et récupération priment sur la production. La défense préventive est proportionnée au risque observé et au stade de l'usine : une machine non couverte ne constitue pas, seule, une urgence. Sans menace immédiate ni attaque récente observée, favoriser les prérequis de la production persistante pendant l'amorçage. Arbitre unique du personnage et préemption explicite ; défense indépendante du LLM.
 - Personnage autonome sans client humain ; connexion du pilote au même personnage et déconnexion sans duplication. Bouton IA/Manuel ; reprise par observation et replanification. Intervention humaine marquée dans la campagne.
 - Mort : réapparition normale, cadavre à récupérer et reconstruction dans le même monde. Ni restauration pour effacer une défaite ni équipement gratuit.
 - Mémoire et journal C# persistants ; reçus et état Lua sauvegardés. Reprise et changement de monde détectés.
