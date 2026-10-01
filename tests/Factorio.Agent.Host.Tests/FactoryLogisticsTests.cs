@@ -167,17 +167,19 @@ public sealed class FactoryLogisticsTests
         Assert.Equal(expected, FactoryLogistics.FuelShortfall(loaded, given, stack: 50));
 
     [Fact]
-    public void OutputChestsOfEveryReadyCellAreCollected()
+    public void OutputChestsOfEveryRegisteredCellAreCollectedWhateverItsStatus()
     {
+        // Campaign 2026-10-01 (seed 20261002): plates in the chests of reopened and depleted iron cells were never collected.
         FactoryCell[] cells =
         [
             Cell("smelter", "ready", new() { ["furnace"] = "f", ["output-chest"] = "plates" }),
             Cell("miner", "ready", new() { ["drill"] = "d", ["output-chest"] = "coal" }),
             Cell("assembler", "ready", new() { ["machine"] = "m", ["input-chest"] = "in", ["output-chest"] = "gears" }),
-            Cell("miner", "building", new() { ["output-chest"] = "unfinished" }),
+            Cell("smelter", "building", new() { ["output-chest"] = "reopened" }),
+            Cell("smelter", ResourceCellHealth.Depleted, new() { ["drill"] = "dd", ["output-chest"] = "exhausted" }),
             Cell("lab", "ready", new() { ["machine"] = "lab" })
         ];
-        Assert.Equal(["plates", "coal", "gears"], FactoryLogistics.OutputChests(cells));
+        Assert.Equal(["plates", "coal", "gears", "reopened", "exhausted"], FactoryLogistics.OutputChests(cells));
     }
 
     private static FactoryCell Cell(string kind, string status, Dictionary<string, string> entities) =>

@@ -98,7 +98,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 bag[item] = bag.GetValueOrDefault(item) - moved;
                 if (moved > 0) await journal.AppendAsync("factory-surplus-deposited", new { item, moved, chest = home }, token);
             }
-        foreach (string chest in OutputChests(cells))
+        // Every registered output chest that still stands is stock, whatever its cell's status; absent chests hold nothing.
+        foreach (string chest in OutputChests(state.Cells))
         {
             foreach (var (item, count) in Items(snapshot, chest).Where(p => p.Value > 0))
             {
@@ -260,9 +261,14 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         }
     }
 
-    /// <summary>Output chests of ready cells: assembler products, smelted plates and mined resources alike.</summary>
+    /// <summary>
+    /// Output chests of every registered cell, whatever its status: assembler products, smelted plates and mined resources
+    /// alike. A resource cell reopened after an attack, or retired as depleted, keeps finished stock in its chest. On
+    /// 2026-10-01 (seed 20261002) 2 961 plates sat in the chests of nine reopened and five depleted iron cells while the actor
+    /// mined ore by hand for a turret.
+    /// </summary>
     internal static IReadOnlyList<string> OutputChests(IEnumerable<FactoryCell> cells) => cells
-        .Where(c => c.Status == "ready" && c.Entities.ContainsKey("output-chest")).Select(c => c.Entities["output-chest"]).ToArray();
+        .Where(c => c.Entities.ContainsKey("output-chest")).Select(c => c.Entities["output-chest"]).Distinct(StringComparer.Ordinal).ToArray();
 
     /// <summary>
     /// Boilers and every fuelled entity of a cell (furnaces, burner drills) with the fuel they hold, by native id.

@@ -145,8 +145,13 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
             map = await MapAsync(); state = await ObserveAsync();
             selected = await PlanAsync(state) ?? throw new InvalidOperationException("Resource site changed while preparing equipment.");
             if (selected.ExistingDrillId is not null) return selected;
+            // The site is planned again where it stands and may now choose other equipment: carry that before placing it.
+            // On 2026-10-01 (seed 20261002) a coal site prepared with a burner drill was re-planned with an electric drill
+            // that the actor no longer carried, and the build failed with missing_item.
+            await BootstrapAsync(selected.Equipment.DrillItem, 1);
             if (selected.NewChest is not null)
             {
+                await BootstrapAsync(selected.Equipment.ChestItem, 1);
                 await new PoweredMachineController(game, journal).BuildAtAsync(selected.Equipment.ChestItem, selected.NewChest,
                     catalog, controller, token, [selected.Connection.Drill.Position]);
                 map = await MapAsync(); state = await ObserveAsync();

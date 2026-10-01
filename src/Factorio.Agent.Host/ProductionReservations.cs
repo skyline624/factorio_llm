@@ -25,7 +25,7 @@ internal static class ProductionReservations
 
     /// <summary>
     /// Every registered cell entity: a cell assembler would fight its inserters and input chests feed their machines. Output
-    /// chests of ready cells hold finished stock that logistics would carry anyway, so production may collect from them.
+    /// chests of every cell, ready or not, hold finished stock that logistics would carry anyway, so production may collect from them.
     /// Callers enter this themselves because an AsyncLocal value set inside an async method does not flow back.
     /// </summary>
     public static IDisposable EnterFactory(FactoryState state) => Enter(

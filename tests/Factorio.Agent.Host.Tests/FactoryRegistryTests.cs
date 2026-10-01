@@ -30,7 +30,7 @@ public sealed class FactoryRegistryTests : IDisposable
     }
 
     [Fact]
-    public async Task ReadyOutputChestsStayReservedButTheirStockIsCollectable()
+    public async Task OutputChestsStayReservedButTheirStockIsCollectable()
     {
         // Campaign 2026-09-30 (seed 20261002): cell builds procured plates from the actor's single early drill because
         // every cell chest, finished stock included, was hidden from collection.
@@ -43,7 +43,8 @@ public sealed class FactoryRegistryTests : IDisposable
         using (ProductionReservations.EnterFactory(state))
         {
             Assert.Equal(["5", "6", "7"], ProductionReservations.Current.Order(StringComparer.Ordinal));
-            Assert.Equal(["6"], ProductionReservations.Collectable);
+            // Finished stock is collectable from every registered output chest, the unfinished cell's included (2026-10-01).
+            Assert.Equal(["6", "7"], ProductionReservations.Collectable.Order(StringComparer.Ordinal));
             var chest = new ProductionEntity("6", "iron-chest", new(0, 0), null,
                 Protocol.ToElement(new { output = new { items = new Dictionary<string, long> { ["iron-plate"] = 40 } } }));
             var furnace = chest with { Id = "5", Name = "stone-furnace" };
