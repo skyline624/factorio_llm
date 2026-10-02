@@ -20,6 +20,10 @@ Pour les entrées encore desservies par l'avatar, un lot insuffisant remplit les
 
 Une liaison dont la source est épuisée ou dont un destinataire est encore en construction reste invalide pour l'approvisionnement automatique. La remise en configuration ne déclenche pas de déplacement vers ces extrémités inactives. La collecte des sorties encore présentes et l'approvisionnement par l'avatar restent disponibles ; le remplacement de la source du bus n'est pas encore automatique.
 
+La collecte d'une sortie observée positive demande la place restante dans le plafond de transport calculé, plutôt que sa quantité ancienne : l'atelier peut avoir produit pendant le déplacement. Le reçu natif mesure le transfert réellement effectué, y compris un transfert partiel. Une réponse perdue est réconciliée par l'identité de l'opération, sans nouvelle soumission. Un coffre encore vide dans la photographie initiale attend toujours le prochain passage.
+
+Les packs portés sont répartis entre les laboratoires enregistrés selon leurs stocks observés et leur capacité native d'une pile, avec le même calcul de parts. Un nouveau laboratoire vide reçoit les packs rares avant qu'un ancien laboratoire déjà approvisionné soit rempli davantage. Les reçus confirment les insertions ; la consommation scientifique doit ensuite être constatée dans le jeu.
+
 Cette vérification structurelle ne reprend pas le bilan d'un lot fini de la commande [`transport`](belt-transport.md). Le producteur et les consommateurs continuent à fabriquer. La preuve de production demande des sorties et des compteurs natifs constatés dans le jeu.
 
 ## Essai préparé headless
@@ -43,6 +47,16 @@ dotnet $hostDll stop --session $sessionFile
 Ce scénario fournit explicitement les recherches, l'énergie, trois assembleuses et leurs équipements, vingt-cinq engrenages, vingt-cinq circuits et cinquante plaques de fer. Les six bras fournis sont tous placés dans les cellules ; aucun tapis ni pack vert n'est fourni. C# construit les ateliers de tapis, de bras et de science verte, puis utilise deux passages de la logistique habituelle. Le rapport demande les transferts de huit et dix-sept engrenages, les compteurs natifs de huit et dix-sept fabrications intermédiaires, seize tapis et dix-sept bras dans leurs sorties, puis seize packs verts réellement fabriqués. Il vérifie aussi le même personnage, aucun pilote connecté et aucune fabrication ou extraction manuelle. Cette préparation ne prouve pas la fabrication autonome des engrenages ou des circuits.
 
 Le scénario de graine **20261043** réussit dans Factorio **2.0.77 headless** : les sorties de seize tapis et dix-sept bras sont constatées au tick **6218**, puis seize packs verts dans le coffre au tick **18304**. Le compteur de production de la force confirme les seize packs au tick **18306**. Le monde est sauvegardé et arrêté. Les **1 202 tests hors ligne** passent : 1 057 pour l'agent, 108 pour les transports de modèles et 37 pour l'infrastructure ; un test cloud facultatif est ignoré.
+
+Une qualification des transferts utilise un autre monde explicitement préparé :
+
+```powershell
+dotnet $hostDll start --fixture --seed 20261045
+dotnet $hostDll verify-factory-transfers --session $sessionFile
+dotnet $hostDll stop --session $sessionFile
+```
+
+Elle fournit énergie, recherches préalables, kit de construction, 81 plaques de fer et huit packs rouges et verts. Aucun engrenage n'est fourni. C# construit un atelier d'engrenages et deux laboratoires, puis place un coffre éloigné pour que l'atelier produise pendant le trajet de collecte. Le scénario de graine **20261045** passe dans Factorio **2.0.77 headless** : un engrenage est observé au tick **2087**, six sont réellement collectés dans la limite demandée de 200 ; les deux laboratoires reçoivent chacun quatre packs de chaque couleur au tick **2790**. Au tick **3724**, chacun en a consommé environ 1,0244 et la recherche progresse à **5,12 %**. Le compteur natif confirme treize engrenages produits au tick **3726**, le même personnage, aucun joueur connecté et aucune fabrication ou extraction manuelle. Le monde est sauvegardé et arrêté. Cette preuve préparée distingue la fabrication native des engrenages des packs fournis pour tester les laboratoires ; elle ne qualifie pas une campagne autonome. Les **1 207 tests hors ligne** passent : 1 062 pour l'agent, 108 pour les transports de modèles et 37 pour l'infrastructure ; un test cloud facultatif est ignoré. La graine 20261044 avait confirmé les transferts mais échoué à sélectionner la recherche, faute de `steel-processing` dans la préparation ; ce prérequis est explicite dans le scénario corrigé.
 
 Le scénario suspend ensuite explicitement les deux machines destinataires pour constater la limite de leurs coffres, détruit un tapis et un receveur pour qualifier la maintenance, puis vérifie la condition de pause sur demande. Ces manipulations sont des fautes préparées de fixture ; elles ne sont jamais exécutées dans une partie normale. Le rapport privé distingue ces preuves d'une campagne autonome.
 

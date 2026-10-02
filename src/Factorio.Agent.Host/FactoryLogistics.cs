@@ -122,8 +122,11 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             foreach (var (item, count) in Items(snapshot, chest).Where(p => p.Value > 0))
             {
                 if (busSources.Contains((chest, item)) && needs.GetValueOrDefault(item) == 0) continue;
-                long wanted = Math.Min(count, Cap(item) - bag.GetValueOrDefault(item));
+                // The producer can add output during the trip. Request only the remaining carrying allowance;
+                // the native partial/complete receipt measures what actually moved, without another mutation attempt.
+                long wanted = Cap(item) - bag.GetValueOrDefault(item);
                 if (wanted <= 0) continue;
+                await journal.AppendAsync("factory-output-collection-intent", new { chest, item, observed = count, requested = wanted, snapshot.CollectedTick }, token);
                 long moved = await TransferAsync("take", chest, item, wanted);
                 bag[item] = bag.GetValueOrDefault(item) + moved;
                 if (moved > 0) collected[item] = collected.GetValueOrDefault(item) + moved;
@@ -150,13 +153,20 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             long moved = await RefillAsync(chest, item, allotted[(chest, item)], reportShort: false);
             if (target - loaded > moved) shortfall[item] = shortfall.GetValueOrDefault(item) + target - loaded - moved;
         }
-        foreach (var cell in cells.Where(c => c.Kind == "lab"))
+        var laboratoryIds = cells.Where(c => c.Kind == "lab").Select(c => c.Entities["machine"]).ToArray();
+        var scienceAllotments = new Dictionary<(string Lab, string Pack), long>();
+        foreach (string pack in carried.Keys.Where(IsSciencePack))
         {
-            string lab = cell.Entities["machine"];
-            var loaded = Items(snapshot, lab);
+            var split = PlanShares(laboratoryIds.Select(lab => (Items(snapshot, lab).GetValueOrDefault(pack),
+                (long)catalog.Items[pack].StackSize)).ToArray(), carried[pack]);
+            for (int index = 0; index < laboratoryIds.Length; index++) scienceAllotments[(laboratoryIds[index], pack)] = split[index];
+        }
+        // Parallel research needs every lab fed; filling the first stack stranded new labs without scarce green packs.
+        foreach (string lab in laboratoryIds)
+        {
             foreach (var pack in carried.Keys.Where(IsSciencePack).ToArray())
             {
-                long give = Math.Min(carried[pack], Math.Max(0, catalog.Items[pack].StackSize - loaded.GetValueOrDefault(pack)));
+                long give = Math.Min(carried[pack], scienceAllotments[(lab, pack)]);
                 if (give <= 0) continue;
                 long moved = await TransferAsync("insert", lab, pack, give, "lab");
                 carried[pack] -= moved;

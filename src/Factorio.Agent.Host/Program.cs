@@ -43,6 +43,7 @@ try
           verify-oil-products --session FILE [--item rocket-fuel|electric-engine-unit]
           verify-factory-transport --session FILE
           verify-factory-logistics --session FILE
+          verify-factory-transfers --session FILE
           verify-furnace-bands --session FILE
           resource-cells --session FILE --item NAME --quantity PER_MINUTE
           power-expand --session FILE
@@ -176,6 +177,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new PowerExpansionQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-factory-transfers":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new FactoryTransferQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-factory-logistics":
