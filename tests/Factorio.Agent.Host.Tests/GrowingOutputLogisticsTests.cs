@@ -6,6 +6,32 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class GrowingOutputLogisticsTests
 {
+    [Theory]
+    [InlineData(true, "iron-gear-wheel", 480)]
+    [InlineData(false, "iron-gear-wheel", 80)]
+    [InlineData(true, null, 80)]
+    [InlineData(true, "copper-cable", 10)]
+    public async Task PlannedResearchBuffersCoverFastIntermediatesWithoutInflatingLegacyOrUnplannedCells(bool planned, string? target, int expected)
+    {
+        string directory = Directory.CreateTempSubdirectory("planned-input-buffers-").FullName;
+        try
+        {
+            var game = new OutputGame(500, 0, false, recipeInput: true);
+            var cell = new FactoryCell("gear", 1, new(0, 0, true), "assembler", "assembling-machine-1", "iron-gear-wheel",
+                new Dictionary<string, string> { ["input-chest"] = "input" }, "ready", 100,
+                Plan: new Dictionary<string, PlannedEntity>());
+            var state = new FactoryState(1, game.Scope.WorldId, [], [cell]);
+            if (target is not null) state = state.WithTarget(target, 24);
+            await new FactoryRegistry(directory).SaveAsync(state, default);
+            var result = await new FactoryLogistics(game, new Journal(), directory).ServiceAsync(usePlannedBuffers: planned);
+            Assert.Equal(expected, result.Supplied.GetValueOrDefault("iron-plate"));
+            Assert.Equal(expected, game.InputStock);
+            Assert.Equal(500 - expected, game.Carried);
+            Assert.Equal(1, game.Submissions);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     [Fact]
     public async Task LaboratoryTourFreshnessStartsAfterTheFinalNativeScienceTransfer()
     {
@@ -126,12 +152,12 @@ public sealed class GrowingOutputLogisticsTests
     }
 
     /// <summary>Six items in the cycle photograph; a different native quantity after approach, with measured receipts.</summary>
-    private sealed class OutputGame(int carried, int currentStock, bool lostReply, bool labScience = false) : IGameClient
+    private sealed class OutputGame(int carried, int currentStock, bool lostReply, bool labScience = false, bool recipeInput = false) : IGameClient
     {
         private readonly ProductionCatalog catalog = Catalogs.Raw();
         private readonly SpatialSnapshot map = FactoryMaps.Grass(8, labScience
             ? new[] { Lab("lab-0", 3.5, -.5), Lab("lab-1", -.5, 3.5), Lab("lab-2", 4.5, 4.5) }
-            : [new("chest", "iron-chest", new(2.5, .5), new(new(2.15, .15), new(2.85, .85)), 0, "own")]);
+            : [new(recipeInput ? "input" : "chest", "iron-chest", new(2.5, .5), new(new(2.15, .15), new(2.85, .85)), 0, "own")]);
         private object? receipt;
         private string? operationId;
         private string Item => labScience ? "automation-science-pack" : "iron-plate";
@@ -141,6 +167,7 @@ public sealed class GrowingOutputLogisticsTests
         public long Tick { get; set; } = 100;
         public long TransferTicks { get; set; }
         public int CurrentStock { get; set; } = currentStock;
+        public int InputStock { get; private set; }
         public int? BoilerFuel { get; set; }
         public bool ChestPresent { get; set; } = true;
         public int FactoryPhotographs { get; private set; }
@@ -178,6 +205,11 @@ public sealed class GrowingOutputLogisticsTests
                             records.Add(Record(lab.Id, "entity", lab.Id, new { role = "factory", type = "lab", position = lab.Position }));
                             records.Add(Record(lab.Id + "-stock", "inventory", lab.Id, new { items = new Dictionary<string, long> { [Item] = LabStocks[lab.Id] } }));
                         }
+                    else if (recipeInput)
+                    {
+                        records.Add(Record("input", "entity", "input", new { role = "factory", type = "container", position = new MapPosition(2.5, .5) }));
+                        records.Add(Record("input-stock", "inventory", "input", new { items = new Dictionary<string, long> { [Item] = InputStock } }));
+                    }
                     else if (ChestPresent)
                     {
                         records.Add(Record("chest", "entity", "chest", new { role = "factory", type = "container", position = new MapPosition(2.5, .5) }));
@@ -194,18 +226,19 @@ public sealed class GrowingOutputLogisticsTests
                     break;
                 case "submit":
                     var submission = request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!;
-                    Assert.Equal(labScience ? "insert" : "take", submission.Kind);
+                    Assert.Equal(labScience || recipeInput ? "insert" : "take", submission.Kind);
                     string target = submission.Args.GetProperty("entityId").GetString()!;
                     if (labScience) Assert.Contains(target, LabStocks.Keys);
-                    else Assert.Equal("chest", target);
+                    else Assert.Equal(recipeInput ? "input" : "chest", target);
                     Assert.Equal(Item, submission.Args.GetProperty("item").GetString());
                     Assert.Equal(Scope, submission.Scope);
                     Submissions++;
                     operationId = submission.OperationId;
                     int requested = submission.Args.GetProperty("count").GetInt32();
-                    int moved = Math.Min(requested, labScience ? Carried : CurrentStock);
-                    Carried += labScience ? -moved : moved;
+                    int moved = Math.Min(requested, labScience || recipeInput ? Carried : CurrentStock);
+                    Carried += labScience || recipeInput ? -moved : moved;
                     if (labScience) LabStocks[target] += moved;
+                    else if (recipeInput) InputStock += moved;
                     else CurrentStock -= moved;
                     Tick += TransferTicks;
                     receipt = new { submission.OperationId, submission.Kind, status = moved == requested ? "completed" : "partial",

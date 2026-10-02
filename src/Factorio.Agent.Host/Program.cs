@@ -43,7 +43,7 @@ try
           verify-oil-products --session FILE [--item rocket-fuel|electric-engine-unit]
           verify-factory-transport --session FILE
           verify-factory-logistics --session FILE
-          verify-factory-transfers --session FILE
+          verify-factory-transfers|verify-factory-buffer --session FILE
           verify-furnace-bands --session FILE
           resource-cells --session FILE --item NAME --quantity PER_MINUTE
           power-expand --session FILE
@@ -183,6 +183,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new FactoryTransferQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-factory-buffer":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new FactoryBufferQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-factory-logistics":
@@ -656,7 +662,7 @@ try
                                 if (cells.Cells.Any(c => c.Status == "ready"))
                                 {
                                     var round = await new FactoryLogistics(game, maintenanceJournal, session.Directory)
-                                        .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks);
+                                        .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks, usePlannedBuffers: true);
                                     // An attack can cut cells from the generators; on 2026-10-01 (seed 20261002) the whole mining
                                     // area stayed on an unfed island for hours. Reconnect before the next decision.
                                     if (round.Maintenance?.Unpowered.Count > 0)

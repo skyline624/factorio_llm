@@ -43,7 +43,7 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
                 throw new InvalidDataException("Research did not use the expected science cells and laboratory.");
 
             var recent = await new FactoryLogistics(game, journal, session.Directory)
-                .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks);
+                .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks, usePlannedBuffers: true);
             evidence.Add(new { check = "recent-tour-keeps-fresh-upkeep", result = recent });
             if (recent.Actions != 0 || recent.Collected.Count != 0 || recent.Supplied.Count != 0 || recent.Maintenance is null
                 || !(await File.ReadAllLinesAsync(journalPath, token)).Any(line => line.Contains("\"type\":\"factory-logistics-recent-tour\"", StringComparison.Ordinal)))
@@ -58,7 +58,7 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
                 """;
             using var damaged = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(damage, token));
             var repaired = await new FactoryLogistics(game, journal, session.Directory)
-                .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks);
+                .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks, usePlannedBuffers: true);
             var repairedState = await new FactoryRegistry(session.Directory).LoadAsync(state.WorldId, token);
             string newPole = repairedState.Cells.Single(c => c.Id == damagedCell.Id).Entities["pole"];
             var photograph = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);

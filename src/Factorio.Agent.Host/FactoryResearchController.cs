@@ -58,7 +58,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
             var state = ResearchSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("research_state", new { technology = technologyName }), token), technologyName);
             if (state.Researched) return await FinishAsync(state.CollectedTick, round - 1);
             if (state.Selected != technologyName) await SelectAsync(controller, journal, state.Selected, technologyName, token);
-            var service = await logistics.ServiceAsync(40, token);
+            var service = await logistics.ServiceAsync(40, token, usePlannedBuffers: true);
             // Labs keep researching while the actor makes the tour. Its remaining shortfall is no longer this goal's
             // work after native completion; starting procurement or growing cells here could delay the next goal.
             state = ResearchSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("research_state", new { technology = technologyName }), token), technologyName);
