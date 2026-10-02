@@ -79,6 +79,8 @@ Les objectifs de production permanente utilisent également les réserves de dix
 
 Dans la partie normale de graine 20261019, le 2 octobre 2026, le moteur a confirmé un transfert de **480 plaques de fer** dans le coffre d'entrée des engrenages au tick 1 164 345. La recherche `oil-gathering` s'est terminée au tick 1 169 839. L'entretien a vérifié l'usine puis réutilisé le tour récent, sans nouveau transfert ; GPT-6.1 Sol a choisi `oil-processing` 8,83 secondes après le résultat de recherche. Le journal de cette itération est `strategic-production-2921501326854dc8aa477136dbeb2197` ; ces constats ne prouvent pas encore l'extraction pétrolière ni un lancement de fusée.
 
+La même partie a ensuite validé l'extraction : après découverte du gisement, fabrication de la pompe à partir des stocks réels et prolongement du réseau électrique, la pompe native 254 contenait **96,55 unités de pétrole brut** au tick 1 218 750, avec une énergie positive sur le réseau 1. Le moteur a débloqué `oil-processing`, confirmé aussi par une lecture indépendante au tick 1 220 457. Le personnage était vivant, sans mort ni intervention humaine. La recherche sur les plastiques a été choisie après reprise de la sauvegarde ; le raffinage effectif, les chaînes chimiques et la fusée restent à vérifier.
+
 ## Preuves
 
 | Essai | Type | Résultat |
