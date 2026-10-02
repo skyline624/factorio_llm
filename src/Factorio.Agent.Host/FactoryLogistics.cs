@@ -46,8 +46,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         // Upkeep first: destroyed registered entities are rebuilt and turrets rearmed before production transport.
         var upkeep = await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token);
         var state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
-        // Forty crafts can last forty seconds in a gear cell, less than a normal factory tour. Planned research
-        // keeps the ten-minute ingredient shares; fixtures and explicit flat-buffer calls retain their bound.
+        // Forty crafts can last forty seconds in a gear cell, less than a normal factory tour. Planned factories
+        // keep the ten-minute ingredient shares; fixtures and explicit flat-buffer calls retain their bound.
         if (usePlannedBuffers && state.Targets is { Count: > 0 }) bufferCrafts = 1000;
         var cells = state.Cells.Where(c => c.Status == "ready").ToArray();
         var collected = new Dictionary<string, long>(StringComparer.Ordinal);

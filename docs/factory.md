@@ -75,6 +75,10 @@ Un transfert refusé est journalisé comme limite observée ; il n'est jamais re
 - Les objectifs de recherche passent par cette voie dès que les recettes d'assembleur, d'inserteur, de poteau et de laboratoire sont débloquées. Le laboratoire historique reste le repli.
 - Les objectifs de production en `items_per_minute` construisent une chaîne persistante.
 
+Les objectifs de production permanente utilisent également les réserves de dix minutes calculées pour les cibles du registre. Ils suivent ainsi le même dimensionnement que les recherches et l'entretien entre objectifs.
+
+Dans la partie normale de graine 20261019, le 2 octobre 2026, le moteur a confirmé un transfert de **480 plaques de fer** dans le coffre d'entrée des engrenages au tick 1 164 345. La recherche `oil-gathering` s'est terminée au tick 1 169 839. L'entretien a vérifié l'usine puis réutilisé le tour récent, sans nouveau transfert ; GPT-6.1 Sol a choisi `oil-processing` 8,83 secondes après le résultat de recherche. Le journal de cette itération est `strategic-production-2921501326854dc8aa477136dbeb2197` ; ces constats ne prouvent pas encore l'extraction pétrolière ni un lancement de fusée.
+
 ## Preuves
 
 | Essai | Type | Résultat |

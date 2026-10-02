@@ -153,7 +153,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.ItemsPerMinute)
         {
             var plan = await new FactoryDirector(game, journal, factoryDirectory!).AutomateAsync(goal.Target, (double)goal.Quantity, token);
-            var service = await new FactoryLogistics(game, journal, factoryDirectory!).ServiceAsync(40, token);
+            var service = await new FactoryLogistics(game, journal, factoryDirectory!).ServiceAsync(40, token, usePlannedBuffers: true);
             return new(goal, Automation: plan, Logistics: service);
         }
         if (goal.Category == GoalCategory.Research)
