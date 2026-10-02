@@ -12,6 +12,7 @@ public sealed class CommandLineOptionsTests
         Assert.Equal("true", options["ollama-cloud"]);
         Assert.Equal("30", options["minutes"]);
         Assert.Equal("1", CommandLineOptions.Parse(["--session", "s.json", "--layers", "1"])["layers"]);
+        Assert.Equal("true", CommandLineOptions.Parse(["--session", "s.json", "--from-materials"])["from-materials"]);
     }
 
     [Theory]

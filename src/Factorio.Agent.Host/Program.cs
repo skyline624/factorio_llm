@@ -37,6 +37,7 @@ try
           verify-oil-chemistry --session FILE [--item plastic-bar|sulfur]
           factory-logistics --session FILE [--quantity CRAFTS]
           verify-factory-cells|verify-factory-research|verify-resource-cells|verify-power-expansion --session FILE
+          verify-factory-cells --session FILE --from-materials
           verify-furnace-bands --session FILE
           resource-cells --session FILE --item NAME --quantity PER_MINUTE
           power-expand --session FILE
@@ -211,7 +212,7 @@ try
         case "verify-factory-cells":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
-            Print(new { report = await new FactoryCellQualification(session).RunAsync(shutdown.Token) });
+            Print(new { report = await new FactoryCellQualification(session).RunAsync(shutdown.Token, options.ContainsKey("from-materials")) });
             break;
         }
         case "verify-furnace-bands":

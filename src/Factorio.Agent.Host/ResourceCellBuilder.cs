@@ -72,7 +72,7 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
         // CellLayout.Machine names assembler cells only; resource cells journal their parts explicitly.
         await journal.AppendAsync("resource-cell-plan", new { cell.Id, cell.Attempts, row, layout.Slot, layout.Entities, layout.Footprint, layout.Walkway }, token);
         if (cell.Entities.Count > 0) await ReconcileAsync();
-        foreach (var (item, count) in CarriedStock.Unplaced(layout, cell.Entities)) await CarriedStock.EnsureAsync(game, journal, item, count, token);
+        await CarriedStock.EnsureAsync(game, journal, catalog, CarriedStock.Unplaced(layout, cell.Entities), token);
         await controller.TravelAsync(Center(layout.Walkway), 1, catalog, token);
         await ClearAsync();
 

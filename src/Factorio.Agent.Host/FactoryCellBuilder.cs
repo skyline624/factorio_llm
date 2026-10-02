@@ -65,7 +65,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             state.Cells.Where(c => c.Id != cell.Id).SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal), removeMissing: true);
         await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
         await journal.AppendAsync("factory-cell-plan", new { cell.Id, kind, recipe, zone, layout }, token);
-        await EnsureItemsAsync(layout.Entities.GroupBy(e => e.Item).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal));
+        await EnsureCarriedAsync(registry, catalog, CarriedStock.Unplaced(layout, cell.Entities), token);
 
         var walkway = new MapPosition((layout.Walkway.Min.X + layout.Walkway.Max.X) / 2, (layout.Walkway.Min.Y + layout.Walkway.Max.Y) / 2);
         await controller.TravelAsync(walkway, 1, catalog, token);
@@ -141,19 +141,6 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             return created;
         }
 
-        async Task EnsureItemsAsync(IReadOnlyDictionary<string, int> needed)
-        {
-            var placed = new HashSet<string>(cell!.Entities.Keys, StringComparer.Ordinal);
-            foreach (var (item, count) in needed)
-            {
-                int missing = count - layout.Entities.Count(e => e.Item == item && placed.Contains(e.Role));
-                if (missing <= 0) continue;
-                await EnsureCarriedAsync(item, missing);
-            }
-        }
-
-        Task EnsureCarriedAsync(string item, int count) => this.EnsureCarriedAsync(registry, catalog, item, count, token);
-
         async Task ClearAsync(CellLayout plan)
         {
             var area = new WorldBox(new(Math.Min(plan.Footprint.Min.X, plan.Walkway.Min.X) - .5, Math.Min(plan.Footprint.Min.Y, plan.Walkway.Min.Y) - .5),
@@ -228,12 +215,15 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         return repaired + await new ResourceCellBuilder(game, journal, directory).RepairPowerAsync(token);
     }
 
-    internal async Task EnsureCarriedAsync(FactoryRegistry registry, ProductionCatalog catalog, string item, int count, CancellationToken token)
+    internal Task EnsureCarriedAsync(FactoryRegistry registry, ProductionCatalog catalog, string item, int count, CancellationToken token) =>
+        count <= 0 ? Task.CompletedTask
+            : EnsureCarriedAsync(registry, catalog, new Dictionary<string, int>(StringComparer.Ordinal) { [item] = count }, token);
+
+    internal async Task EnsureCarriedAsync(FactoryRegistry registry, ProductionCatalog catalog, IReadOnlyDictionary<string, int> needed,
+        CancellationToken token)
     {
-        var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory.GetValueOrDefault(item);
-        if (carried >= count) return;
         using (ProductionReservations.EnterFactory(await registry.LoadAsync(catalog.Scope.WorldId, token)))
-            await new ProductionGoalExecutor(game, journal).RunAsync(item, Math.Min(1000, count), token);
+            await CarriedStock.EnsureAsync(game, journal, catalog, needed, token);
     }
 
     internal async Task ConnectPowerAsync(BuildContext context, string poleId, MapPosition polePosition, CancellationToken token,

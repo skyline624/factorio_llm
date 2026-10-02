@@ -111,8 +111,8 @@ internal sealed class SiloCellSupply(IGameClient game, IControllerJournal journa
         if (missing.Any(m => m.Item is null))
             throw new InvalidOperationException($"The silo cell {owned.Id} lost a role it has no plan for; reconcile it before launching.");
         var builder = new FactoryCellBuilder(game, journal, directory);
-        foreach (var group in missing.GroupBy(m => m.Item!, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
-            await builder.EnsureCarriedAsync(registry, catalog, group.Key, group.Count(), token);
+        await builder.EnsureCarriedAsync(registry, catalog,
+            missing.GroupBy(m => m.Item!, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal), token);
         var upkeep = await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token);
         var restored = await registry.LoadAsync(catalog.Scope.WorldId, token);
         var rockets = RocketSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("rocket_state"), token));

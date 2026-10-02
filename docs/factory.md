@@ -29,6 +29,18 @@ Les cellules sont alignées en **bandes**. Une rangée nord et une rangée sud s
 
 Le registre `factory-cells.json` conserve les identifiants natifs prouvés par les reçus. Une cellule interrompue garde son emplacement et réutilise les entités déjà posées.
 
+## Approvisionnement d'un chantier
+
+`ConstructionSupplyPlanner` regroupe les besoins des pièces encore à poser avant leur fabrication. Il développe les recettes natives de fabrication manuelle non ambiguës, partage les ingrédients déjà portés et conserve le surplus des recettes produisant plusieurs objets. Les plaques à fondre, les ressources à extraire et les sorties de stock observées restent des objectifs de l'exécuteur de production existant : celui-ci choisit la collecte, le réemploi ou la production disponible.
+
+Par exemple, avec les recettes de Factorio 2.0.77 et un sac sans pièces de construction, une cellule avec un assembleur, deux inserteurs, deux coffres en fer et un poteau demande **46 plaques de fer, 9 de cuivre et 1 bois**. Ces trois besoins remplacent les petits approvisionnements successifs déclenchés par chaque équipement. La fabrication des équipements suit leurs dépendances : si le chantier demande une foreuse à combustible et un four, la foreuse est fabriquée avant de compléter le stock de fours, puisqu'elle en consomme un.
+
+`CarriedStock` vérifie l'identité du personnage, son contrôle IA et les inventaires natifs avant chaque objectif. Les réservations des cellules sont conservées. Après approvisionnement, toutes les pièces du kit doivent être présentes simultanément dans le sac ; aucune preuve de préparation n'est écrite si ce contrôle échoue. Les événements `construction-supply-plan` et `construction-supply-result` distinguent le calcul et le stock réellement porté.
+
+Le calcul est borné : 64 types de pièces, profondeur 16, 2 048 visites et objectifs de stock de 1 000 objets au plus. Une demande agrégée trop grande ou cyclique conserve l'approvisionnement ordinaire des équipements, sans tronquer les quantités. Le regroupement couvre les cellules d'assembleurs, de ressources et de fluides, ainsi que la restauration du silo. Les besoins de combustible et les transports entre cellules restent ceux des contrôleurs existants ; leur coût doit encore être mesuré dans une campagne normale.
+
+La variante explicite `verify-factory-cells --session FILE --from-materials` place les matériaux dans deux coffres et ne fournit aucun kit de construction. L'énergie, les recherches et le terrain restent préparés artificiellement : cette vérification ne constitue pas une progression normale depuis le départ du jeu.
+
 ## Logistique
 
 À chaque passage, `FactoryLogistics` s'appuie sur une photographie d'usine et sur les reçus de transfert. Il :
@@ -64,10 +76,13 @@ Un transfert refusé est journalisé comme limite observée ; il n'est jamais re
 | Essai | Type | Résultat |
 |---|---|---|
 | `verify-factory-cells` | Fixture préparée : interface d'énergie injectée, objets fournis | Cellule d'engrenages et laboratoire construits en environ 18 s de jeu. 100 plaques livrées, 16 engrenages collectés en 40 s, limités par le débit de l'inserteur. |
+| `verify-factory-cells --from-materials`, 02/10/2026, graine 20261015 | Fixture préparée : énergie et recherches injectées, 400 plaques de fer, 100 de cuivre et 50 bois dans des coffres ; aucun équipement de construction fourni | Réussite en headless puis avec client graphique connecté : kit de six pièces fabriqué et vérifié avant pose, cellule d'engrenages et laboratoire prêts, 100 plaques livrées et 16 engrenages collectés après 40 s. Aucun minage. Le pilote partage le seul personnage natif (identifiant 7). |
 | `verify-factory-research` | Fixture préparée, même préparation | `gun-turret` recherchée en 9 885 ticks par une cellule d'engrenages, une cellule de packs rouges et un laboratoire, sans aucune fabrication manuelle. 155 transferts. |
 | Campagne du 30/09 (graine 20261001), premier passage | Partie normale, modèle cloud réel | En 30 minutes : recherche de `steam-power`, des packs rouges et d'`automation`. Première zone d'usine créée près du réseau, cellule d'engrenages construite. Arrêt par le coupe-circuit après cinq échecs, sur deux défauts corrigés depuis : poteau de liaison manquant, cellule réutilisée par l'ancienne production. |
 
 Ces fixtures isolent le mécanisme. Elles ne remplacent ni une campagne normale ni la qualification finale sur trois graines.
+
+Pour la variante du 2 octobre, les rapports privés sont `factory-cell-qualification-fd55d6c4ca874986b105848180f2f5e4.json` (headless) et `factory-cell-qualification-26d553c9b8704b8ead6e5842c20b4e85.json` (client connecté), dans `.runtime/fixture-20261002-141855-f57601ca/`. Ils constatent respectivement 21 et 20 opérations de fabrication, zéro minage, et les trois objectifs de matériaux 46 fer / 9 cuivre / 1 bois. Les 1 116 tests ordinaires passent sans jeu ni inférence ; le test cloud optionnel reste ignoré. Aucun gain de durée en campagne normale n'est encore établi. La campagne précédente, arrêtée à la demande de l'utilisateur, n'a pas été relancée pour cette vérification.
 
 ## Modules intégrés depuis
 

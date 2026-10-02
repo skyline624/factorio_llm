@@ -375,8 +375,8 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         string[] items = plan.Values.Select(p => p.Item).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var builder = new FactoryCellBuilder(game, journal, directory);
         // Every missing part is carried first, so no production trip interrupts construction.
-        foreach (var group in roles.GroupBy(r => plan[r].Item))
-            await builder.EnsureCarriedAsync(registry, catalog, group.Key, group.Count(), token);
+        await builder.EnsureCarriedAsync(registry, catalog,
+            roles.GroupBy(r => plan[r].Item).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal), token);
         for (int index = 0; index < roles.Count; index++)
         {
             var planned = plan[roles[index]];
