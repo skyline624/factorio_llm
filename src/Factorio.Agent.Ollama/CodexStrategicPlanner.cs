@@ -82,6 +82,11 @@ public sealed class CodexStrategicPlanner : IStrategicPlanner
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (OperationCanceledException) { throw Failure(PlannerErrorKind.Timeout); }
+        catch (Win32Exception error) when (error.NativeErrorCode is 2 or 3)
+        {
+            throw new PlannerException(PlannerErrorKind.RequestRejected,
+                "Configured Codex executable was not found; update Codex.Executable or PATH.", 1);
+        }
         catch (Win32Exception) { throw Failure(PlannerErrorKind.Network); }
         catch (IOException) { throw Failure(PlannerErrorKind.Network); }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException)

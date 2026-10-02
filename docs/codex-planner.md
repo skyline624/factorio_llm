@@ -8,6 +8,8 @@ La [documentation d'authentification Codex](https://learn.chatgpt.com/docs/auth)
 
 Copier `config/appsettings.codex.example.json` vers un profil privé ignoré par Git, par exemple `config/appsettings.codex.local.json`. `Executable` accepte `codex` dans le PATH ou le chemin local du binaire. Vérifier la connexion avec `codex login status`. En l'absence de connexion valide, la connexion reste une action de l'utilisateur ; le programme n'ouvre aucun navigateur.
 
+Préférer `Executable=codex` lorsque le binaire officiel est dans le PATH : un chemin vers un sous-dossier de version de l'application peut disparaître lors d'une mise à jour. Avant une campagne longue, `check-codex` vérifie une réponse réelle avec le profil choisi. Un exécutable absent est signalé comme erreur de configuration (`RequestRejected`), sans publier son chemin et sans changer de modèle ou de transport.
+
 ```powershell
 dotnet run --project src/Factorio.Agent.Host -- check-codex --config config/appsettings.codex.local.json
 dotnet run --project src/Factorio.Agent.Host -- start --seed 20261012

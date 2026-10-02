@@ -127,6 +127,25 @@ public sealed class CodexStrategicPlannerTests
     }
 
     [Fact]
+    public async Task MissingExecutableIsReportedWithoutLeakingTheConfiguredPath()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "factorio-codex-" + Guid.NewGuid().ToString("N"));
+        string executable = Path.Combine(directory, "synthetic-private-missing.exe");
+        var planner = new CodexStrategicPlanner(new CodexOptions { Executable = executable }, directory);
+        try
+        {
+            var error = await Assert.ThrowsAsync<PlannerException>(() => planner.ProposeAsync(
+                new StrategicContext("obs", "Synthetic offline context; no game or model call.")));
+            Assert.Equal(PlannerErrorKind.RequestRejected, error.Kind);
+            Assert.Equal(1, error.Attempts);
+            Assert.Contains("Codex.Executable", error.Message);
+            Assert.DoesNotContain(directory, error.ToString());
+            Assert.DoesNotContain("synthetic-private-missing", error.ToString());
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory); }
+    }
+
+    [Fact]
     public void NoModelAliasOrUnboundedTimeoutIsAccepted()
     {
         Assert.Throws<ArgumentException>(() => new CodexOptions { Model = "gpt-6-astra" }.Validate());
