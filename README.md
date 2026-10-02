@@ -156,6 +156,7 @@ Les [correctifs de reprise et leurs preuves du 1er octobre](docs/recovery-review
 La commande `transport --session FILE --source ID --target ID --item NAME --quantity N` installe ou réutilise une liaison par tapis et bras. Elle vérifie les connexions natives et conserve un bilan des stocks, du transit et des fabrications. Un [essai natif de transport et stockage de sortie](docs/belt-transport.md) a transformé 40 plaques de fer en 20 engrenages stockés dans une fixture préparée. La commande générale d’assemblage utilise maintenant les sources solides observées et leurs tapis : un [nouveau lot de cinq packs rouges](docs/assembly-transport.md) a été produit et collecté avec deux alimentations suivies, dans cette même fixture.
 
 - [Usine persistante : cellules, logistique et recherche automatisée](docs/factory.md)
+- [Liaisons persistantes entre cellules : tapis, filtres et contrôle des stocks](docs/factory-transport.md)
 - [Modèle de décision en mode ombre (Nimble)](docs/decision-shadow.md)
 - [Plan d'exécution et critères d'acceptation](docs/execution-plan.md)
 - [Conception](docs/design.md)

@@ -6,7 +6,8 @@ public sealed record BeltRoutePlan(BeltRouteStatus Status, IReadOnlyList<Placeme
 public sealed class BeltRoutePlanner
 {
     public BeltRoutePlan Find(SpatialSnapshot map, string beltItem, MapPosition start, MapPosition target,
-        int nodeBudget = 12000, CancellationToken cancellationToken = default)
+        int nodeBudget = 12000, CancellationToken cancellationToken = default, string? inletBeltId = null,
+        IReadOnlySet<string>? existingBusBelts = null)
     {
         if (nodeBudget < 1) throw new ArgumentOutOfRangeException(nameof(nodeBudget));
         cancellationToken.ThrowIfCancellationRequested();
@@ -17,6 +18,9 @@ public sealed class BeltRoutePlanner
         bool Clear(MapPosition p) => Cell(p) == p && field.PlacementClear(geometry, p, 0)
             && !map.Entities.Any(e =>
                 (map.Prototypes[e.Name].Type is "transport-belt" or "underground-belt" or "splitter"
+                    && !(p == start && e.Id == inletBeltId)
+                    && !(existingBusBelts?.Contains(e.Id) == true && map.Prototypes[e.Name].Type == "transport-belt"
+                        && Front(e.Position, e.Direction) != p)
                     && new WorldBox(new(e.Bounds.Min.X - 1, e.Bounds.Min.Y - 1), new(e.Bounds.Max.X + 1, e.Bounds.Max.Y + 1)).Contains(p))
                 || (e.PickupPosition is not null && Cell(e.PickupPosition) == p)
                 || (e.DropPosition is not null && Cell(e.DropPosition) == p));
@@ -39,6 +43,14 @@ public sealed class BeltRoutePlanner
                 path.Reverse();
                 var belts = path.Select((p, i) => new PlacementCandidate(p,
                     path.Count == 1 ? 0 : Direction(i + 1 < path.Count ? p : path[i - 1], i + 1 < path.Count ? path[i + 1] : p), i)).ToArray();
+                if (existingBusBelts is not null)
+                {
+                    int? terminal = new[] { belts[^1].Direction, 0, 4, 8, 12 }.Distinct().Cast<int?>().FirstOrDefault(d =>
+                        !path.Contains(Front(target, d!.Value)) && !map.Entities.Any(e => map.Prototypes[e.Name].Type is "transport-belt" or "underground-belt" or "splitter"
+                            && Cell(e.Position) == Front(target, d.Value)));
+                    if (terminal is null) return new(BeltRouteStatus.NoRouteInSnapshot, [], expanded);
+                    belts[^1] = belts[^1] with { Direction = terminal.Value };
+                }
                 return new(BeltRouteStatus.Found, belts, expanded);
             }
             foreach (var next in new MapPosition[] { new(current.X + 1, current.Y), new(current.X, current.Y + 1), new(current.X - 1, current.Y), new(current.X, current.Y - 1) })
@@ -55,6 +67,11 @@ public sealed class BeltRoutePlanner
     }
 
     public static MapPosition Cell(MapPosition position) => new(Math.Floor(position.X) + .5, Math.Floor(position.Y) + .5);
+    private static MapPosition Front(MapPosition p, int direction)
+    {
+        var offset = ExtractionPlanner.Rotate(new(0, -1), direction);
+        return new(p.X + offset.X, p.Y + offset.Y);
+    }
     private static double Distance(MapPosition a, MapPosition b) => Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y);
     private static int Direction(MapPosition a, MapPosition b) => b.X > a.X ? 4 : b.X < a.X ? 12 : b.Y > a.Y ? 8 : 0;
 }

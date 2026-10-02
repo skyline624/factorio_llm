@@ -104,7 +104,8 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
     }
 
     public async Task<string> BuildAtAsync(string item, PlacementCandidate candidate, ProductionCatalog catalog,
-        SpatialController controller, CancellationToken token, IReadOnlyList<MapPosition>? remainingTargets = null)
+        SpatialController controller, CancellationToken token, IReadOnlyList<MapPosition>? remainingTargets = null,
+        string? stoppedInserterItem = null)
     {
         var spatial = new SpatialClient(game);
         var current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
@@ -122,7 +123,14 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         var validation = await spatial.ValidateAsync(catalog.Scope, item, [candidate], token);
         if (!validation.Candidates[0].Allowed || !validation.Candidates[0].InReach)
             throw new PlacementRefusedException("The engine refused the calculated powered-machine placement.");
-        return BuiltEntity(await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction }, 600, token: token));
+        if (stoppedInserterItem is not null && (current.Prototypes[current.Items[item].EntityName].FilterSlots is not > 0
+            || !catalog.Items.ContainsKey(stoppedInserterItem))) throw new InvalidDataException("Stopped transport construction requires native filter geometry and item.");
+        var receipt = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction, stoppedInserterItem }, 600, token: token);
+        string id = BuiltEntity(receipt);
+        if (stoppedInserterItem is not null && (!receipt.Effects.TryGetProperty("stoppedInserterItem", out var configured)
+            || configured.GetString() != stoppedInserterItem || !receipt.Effects.TryGetProperty("disabledByScript", out var stopped)
+            || stopped.ValueKind != System.Text.Json.JsonValueKind.True)) throw new InvalidDataException("Transport build did not prove its stopped native filter.");
+        return id;
     }
 
     /// <summary>The native id of a completed build; a native placement refusal is told apart from shortages and other failures.</summary>

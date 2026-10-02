@@ -10,8 +10,8 @@ public sealed record LogisticsResult(IReadOnlyDictionary<string, long> Collected
     IReadOnlyList<DegradedCell>? Degraded = null);
 
 /// <summary>
-/// The actor as the factory's transport: empties cell output chests, then refills input chests and laboratories
-/// from what it carries. Every quantity comes from one native factory photograph and the transfer receipts.
+/// Maintains native bus controls, then uses the actor for unconnected inputs, finished outputs, laboratories and fuel.
+/// Every quantity comes from native factory photographs and transfer receipts.
 /// </summary>
 public sealed class FactoryLogistics(IGameClient game, IControllerJournal journal, string directory)
 {
@@ -82,6 +82,16 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             await journal.AppendAsync("factory-cells-paused", paused.Select(p => new { p.Cell.Id, p.Cell.Recipe, p.Product,
                 stock = stocks.GetValueOrDefault(p.Product), cap = caps!.GetValueOrDefault(p.Product, UnplannedStock) }), token);
 
+        var transport = new FactoryTransportBuilder(game, journal, directory);
+        state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
+        state = await transport.ApplyPausesAsync(state, paused.Select(p => p.Cell.Id).ToHashSet(StringComparer.Ordinal), token);
+        await transport.RepairControlsAsync(state, snapshot, catalog, controller, token);
+        if (state.Transports is { Count: > 0 }) snapshot = await snapshots.CaptureAsync(cancellationToken: token);
+        Require(snapshot.Scope, catalog);
+        var connected = FactoryTransportHealth.Connected(state, snapshot);
+        var busSources = (state.Transports ?? []).Where(b => FactoryTransportHealth.Healthy(state, snapshot, b))
+            .Select(b => (Chest: state.Cells.Single(c => c.Id == b.SourceCellId).Entities["output-chest"], b.Item)).ToHashSet();
+
         // The bag carries what chests, labs and burners need plus two stacks; a full bag fails every later take.
         var needs = Refills(snapshot).GroupBy(r => r.Item).ToDictionary(g => g.Key, g => g.Sum(r => Math.Max(0, r.Target - r.Loaded)), StringComparer.Ordinal);
         int labs = cells.Count(c => c.Kind == "lab");
@@ -104,6 +114,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         {
             foreach (var (item, count) in Items(snapshot, chest).Where(p => p.Value > 0))
             {
+                if (busSources.Contains((chest, item)) && needs.GetValueOrDefault(item) == 0) continue;
                 long wanted = Math.Min(count, Cap(item) - bag.GetValueOrDefault(item));
                 if (wanted <= 0) continue;
                 long moved = await TransferAsync("take", chest, item, wanted);
@@ -218,7 +229,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 var inChest = Items(photograph, chest);
                 // Solid and fluid stages share the root demand; cells outside that plan keep the caller's buffer.
                 int crafts = CellBufferCrafts(cell, shares, bufferCrafts);
-                return recipe.Ingredients.Where(i => i.DeterministicItem).Select(i => (Chest: chest, Item: i.Name,
+                return recipe.Ingredients.Where(i => i.DeterministicItem && !connected.Contains((chest, i.Name))).Select(i => (Chest: chest, Item: i.Name,
                     Loaded: inChest.GetValueOrDefault(i.Name), Target: checked((long)(i.Amount!.Value * crafts))));
             }).ToArray();
 

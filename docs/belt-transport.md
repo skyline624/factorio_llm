@@ -1,5 +1,7 @@
 # Transport solide par tapis et bras
 
+Les [liaisons persistantes entre cellules](factory-transport.md) utilisent maintenant un registre, des receveurs filtrés et des limites natives de stock. Cette page décrit la commande de transfert par lots et son bilan propre.
+
 ```powershell
 dotnet $hostDll transport --session $sessionFile --source SOURCE_ID --target TARGET_ID --item iron-plate --quantity 10
 ```

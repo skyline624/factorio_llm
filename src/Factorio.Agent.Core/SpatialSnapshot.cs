@@ -58,7 +58,7 @@ public sealed record EntityGeometry(string Name, string Type, WorldBox Collision
     double? SupplyArea = null, double? MaxWireDistance = null, bool IsElectric = false,
     MapPosition? InserterPickup = null, MapPosition? InserterDrop = null, double? BeltSpeed = null,
     double? MiningSpeed = null, double? MiningTime = null, double? EnergyPerTick = null, double? BurnerEffectivity = null,
-    double? MaxPowerOutput = null, double? NormalResourceAmount = null, bool InfiniteResource = false);
+    double? MaxPowerOutput = null, double? NormalResourceAmount = null, bool InfiniteResource = false, int? FilterSlots = null);
 public sealed record FluidBoxGeometry(int Index, string ProductionType,
     [property: JsonConverter(typeof(NativeArrayConverter<FluidPortGeometry>))] IReadOnlyList<FluidPortGeometry> Connections,
     string? Filter = null, double? MinimumTemperature = null, double? MaximumTemperature = null);
@@ -73,10 +73,18 @@ public sealed record SpatialEntity(string Id, string Name, MapPosition Position,
     MapPosition? DropPosition = null, string? DropTargetId = null,
     [property: JsonConverter(typeof(NativeArrayConverter<ObservedFluidConnection>))] IReadOnlyList<ObservedFluidConnection>? FluidConnections = null,
     ObservedPower? Power = null, double BoundsOrientation = 0, MapPosition? PickupPosition = null, string? PickupTargetId = null,
-    ObservedBeltConnections? BeltConnections = null, string? Status = null);
+    ObservedBeltConnections? BeltConnections = null, string? Status = null, ObservedInserterControl? InserterControl = null,
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? RedNeighbours = null, int? RedNeighbourCount = null);
+public sealed record ObservedInserterControl(bool UseFilters, string? FilterMode,
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Filters,
+    bool CircuitEnabled = false, string? CircuitItem = null, string? Comparator = null, int? Maximum = null,
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? RedNeighbours = null, int? RedNeighbourCount = null,
+    bool NativeNormalFilters = false, bool CircuitSetsFilters = false, bool CircuitReadsHand = false, bool LogisticCondition = false,
+    bool ScriptDisabled = false);
 public sealed record ObservedBeltConnections(
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Inputs,
-    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Outputs);
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Outputs,
+    int? InputsCount = null, int? OutputsCount = null);
 public sealed record ObservedFluidConnection(int BoxIndex, int PortIndex, MapPosition Position, MapPosition TargetPosition,
     string? TargetEntityId = null, int? TargetBoxIndex = null,
     string? Type = null, string? FlowDirection = null, string? Filter = null);
@@ -124,7 +132,7 @@ public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int S
         }
         catch (Exception error) when (error is JsonException or ArgumentException or InvalidOperationException or KeyNotFoundException)
         {
-            throw new InvalidDataException("Invalid native spatial data.", error);
+            throw new InvalidDataException($"Invalid native spatial data: {error.Message}", error);
         }
     }
 

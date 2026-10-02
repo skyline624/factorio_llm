@@ -2,6 +2,7 @@ local U = require("scripts.util")
 local Actor = require("scripts.actor")
 local Recovery = require("scripts.recovery")
 local Weapons = require("scripts.weapons")
+local Transport = require("scripts.transport")
 local M = {}
 local maximum_entities, maximum_records, lifetime = 20000, 150000, 3600
 local belt_types = {["transport-belt"] = true, ["underground-belt"] = true, splitter = true,
@@ -73,6 +74,7 @@ local function capture(args)
     local metadata = {role = roles[id], type = entity.type, surfaceIndex = entity.surface.index,
       position = U.copy(entity.position), direction = entity.direction, force = entity.force.name,
       inventories = {}, transportLines = {}, fluidStores = {}}
+    metadata.transport = Transport.read(entity, function(e) return entities[U.entity_id(e)] ~= nil end)
     local fuel = entity.get_fuel_inventory()
     if entity.type == "character" then
       local main = entity.get_main_inventory()

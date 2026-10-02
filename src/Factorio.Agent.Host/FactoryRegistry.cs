@@ -22,13 +22,19 @@ public sealed record FactoryCell(string Id, int Zone, CellSlot Slot, string Kind
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsResource => Zone == 0 && Kind is "smelter" or "miner";
 }
+public sealed record FactoryTransportConsumer(string TargetCellId, string InserterRole, int Maximum, bool Paused = false);
+/// <summary>A single-item belt bus owns its transport cell; endpoints refer to producer/consumer cells so rebuilt chests are found by their roles.</summary>
+public sealed record FactoryTransportBus(string Id, string SourceCellId, string Item, string CellId,
+    IReadOnlyList<FactoryTransportConsumer> Consumers);
 /// <summary>Resource cells use zone 0; their slot band is the id of their <see cref="ResourceRow"/>.</summary>
 /// <summary>Targets are the automation rates requested so far, item to items per minute; older registries load without them.</summary>
 public sealed record FactoryState(int Version, string WorldId, IReadOnlyList<FactoryZone> Zones, IReadOnlyList<FactoryCell> Cells,
-    IReadOnlyList<ResourceRow>? Rows = null, IReadOnlyDictionary<string, double>? Targets = null)
+    IReadOnlyList<ResourceRow>? Rows = null, IReadOnlyDictionary<string, double>? Targets = null,
+    IReadOnlyList<FactoryTransportBus>? Transports = null)
 {
     public FactoryState With(FactoryCell cell) => this with { Cells = [.. Cells.Where(c => c.Id != cell.Id), cell] };
     public FactoryState With(ResourceRow row) => this with { Rows = [.. (Rows ?? []).Where(r => r.Id != row.Id), row] };
+    public FactoryState With(FactoryTransportBus bus) => this with { Transports = [.. (Transports ?? []).Where(b => b.Id != bus.Id), bus] };
 
     /// <summary>A target keeps the highest rate ever requested: the factory grows with demand and never shrinks a plan.</summary>
     public FactoryState WithTarget(string item, double perMinute) => this with

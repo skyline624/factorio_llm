@@ -1,6 +1,7 @@
 local U = require("scripts.util")
 local Actor = require("scripts.actor")
 local Visibility = require("scripts.visibility")
+local Transport = require("scripts.transport")
 local M = {}
 local status_names = {}
 for name, value in pairs(defines.entity_status) do status_names[value] = name end
@@ -37,6 +38,7 @@ local function prototype(value)
     result.fuelCategories = value.burner_prototype and value.burner_prototype.fuel_categories
   end
   if value.type == "inserter" then
+    result.filterSlots = value.filter_count
     local pickup, drop = value.inserter_pickup_position, value.inserter_drop_position
     result.inserterPickup = pickup and {x = pickup[1], y = pickup[2]}
     result.inserterDrop = drop and {x = drop[1], y = drop[2]}
@@ -140,23 +142,7 @@ function M.observe(args)
         local target = entity.drop_target
         if target and Visibility.is_visible(c, target) then value.dropTargetId = U.entity_id(target) end
       end
-      if entity.type == "inserter" then
-        value.pickupPosition = U.copy(entity.pickup_position)
-        local target = entity.pickup_target
-        if target and Visibility.is_visible(c, target) then value.pickupTargetId = U.entity_id(target) end
-      end
-      if entity.type == "transport-belt" or entity.type == "underground-belt" or entity.type == "splitter" then
-        value.beltConnections = {inputs = {}, outputs = {}}
-        local neighbours = entity.belt_neighbours
-        for _, side in ipairs{"inputs", "outputs"} do
-          for _, target in pairs(neighbours[side]) do
-            if target.valid and Visibility.is_visible(c, target) then
-              value.beltConnections[side][#value.beltConnections[side] + 1] = U.entity_id(target)
-            end
-          end
-          table.sort(value.beltConnections[side])
-        end
-      end
+      for key, field in pairs(Transport.read(entity, function(e) return Visibility.is_visible(c, e) end) or {}) do value[key] = field end
       if #entity.fluidbox > 0 then
         value.fluidConnections = {}
         for index = 1, #entity.fluidbox do

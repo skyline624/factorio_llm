@@ -6,6 +6,21 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class FactoryMaintenanceTests
 {
     [Fact]
+    public void ARecordedBusTailIsAdoptedBeforeItsInterruptedExtensionRotatesIt()
+    {
+        var catalog = Catalogs.Early() with { Items = new Dictionary<string, NativeItem>(Catalogs.Early().Items)
+            { ["transport-belt"] = new(0, 100, PlaceEntity: "transport-belt", PlaceEntityType: "transport-belt") } };
+        var plan = new PlannedEntity("belt-0", "transport-belt", new(.5, .5), 8);
+        var cell = new FactoryCell("line", 0, new(0, 0, true), "transport", "transport-belt", null,
+            new Dictionary<string, string> { ["belt-0"] = "tail" }, "building", 10, Plan: new Dictionary<string, PlannedEntity> { ["belt-0"] = plan });
+        var snapshot = new FactorySnapshot("native", catalog.Scope, 10, 20, Protocol.ToElement(new { atomic = true }),
+            [new("tail", "entity", "tail", "transport-belt", Protocol.ToElement(new { role = "factory", type = "transport-belt", position = plan.Position, direction = 4 }))]);
+        var reconciled = FactoryMaintenance.Reconcile(cell, snapshot, catalog, new HashSet<string>(), removeMissing: true);
+        Assert.Equal("tail", reconciled.Entities["belt-0"]);
+        Assert.Null(FactoryMaintenance.AtPlan(snapshot, catalog, plan, new HashSet<string>()));
+    }
+
+    [Fact]
     public void DestroyedRegisteredEntitiesAreRebuiltTurretsFirstThenWalls()
     {
         var state = new FactoryState(1, "world", [], [

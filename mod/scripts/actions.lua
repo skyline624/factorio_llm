@@ -9,7 +9,7 @@ local ShotAccounting = require("scripts.shot_accounting")
 local M = {}
 
 M.capabilities = {"move", "mine", "craft", "wait", "build", "insert", "take", "set_recipe",
-  "research", "rotate", "shoot", "launch_rocket", "equip", "select_weapon"}
+  "research", "rotate", "shoot", "launch_rocket", "equip", "select_weapon", "configure_inserter"}
 local starts, steps = {}, {}
 starts.equip, starts.select_weapon = Equipment.equip, Equipment.select
 M.account_craft = CraftAccounting.update
@@ -152,11 +152,29 @@ steps.craft = function(r, c)
   return w.queued == w.requested and "completed" or "partial"
 end
 
+local function filter_inserter(entity, item)
+  for slot = 1, entity.filter_slot_count do entity.set_filter(slot, nil) end
+  entity.set_filter(1, {name = item, quality = "normal", comparator = "="})
+  entity.inserter_filter_mode = "whitelist"
+  entity.use_filters = true
+  local control = entity.get_or_create_control_behavior()
+  control.circuit_set_filters = false
+  control.circuit_read_hand_contents = false
+  control.connect_to_logistic_network = false
+  return control
+end
+
 starts.build = function(r, c, args)
   local item = U.string(args.item or args.name, "item")
   local prototype = prototypes.item[item]
   U.check(prototype and prototype.place_result, "not_buildable", "The item does not place a supported entity")
   local name, position = prototype.place_result.name, U.position(args.position)
+  local stopped_item
+  if args.stoppedInserterItem ~= nil then
+    stopped_item = U.string(args.stoppedInserterItem, "stoppedInserterItem")
+    U.check(prototype.place_result.type == "inserter" and prototype.place_result.filter_count > 0
+      and prototypes.item[stopped_item] ~= nil, "unsupported_entity", "Stopped construction requires a native filter inserter and item")
+  end
   local direction = U.number(args.direction, "direction", 0, 15, 0, true)
   U.check(direction % 4 == 0, "invalid_direction", "Base buildings use cardinal directions 0,4,8,12")
   U.check(U.distance(c.position, position) <= c.build_distance, "out_of_reach", "Build location is outside character reach")
@@ -174,6 +192,14 @@ starts.build = function(r, c, args)
   r.receipt.effects.entityId, r.receipt.effects.entityName = U.entity_id(entity), entity.name
   r.receipt.effects.consumed = {[item] = 1}
   r.receipt.effects.entityPosition = U.copy(entity.position)
+  if stopped_item then
+    local control = filter_inserter(entity, stopped_item)
+    control.circuit_condition = {first_signal = {type = "item", name = stopped_item, quality = "normal"}, comparator = "<", constant = 0}
+    control.circuit_enable_disable = true
+    entity.active = false -- A circuit condition without a connected network does not stop the native inserter.
+    r.receipt.effects.stoppedInserterItem = stopped_item
+    r.receipt.effects.disabledByScript = entity.disabled_by_script
+  end
   return "completed"
 end
 
@@ -267,6 +293,45 @@ starts.rotate = function(r, c, args)
   U.check(entity.rotate{reverse = args.reverse == true}, "rotation_rejected", "Engine refused rotation")
   r.receipt.effects.targetId = U.entity_id(entity)
   r.receipt.effects.beforeDirection, r.receipt.effects.afterDirection = before, entity.direction
+  return "completed"
+end
+
+starts.configure_inserter = function(r, c, args)
+  local entity = target(c, args, true)
+  U.check(entity.type == "inserter" and entity.filter_slot_count > 0, "unsupported_entity", "A native filter inserter is required")
+  local item = U.string(args.item, "item")
+  U.check(prototypes.item[item] ~= nil, "unknown_item", "Unknown inserter filter item")
+  local chest, connector, other
+  local maximum
+  if args.chestEntityId ~= nil then
+    chest = target(c, {entityId = args.chestEntityId}, true)
+    U.check(chest.type == "container" and chest.force == entity.force and chest.surface == entity.surface,
+      "unsupported_endpoint", "The controlled destination must be an own container")
+    maximum = U.number(args.maximum, "maximum", 0, 10000, nil, true)
+    connector = entity.get_wire_connector(defines.wire_connector_id.circuit_red, true)
+    other = chest.get_wire_connector(defines.wire_connector_id.circuit_red, true)
+    U.check(connector and other, "wire_unavailable", "Native red circuit connectors are required")
+    for _, connection in pairs(connector.connections) do
+      U.check(connection.target == other, "foreign_circuit", "Inserter already reads another circuit endpoint")
+    end
+  else
+    U.check(args.maximum == nil, "invalid_arguments", "A stock limit requires its destination chest")
+    local existing = entity.get_wire_connector(defines.wire_connector_id.circuit_red, false)
+    U.check(not existing or #existing.connections == 0, "foreign_circuit", "An extractor cannot retain a circuit connection")
+  end
+  local control = filter_inserter(entity, item)
+  control.circuit_enable_disable = chest ~= nil
+  if chest then
+    if #connector.connections == 0 then
+      U.check(connector.connect_to(other, true, defines.wire_origin.player), "wire_connection_rejected", "Engine refused the native circuit wire")
+    end
+    chest.get_or_create_control_behavior()
+    control.circuit_condition = {first_signal = {type = "item", name = item, quality = "normal"}, comparator = "<", constant = maximum}
+    control.circuit_enable_disable = true
+  end
+  entity.active = true -- Filter, destination wire and stock condition are already applied in this same native action.
+  r.receipt.effects.targetId, r.receipt.effects.item = U.entity_id(entity), item
+  r.receipt.effects.chestEntityId, r.receipt.effects.maximum = chest and U.entity_id(chest), maximum
   return "completed"
 end
 

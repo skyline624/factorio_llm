@@ -80,6 +80,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             for (int count = 0; count < missing; count++)
                 await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
         }
+        await new FactoryTransportBuilder(game, journal, directory).ConnectAsync(catalog, token: token);
         return plan;
     }
 

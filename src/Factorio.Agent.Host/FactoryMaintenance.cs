@@ -65,10 +65,18 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
             }
             if (id is null)
             {
+                var transportBus = missing.Cell.Kind == "transport" ? (state.Transports ?? []).SingleOrDefault(b => b.CellId == missing.Cell.Id) : null;
+                if (missing.Cell.Kind == "transport" && transportBus is null)
+                {
+                    blocked.Add(missing.PreviousId);
+                    await journal.AppendAsync("factory-transport-rebuild-unregistered", new { cell = missing.Cell.Id, missing.Role }, token);
+                    continue;
+                }
+                string? stoppedItem = transportBus is not null && catalog.Items[item].PlaceEntityType == "inserter" ? transportBus.Item : null;
                 try
                 {
                     id = await new PoweredMachineController(game, journal).BuildAtAsync(item,
-                        new(missing.Plan.Position, missing.Plan.Direction, 0), catalog, controller, token);
+                        new(missing.Plan.Position, missing.Plan.Direction, 0), catalog, controller, token, stoppedInserterItem: stoppedItem);
                 }
                 catch (PlacementRefusedException error)
                 {
@@ -176,20 +184,22 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         {
             var excluded = new HashSet<string>(used, StringComparer.Ordinal);
             excluded.UnionWith(ids.Where(p => p.Key != role).Select(p => p.Value));
-            string? id = AtPlan(snapshot, catalog, plan, excluded);
+            string? id = AtPlan(snapshot, catalog, plan, excluded, allowBeltRotation: cell.Kind == "transport");
             if (id is null && removeMissing) ids.Remove(role);
             else if (id is not null) ids[role] = id;
         }
         return cell with { Entities = ids };
     }
 
-    internal static string? AtPlan(FactorySnapshot snapshot, ProductionCatalog catalog, PlannedEntity plan, IReadOnlySet<string> excluded)
+    internal static string? AtPlan(FactorySnapshot snapshot, ProductionCatalog catalog, PlannedEntity plan, IReadOnlySet<string> excluded,
+        bool allowBeltRotation = false)
     {
         string name = catalog.Items[plan.Item].PlaceEntity ?? plan.Item;
         return snapshot.Records.Where(r => r.Kind == "entity" && r.Name == name && !excluded.Contains(r.EntityId)
                 && r.Data.GetProperty("role").GetString() == "factory"
                 && r.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!.DistanceTo(plan.Position) < .01
                 && (r.Data.GetProperty("type").GetString() is "container" or "electric-pole" or "wall" or "furnace"
+                    || allowBeltRotation && r.Data.GetProperty("type").GetString() == "transport-belt"
                     || r.Data.GetProperty("direction").GetInt32() == plan.Direction))
             .Select(r => r.EntityId).FirstOrDefault();
     }
