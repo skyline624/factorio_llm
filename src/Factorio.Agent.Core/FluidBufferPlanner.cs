@@ -27,12 +27,17 @@ public sealed class FluidBufferPlanner
     }
 
     public static IReadOnlySet<string> ConnectedPipeIds(SpatialSnapshot map, string machineId, string fluid)
+        => ConnectedStorageIds(map, machineId, fluid).Where(id => map.Prototypes[map.Entities.Single(e => e.Id == id).Name].Type == "pipe")
+            .ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>Passive native pipe and tank storage reached through reciprocal, compatible output connections.</summary>
+    public static IReadOnlySet<string> ConnectedStorageIds(SpatialSnapshot map, string machineId, string fluid)
     {
         var machine = map.Entities.Single(e => e.Id == machineId);
         var outlets = (machine.FluidConnections ?? []).Where(p => p.Type == "normal"
             && p.FlowDirection is "output" or "input-output" && (p.Filter is null || p.Filter == fluid))
             .Select(p => Endpoint(machine, p)).ToArray();
-        return map.Entities.Where(e => e.Force == machine.Force && map.Prototypes[e.Name].Type == "pipe"
+        return map.Entities.Where(e => e.Force == machine.Force && map.Prototypes[e.Name].Type is "pipe" or "storage-tank"
             && (e.FluidConnections ?? []).Any(p => outlets.Any(o => FluidNetwork.IsConnected(map, o, Endpoint(e, p), fluid))))
             .Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
     }

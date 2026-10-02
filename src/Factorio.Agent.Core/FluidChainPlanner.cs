@@ -22,14 +22,11 @@ public static class FluidChainPlanner
     {
         if (!double.IsFinite(perMinute) || perMinute <= 0 || perMinute > 100000) throw new ArgumentOutOfRangeException(nameof(perMinute));
         if (Choose(catalog, item, machineItems) is null) return null;
-        var crafts = new Dictionary<string, (NativeRecipe Recipe, string Machine, double Crafts)>(StringComparer.Ordinal);
-        var order = new List<string>();
-        var sources = new Dictionary<string, (string? Resource, double Units)>(StringComparer.Ordinal);
-        var raw = new Dictionary<string, double>(StringComparer.Ordinal);
-        Add(item, perMinute, []);
-        var stages = order.Select(name =>
+        var graph = ProductionRecipeGraph.Plan(new Dictionary<string, double>(StringComparer.Ordinal) { [item] = perMinute },
+            name => Choose(catalog, name, machineItems));
+        var stages = graph.Stages.Select(stage =>
         {
-            var (recipe, machine, needed) = crafts[name];
+            var (recipe, machine, product, needed) = stage;
             double machineCrafts = 60 * catalog.Assemblers![machine].CraftingSpeed / recipe.EnergySeconds;
             double solidIn = recipe.Ingredients.Where(i => i.DeterministicItem).Sum(i => i.Amount!.Value);
             double solidOut = recipe.Products.Where(p => p.DeterministicItem).Sum(p => p.Amount!.Value);
@@ -37,35 +34,16 @@ public static class FluidChainPlanner
             double limit = Math.Max(solidIn, solidOut) > 0
                 ? Math.Min(machineCrafts, 60 * AutomationPlanner.InserterItemsPerSecond / Math.Max(solidIn, solidOut)) : machineCrafts;
             int machines = (int)Math.Ceiling(needed / limit - 1e-9);
-            return new AutomationStage(recipe.Name, recipe.Products[0].Name, machine, needed,
+            return new AutomationStage(recipe.Name, product, machine, needed,
                 Math.Clamp(machines, 1, maximumMachinesPerStage), AutomationPlanner.FluidKind);
         }).ToArray();
-        return new(item, perMinute, stages, sources.Select(p => new FluidSource(p.Key, p.Value.Resource, p.Value.Units))
-            .OrderBy(s => s.Fluid, StringComparer.Ordinal).ToArray(), raw);
-
-        void Add(string name, double rate, IReadOnlyList<string> path)
-        {
-            if (path.Contains(name)) throw new InvalidOperationException("Fluid chain recipes form a cycle: " + string.Join(" -> ", path.Append(name)));
-            var choice = Choose(catalog, name, machineItems);
-            if (choice is null)
-            {
-                if (IsFluid(catalog, name))
-                    sources[name] = (Resource(catalog, name), sources.GetValueOrDefault(name).Units + rate);
-                else raw[name] = raw.GetValueOrDefault(name) + rate;
-                return;
-            }
-            var (recipe, machine) = choice.Value;
-            double recipeCrafts = rate / recipe.Products[0].Amount!.Value;
-            foreach (var ingredient in recipe.Ingredients)
-                Add(ingredient.Name, recipeCrafts * ingredient.Amount!.Value, [.. path, name]);
-            // Post-order: every supplier stage precedes its consumers.
-            if (!crafts.ContainsKey(recipe.Name)) order.Add(recipe.Name);
-            crafts[recipe.Name] = (recipe, machine, crafts.GetValueOrDefault(recipe.Name).Crafts + recipeCrafts);
-        }
+        return new(item, perMinute, stages, graph.Inputs.Where(p => IsFluid(catalog, p.Key))
+            .Select(p => new FluidSource(p.Key, Resource(catalog, p.Key), p.Value)).OrderBy(s => s.Fluid, StringComparer.Ordinal).ToArray(),
+            graph.Inputs.Where(p => !IsFluid(catalog, p.Key)).ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal));
     }
 
     /// <summary>
-    /// The enabled single-product recipe of a product that moves fluids, with the fastest of the given fluid machines accepting
+    /// The enabled recipe of a product that moves fluids, with the fastest of the given fluid machines accepting
     /// it, whose every fluid ingredient can itself be supplied. Solid-only recipes are left to the assembler planner.
     /// </summary>
     public static (NativeRecipe Recipe, string MachineItem)? Choose(ProductionCatalog catalog, string product, IReadOnlySet<string> machineItems) =>
@@ -78,12 +56,15 @@ public static class FluidChainPlanner
         var machines = (catalog.Assemblers ?? new Dictionary<string, NativeAssembler>())
             .Where(p => machineItems.Contains(p.Key) && p.Value.FixedRecipe is null && (p.Value.FluidInputCount > 0 || p.Value.FluidOutputCount > 0))
             .OrderByDescending(p => p.Value.CraftingSpeed).ThenBy(p => p.Key, StringComparer.Ordinal).ToArray();
-        foreach (var recipe in catalog.Recipes.Where(r => r.Enabled && r.Products.Count == 1 && r.Products[0].Name == product
-                && (r.Products[0].DeterministicItem || r.Products[0].DeterministicFluid) && r.Ingredients.Count > 0
+        foreach (var recipe in catalog.Recipes.Where(r => r.Enabled && r.Products.Any(p => p.Name == product)
+                && SupportedProducts(r, catalog) && r.Ingredients.Count > 0
                 && r.Ingredients.All(i => i.DeterministicItem || i.DeterministicFluid)
-                && (r.Products[0].DeterministicFluid || r.Ingredients.Any(i => i.DeterministicFluid))
+                && (r.Products.Any(p => p.DeterministicFluid) || r.Ingredients.Any(i => i.DeterministicFluid))
                 && r.Ingredients.All(i => i.Name != product))
-            .OrderBy(r => r.Name, StringComparer.Ordinal))
+            .OrderBy(r => r.Products.Count > 1)
+            .ThenBy(r => r.Ingredients.Where(i => i.DeterministicFluid).Sum(i => i.Amount!.Value)
+                / r.Products.Single(p => p.Name == product).Amount!.Value)
+            .ThenBy(r => r.Name, StringComparer.Ordinal))
         {
             var machine = machines.FirstOrDefault(p => p.Value.Accepts(recipe));
             if (machine.Key is null) continue;
@@ -94,6 +75,14 @@ public static class FluidChainPlanner
         }
         return null;
     }
+
+    /// <summary>Co-products are supported only for pure fluid processing fed directly from native deposits or terrain.</summary>
+    public static bool SupportedProducts(NativeRecipe recipe, ProductionCatalog catalog) => recipe.Products.Count == 1
+        ? recipe.Products[0].DeterministicItem || recipe.Products[0].DeterministicFluid
+        : recipe.Products.Count is > 1 and <= 3 && recipe.Products.All(p => p.DeterministicFluid)
+            && recipe.Products.Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() == recipe.Products.Count
+            && recipe.Ingredients.All(i => i.DeterministicFluid && !recipe.Products.Any(p => p.Name == i.Name)
+                && (Resource(catalog, i.Name) is not null || Terrain(catalog, i.Name)));
 
     /// <summary>
     /// Native output of one extractor on a deposit: speed times product per cycle over mining time, scaled by the

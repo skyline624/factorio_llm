@@ -6,6 +6,23 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class FluidBufferPlannerTests
 {
     [Theory]
+    [InlineData(true, "oil", true)]
+    [InlineData(false, "oil", false)]
+    [InlineData(true, "water", false)]
+    public void TankStorageRequiresReciprocalConnectionsAndCompatibleFluid(bool reciprocal, string filter, bool connected)
+    {
+        var map = PipeRoutePlannerTests.Map();
+        var source = map.Entities[0] with { FluidConnections =
+            [new(1, 1, new(-.5, .5), new(.5, .5), "tank", 1, "normal", "output", "oil")] };
+        var tank = new SpatialEntity("tank", "tank", new(.5, .5), new(new(.2, .2), new(.8, .8)), 0, "agent",
+            FluidConnections: [new(1, 1, new(.5, .5), new(-.5, .5), reciprocal ? "source" : null, 1, "normal", "input-output", filter)]);
+        map = map with { Entities = [source, tank], Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            { ["tank"] = map.Prototypes["pipe"] with { Name = "tank", Type = "storage-tank" } } };
+        Assert.Equal(connected, FluidBufferPlanner.ConnectedStorageIds(map, "source", "oil").Contains("tank"));
+        Assert.Empty(FluidBufferPlanner.ConnectedPipeIds(map, "source", "oil"));
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void OnlyExtendsPipesWithReciprocalNativeConnectionToTheOutput(bool reciprocal)

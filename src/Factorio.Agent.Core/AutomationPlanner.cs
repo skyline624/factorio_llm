@@ -19,53 +19,32 @@ public static class AutomationPlanner
         int maximumMachinesPerStage = 8, IReadOnlySet<string>? fluidMachineItems = null) => Plan(catalog,
             new Dictionary<string, double>(StringComparer.Ordinal) { [item] = perMinute }, machineItems, maximumMachinesPerStage, fluidMachineItems);
 
-    /// <summary>Several targets share their intermediate stages: crafts add up per recipe before machines are counted.</summary>
+    /// <summary>Targets share intermediate demand and simultaneous recipe outputs before machines are counted.</summary>
     public static AutomationPlan Plan(ProductionCatalog catalog, IReadOnlyDictionary<string, double> targets, IReadOnlySet<string> machineItems,
         int maximumMachinesPerStage = 8, IReadOnlySet<string>? fluidMachineItems = null)
     {
         if (targets.Count == 0 || targets.Values.Any(rate => !double.IsFinite(rate) || rate <= 0 || rate > 10000))
             throw new ArgumentOutOfRangeException(nameof(targets));
-        var crafts = new Dictionary<string, (NativeRecipe Recipe, string Machine, double Crafts)>(StringComparer.Ordinal);
-        var order = new List<string>();
-        var raw = new Dictionary<string, double>(StringComparer.Ordinal);
-        var fluids = new Dictionary<string, double>(StringComparer.Ordinal);
-        foreach (var (item, perMinute) in targets.OrderBy(p => p.Key, StringComparer.Ordinal)) Add(item, perMinute, []);
-        var ordered = fluidMachineItems is null ? crafts.Values.OrderBy(s => s.Recipe.Name, StringComparer.Ordinal)
-            : order.Select(name => crafts[name]);
+        var graph = ProductionRecipeGraph.Plan(targets, name => Choose(catalog, name, machineItems)
+            ?? (fluidMachineItems is null ? null : FluidChainPlanner.Choose(catalog, name, fluidMachineItems)));
+        bool Fluid(string name) => fluidMachineItems is not null
+            && catalog.Recipes.SelectMany(r => r.Ingredients.Concat(r.Products)).Any(m => m.Name == name && m.DeterministicFluid);
+        var raw = graph.Inputs.Where(p => !Fluid(p.Key)).ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
+        IEnumerable<RecipeDemand> ordered = fluidMachineItems is null ? graph.Stages.OrderBy(s => s.Recipe.Name, StringComparer.Ordinal) : graph.Stages;
         var stages = ordered.Select(stage =>
         {
             string kind = stage.Recipe.Ingredients.Concat(stage.Recipe.Products).Any(i => i.DeterministicFluid)
-                ? FluidKind : Kind(catalog, stage.Machine);
-            int machines = (int)Math.Ceiling(stage.Crafts / CellCraftsPerMinute(catalog, stage.Recipe, stage.Machine) - 1e-9);
-            return new AutomationStage(stage.Recipe.Name, stage.Recipe.Products[0].Name, stage.Machine, stage.Crafts,
+                ? FluidKind : Kind(catalog, stage.MachineItem);
+            int machines = (int)Math.Ceiling(stage.CraftsPerMinute / CellCraftsPerMinute(catalog, stage.Recipe, stage.MachineItem) - 1e-9);
+            return new AutomationStage(stage.Recipe.Name, stage.Product, stage.MachineItem, stage.CraftsPerMinute,
                 Math.Clamp(machines, 1, Maximum(kind, maximumMachinesPerStage)), kind);
         }).ToArray();
         return new(stages, raw)
         {
-            FluidSources = fluids.Select(p => new FluidSource(p.Key, FluidChainPlanner.Resource(catalog, p.Key), p.Value))
+            FluidSources = graph.Inputs.Where(p => Fluid(p.Key)).Select(p => new FluidSource(p.Key, FluidChainPlanner.Resource(catalog, p.Key), p.Value))
                 .OrderBy(s => s.Fluid, StringComparer.Ordinal).ToArray()
         };
 
-        void Add(string name, double rate, IReadOnlyList<string> path)
-        {
-            if (path.Contains(name)) throw new InvalidOperationException("Automation recipes form a cycle: " + string.Join(" -> ", path.Append(name)));
-            if (path.Count > 32) throw new InvalidOperationException("Automation dependency depth exceeds its budget.");
-            var choice = Choose(catalog, name, machineItems) ?? (fluidMachineItems is null ? null
-                : FluidChainPlanner.Choose(catalog, name, fluidMachineItems));
-            if (choice is null)
-            {
-                if (fluidMachineItems is not null && catalog.Recipes.SelectMany(r => r.Ingredients.Concat(r.Products)).Any(m => m.Name == name && m.DeterministicFluid))
-                    fluids[name] = fluids.GetValueOrDefault(name) + rate;
-                else raw[name] = raw.GetValueOrDefault(name) + rate;
-                return;
-            }
-            var (recipe, machine) = choice.Value;
-            double recipeCrafts = rate / recipe.Products[0].Amount!.Value;
-            foreach (var ingredient in recipe.Ingredients)
-                Add(ingredient.Name, recipeCrafts * ingredient.Amount!.Value, [.. path, name]);
-            if (!crafts.ContainsKey(recipe.Name)) order.Add(recipe.Name);
-            crafts[recipe.Name] = (recipe, machine, crafts.GetValueOrDefault(recipe.Name).Crafts + recipeCrafts);
-        }
     }
 
     /// <summary>Crafts per minute one cell of this machine gives: native crafting speed, capped by one basic inserter per side.</summary>

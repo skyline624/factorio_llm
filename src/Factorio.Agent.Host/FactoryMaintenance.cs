@@ -86,6 +86,7 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
                 var configured = await controller.WorkAsync("set_recipe", new { entityId = id, recipe = missing.Cell.Recipe }, 600, token: token);
                 actions++;
                 if (configured.Status != "completed") throw new InvalidOperationException($"Rebuilt machine recipe ended with {configured.Status}.");
+                actions += await new PoweredMachineController(game, journal).OrientFluidAsync(id, missing.Plan.Direction, catalog, controller, token);
             }
             var current = await registry.LoadAsync(catalog.Scope.WorldId, token);
             var cell = current.Cells.Single(c => c.Id == missing.Cell.Id);

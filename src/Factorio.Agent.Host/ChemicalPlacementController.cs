@@ -54,6 +54,7 @@ public sealed class ChemicalPlacementController(IGameClient game, IControllerJou
             catalog, controller, token, placement.Supplies.SelectMany(s => s.Supply.Route.Pipes).ToArray());
         await controller.ApproachEntityAsync(replacementId, placement.Placement.Position, catalog, token);
         Completed(await controller.WorkAsync("set_recipe", new { entityId = replacementId, recipe = recipe.Name }, 600, token: token));
+        await new PoweredMachineController(game, journal).OrientFluidAsync(replacementId, placement.Placement.Direction, catalog, controller, token);
         var proof = await spatial.CaptureAsync([pipeItem, item], 48, token);
         RequireScope(proof.Scope);
         var replacement = proof.Entities.Single(e => e.Id == replacementId);

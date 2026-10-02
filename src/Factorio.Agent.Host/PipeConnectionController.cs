@@ -11,7 +11,7 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
 {
     /// <param name="ground">Reserves ground the route must keep off; only the plan sees it, the safety and proof checks read the engine.</param>
     public async Task<PipeConnectionResult> RunAsync(string sourceId, string targetId, string fluid, CancellationToken token = default,
-        Func<SpatialSnapshot, SpatialSnapshot>? ground = null)
+        Func<SpatialSnapshot, SpatialSnapshot>? ground = null, IReadOnlyList<string>? geometryItems = null)
     {
         if (sourceId == targetId) throw new ArgumentException("Fluid routing requires distinct source and target entities.");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -23,6 +23,8 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
             throw new InvalidDataException("Fluid endpoints are not in the same known own factory scope.");
         string pipeItem = catalog.Items.Where(p => p.Value.PlaceEntityType == "pipe").OrderBy(p => p.Key, StringComparer.Ordinal)
             .Select(p => p.Key).FirstOrDefault() ?? throw new InvalidOperationException("No ordinary pipe item is available.");
+        string[] geometry = new[] { pipeItem }.Concat(geometryItems ?? []).Distinct(StringComparer.Ordinal).ToArray();
+        if (geometry.Length > 16) throw new InvalidOperationException("Pipe routing exceeds the native item geometry observation budget.");
         var spatial = new SpatialClient(game);
         SpatialSnapshot initial = await MapAsync();
         var plan = new PipeRoutePlanner().Find(ground?.Invoke(initial) ?? initial, pipeItem, sourceId, targetId, fluid, cancellationToken: token);
@@ -61,7 +63,7 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
 
         async Task<SpatialSnapshot> MapAsync()
         {
-            var value = await spatial.CaptureAsync([pipeItem], 48, token);
+            var value = await spatial.CaptureAsync(geometry, 48, token);
             if (value.Scope != catalog.Scope) throw new InvalidDataException("Actor identity changed during pipe construction.");
             if (!value.Entities.Any(e => e.Id == sourceId) || !value.Entities.Any(e => e.Id == targetId))
                 throw new InvalidOperationException("Both pipe endpoints must be in the current observed construction area.");

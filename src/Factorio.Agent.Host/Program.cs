@@ -40,6 +40,7 @@ try
           verify-factory-cells --session FILE --from-materials
           verify-resource-cells --session FILE [--burner]
           verify-fluid-consumer --session FILE [--item battery|processing-unit] [--from-materials]
+          verify-oil-products --session FILE [--item rocket-fuel|electric-engine-unit]
           verify-furnace-bands --session FILE
           resource-cells --session FILE --item NAME --quantity PER_MINUTE
           power-expand --session FILE
@@ -173,6 +174,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new PowerExpansionQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-oil-products":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new OilProductQualification(session, Option("item") ?? "rocket-fuel").RunAsync(shutdown.Token) });
             break;
         }
         case "verify-fluid-consumer":

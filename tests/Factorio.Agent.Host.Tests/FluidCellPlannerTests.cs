@@ -75,6 +75,23 @@ public sealed class FluidCellPlannerTests
     }
 
     [Fact]
+    public void AReachableStagingPointAllowsACellOverTheActorsCurrentPosition()
+    {
+        var (map, stock) = OilMaps.WithGasSource([]);
+        map = map with { Actor = map.Actor with { Position = new(.5, .5) } };
+        var site = new FluidCellPlanner().Find(map, "agent", Chemical, "pipe", map.Actor.Position, true, true, ["petroleum-gas"],
+            (current, fluid) => new FluidSupplyPlanner().Find(current, stock, "pipe", FluidCellPlanner.PlannedId, fluid), radius: 1);
+        Assert.NotNull(site);
+        Assert.True(Box(map, site.Layout.Machine).Contains(map.Actor.Position));
+        var projected = FluidCellPlanner.Project(map, "agent", site.Layout, Chemical);
+        var approach = new PlacementPlanner().FindApproach(new(map), Chemical.Machine,
+            new(site.Layout.Machine.Position, site.Layout.Machine.Direction, 0), completedSite: projected);
+        Assert.NotNull(approach);
+        Assert.False(Box(map, site.Layout.Machine).Contains(approach));
+        Assert.Equal(RouteStatus.Found, new RoutePlanner().Find(new(map), approach).Status);
+    }
+
+    [Fact]
     public void ABlockedSecondInputBoxRejectsThePlacement()
     {
         var (map, stock) = OilMaps.WithGasSource([]);

@@ -6,6 +6,37 @@ namespace Factorio.Agent.Host;
 /// <summary>Shared native installation and local steam maintenance for powered production machines.</summary>
 public sealed class PoweredMachineController(IGameClient game, IControllerJournal journal)
 {
+    /// <summary>Applies a fluid cell's planned orientation after its recipe exposes the native ports.</summary>
+    public async Task<int> OrientFluidAsync(string entityId, int direction, ProductionCatalog catalog,
+        SpatialController controller, CancellationToken token)
+    {
+        if (direction is < 0 or > 12 || direction % 4 != 0) throw new ArgumentOutOfRangeException(nameof(direction));
+        var spatial = new SpatialClient(game);
+        int rotations = 0;
+        int? expectedObservedDirection = null;
+        while (true)
+        {
+            var map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
+            RequireScope(map.Scope, catalog);
+            var machine = map.Entities.Single(e => e.Id == entityId);
+            if (expectedObservedDirection is { } expected && machine.Direction != expected)
+                throw new InvalidDataException("Native fluid orientation disagrees with its rotation receipt; reconcile the machine.");
+            // Assemblers without a fluid recipe have no rotatable ports; their engine direction may remain north.
+            if (machine.FluidConnections is not { Count: > 0 } || machine.Direction == direction) return rotations;
+            if (rotations == 3) throw new InvalidOperationException("Native fluid machine did not reach its planned orientation.");
+            await controller.ApproachEntityAsync(entityId, machine.Position, catalog, token);
+            var receipt = await controller.WorkAsync("rotate", new { entityId }, 600, token: token);
+            Completed(receipt);
+            if (!receipt.Effects.TryGetProperty("beforeDirection", out var before)
+                || !receipt.Effects.TryGetProperty("afterDirection", out var after)
+                || before.GetInt32() == after.GetInt32())
+                throw new InvalidDataException("Native rotation did not prove an orientation change; reconcile the machine.");
+            expectedObservedDirection = after.GetInt32();
+            rotations++;
+            await journal.AppendAsync("fluid-machine-oriented", new { entityId, direction, rotations, receipt.Effects }, token);
+        }
+    }
+
     public async Task<string> InstallAsync(string item, ProductionCatalog catalog, SpatialController controller, CancellationToken token,
         Func<string, PlacementCandidate, string?, Task>? recordBuild = null)
     {

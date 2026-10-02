@@ -127,13 +127,106 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
             await journal.AppendAsync("fluid-cell-plan", new { cell.Id, recipe = recipeName, sources, pumped, anchor, site, map.CollectedTick }, token);
         }
         cell = await PlaceAsync(cell, registry, catalog, controller, token);
-        await ConfigureAsync(cell.Entities["machine"], cell.Plan!["machine"].Position, recipeName, catalog, controller, token);
+        await ConfigureAsync(cell.Entities["machine"], cell.Plan!["machine"], recipeName, catalog, controller, token);
         cell = await ConnectFluidsAsync(cell, fluids, ground, registry, catalog, controller, pipeItem, token);
         cell = await PowerAsync(cell, registry, catalog, equipment, ground, controller, token);
         var snapshot = await SnapshotAsync(catalog, token);
         if (FactoryPower.IsFed(snapshot, cell.Entities["machine"]) == false)
             throw new InvalidOperationException("The fluid machine's network has no power source.");
+        if (recipe.Products.Count > 1)
+            cell = await ReservoirsAsync(cell, recipe, registry, catalog, controller, ground, pipeItem, token);
         return await ReadyAsync(registry, catalog, cell, token);
+    }
+
+    /// <summary>Every simultaneous fluid output gets native tank storage before its consumers are constructed.</summary>
+    private async Task<FactoryCell> ReservoirsAsync(FactoryCell cell, NativeRecipe recipe, FactoryRegistry registry,
+        ProductionCatalog catalog, SpatialController controller, FactoryGround ground, string pipeItem, CancellationToken token)
+    {
+        if (!FluidChainPlanner.SupportedProducts(recipe, catalog) || recipe.Products.Any(p => !p.DeterministicFluid))
+            throw new InvalidOperationException("Reservoir construction supports deterministic fluid co-products only.");
+        var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
+        string tankItem = catalog.Items.Where(p => p.Value.PlaceEntityType == "storage-tank"
+            && (carried.GetValueOrDefault(p.Key) > 0 || FactoryDirector.Enabled(catalog, p.Key)))
+            .OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key).FirstOrDefault()
+            ?? throw new InvalidOperationException("Fluid co-products require an obtainable native storage tank.");
+        var builder = new FactoryCellBuilder(game, journal, directory);
+        string machineId = cell.Entities["machine"];
+        IReadOnlyList<PlannedFluidReservoir>? joint = null;
+        if (!cell.Plan!.Keys.Any(r => r.StartsWith("reservoir-", StringComparison.Ordinal)))
+        {
+            foreach (var product in recipe.Products) await WaitForStockAsync(product.Name, machineId, controller, catalog, token);
+            await controller.TravelAsync(cell.Plan["machine"].Position, 6, catalog, token);
+            var map = await CaptureAsync([tankItem, pipeItem, .. ground.Items], catalog, token);
+            joint = await ControllerPlanning.RunAsync(t => new FluidReservoirPlanner().FindAll(
+                FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), tankItem, pipeItem, machineId,
+                recipe.Products.Select(p => p.Name).ToArray(), t), controller, TimeSpan.FromMinutes(5), token)
+                ?? throw new InvalidOperationException("No joint isolated reservoir layout for the co-products; preserve the partial cell.");
+            var plans = new Dictionary<string, PlannedEntity>(cell.Plan, StringComparer.Ordinal);
+            for (int i = 0; i < recipe.Products.Count; i++)
+            {
+                var site = joint.Single(p => p.Fluid == recipe.Products[i].Name).Site;
+                plans[$"reservoir-{i}"] = new($"reservoir-{i}", tankItem, site.Tank.Position, site.Tank.Direction);
+            }
+            cell = cell with { Plan = plans };
+            await SaveAsync(registry, catalog, cell, token);
+            await journal.AppendAsync("fluid-reservoir-plan", new { cell.Id, joint }, token);
+        }
+        for (int index = 0; index < recipe.Products.Count; index++)
+        {
+            string fluid = recipe.Products[index].Name, role = $"reservoir-{index}";
+            await WaitForStockAsync(fluid, machineId, controller, catalog, token);
+            await controller.TravelAsync(cell.Plan!["machine"].Position, 6, catalog, token);
+            var map = await CaptureAsync([tankItem, pipeItem, .. ground.Items], catalog, token);
+            string? tankId = cell.Entities.GetValueOrDefault(role);
+            if (tankId is null)
+            {
+                var site = joint?.Single(p => p.Fluid == fluid).Site ?? await ControllerPlanning.RunAsync(t => new FluidReservoirPlanner().Find(
+                    FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), tankItem, pipeItem, machineId, fluid, t),
+                    controller, TimeSpan.FromMinutes(2), token)
+                    ?? throw new InvalidOperationException($"No safe native reservoir site for {fluid}; preserve the partial cell.");
+                var planned = new PlannedEntity(role, tankItem, site.Tank.Position, site.Tank.Direction);
+                cell = cell with { Plan = new Dictionary<string, PlannedEntity>(cell.Plan!, StringComparer.Ordinal) { [role] = planned } };
+                await SaveAsync(registry, catalog, cell, token);
+                await builder.EnsureCarriedAsync(registry, catalog, tankItem, 1, token);
+                tankId = await new PoweredMachineController(game, journal).BuildAtAsync(tankItem, site.Tank, catalog, controller, token,
+                    site.Route.Pipes.Append(cell.Plan["machine"].Position).ToArray());
+                cell = WithRole(cell, role, tankId, planned);
+                await SaveAsync(registry, catalog, cell, token);
+            }
+            map = await CaptureAsync([tankItem, pipeItem, .. ground.Items], catalog, token);
+            if (!FluidBufferPlanner.ConnectedStorageIds(map, machineId, fluid).Contains(tankId))
+            {
+                var planning = FactoryGround.Reserve(map, ground.Boxes(map), pipeItem);
+                string source = FluidBufferPlanner.ConnectedStorageIds(map, machineId, fluid).Append(machineId)
+                    .Order(StringComparer.Ordinal).FirstOrDefault(id => new PipeRoutePlanner().Find(planning, pipeItem, id, tankId, fluid,
+                        cancellationToken: token).Status == PipeRouteStatus.Found)
+                    ?? throw new InvalidOperationException($"The planned {fluid} reservoir has no safe connection; reconcile the partial cell.");
+                using (ProductionReservations.EnterFactory(await registry.LoadAsync(catalog.Scope.WorldId, token)))
+                {
+                    var result = await new PipeConnectionController(game, journal).RunAsync(source, tankId, fluid, token,
+                        current =>
+                        {
+                            var forecast = FactoryGround.Reserve(current, ground.Boxes(current), pipeItem);
+                            foreach (var other in joint?.Where(p => p.Fluid != fluid) ?? [])
+                                forecast = FluidReservoirPlanner.Project(forecast, tankItem, pipeItem, other);
+                            return forecast with { Actor = current.Actor };
+                        }, geometryItems: [tankItem, .. ground.Items]);
+                    cell = WithPipes(cell, await SnapshotAsync(catalog, token), result.BuiltPipeIds, pipeItem);
+                }
+                await SaveAsync(registry, catalog, cell, token);
+            }
+            map = await CaptureAsync([tankItem, pipeItem], catalog, token);
+            var snapshot = await SnapshotAsync(catalog, token);
+            var records = snapshot.FluidRecordsAt(tankId).ToArray();
+            double capacity = records.Sum(r => r.Data.GetProperty("capacity").GetDouble());
+            if (!FluidBufferPlanner.ConnectedStorageIds(map, machineId, fluid).Contains(tankId)
+                || !double.IsFinite(capacity) || capacity <= 0 || records.Any(r => r.Data.GetProperty("contents").EnumerateObject()
+                    .Any(p => p.Name != fluid && p.Value.GetDouble() > 0)))
+                throw new InvalidDataException("The native reservoir connection, capacity or fluid isolation was not proven.");
+            await journal.AppendAsync("fluid-reservoir-connected", new { cell.Id, machineId, tankId, fluid, capacity,
+                amount = snapshot.FluidStockAt(tankId, fluid), snapshot.CollectedTick, isFiniteStorage = true }, token);
+        }
+        return cell;
     }
 
     /// <summary>
@@ -265,14 +358,17 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         return actor;
     }
 
-    private async Task ConfigureAsync(string machineId, MapPosition position, string recipe, ProductionCatalog catalog, SpatialController controller,
+    private async Task ConfigureAsync(string machineId, PlannedEntity plan, string recipe, ProductionCatalog catalog, SpatialController controller,
         CancellationToken token)
     {
         var state = await new ProductionController(game, journal).ObserveAsync(token);
-        if (state.Entities.SingleOrDefault(e => e.Id == machineId)?.Recipe == recipe) return;
-        await controller.ApproachEntityAsync(machineId, position, catalog, token);
-        var configured = await controller.WorkAsync("set_recipe", new { entityId = machineId, recipe }, 600, token: token);
-        if (configured.Status != "completed") throw new InvalidOperationException($"Fluid machine set_recipe ended with {configured.Status}: {configured.Error?.Code}.");
+        if (state.Entities.SingleOrDefault(e => e.Id == machineId)?.Recipe != recipe)
+        {
+            await controller.ApproachEntityAsync(machineId, plan.Position, catalog, token);
+            var configured = await controller.WorkAsync("set_recipe", new { entityId = machineId, recipe }, 600, token: token);
+            if (configured.Status != "completed") throw new InvalidOperationException($"Fluid machine set_recipe ended with {configured.Status}: {configured.Error?.Code}.");
+        }
+        await new PoweredMachineController(game, journal).OrientFluidAsync(machineId, plan.Direction, catalog, controller, token);
     }
 
     /// <summary>
@@ -302,7 +398,8 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         foreach (string fluid in pending.Where(f => FluidChainPlanner.Resource(catalog, f) is not null).ToArray())
         {
             if (await FreeExtractorAsync(fluid, machinePosition, catalog, controller, token) is not { } source) continue;
-            cell = await RecordPipesAsync(cell, await new PipeConnectionController(game, journal).RunAsync(source, machineId, fluid, token, Keep),
+            cell = await RecordPipesAsync(cell, await new PipeConnectionController(game, journal).RunAsync(source, machineId, fluid, token, Keep,
+                geometryItems: [.. ground.Items]),
                 registry, catalog, pipeItem, token);
             pending.Remove(fluid);
         }
@@ -328,7 +425,7 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         await journal.AppendAsync("fluid-cell-routes", new { cell.Id, machineId, routes, stock.CollectedTick }, token);
         foreach (var route in routes)
             cell = await RecordPipesAsync(cell, await new PipeConnectionController(game, journal).RunAsync(route.Supply.SourceId, machineId, route.Fluid,
-                token, Keep), registry, catalog, pipeItem, token);
+                token, Keep, geometryItems: [.. ground.Items]), registry, catalog, pipeItem, token);
         return cell;
     }
 

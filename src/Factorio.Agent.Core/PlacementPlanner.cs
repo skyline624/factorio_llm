@@ -23,7 +23,7 @@ public sealed class PlacementPlanner
     }
 
     public MapPosition? FindApproach(SpatialCollisionField field, string item, PlacementCandidate placement,
-        IReadOnlyList<MapPosition>? remainingTargets = null)
+        IReadOnlyList<MapPosition>? remainingTargets = null, SpatialSnapshot? completedSite = null)
     {
         EntityGeometry building = field.Map.Prototypes[field.Map.Items[item].EntityName];
         WorldBox footprint = building.CollisionBox.Rotate(placement.Direction).Translate(placement.Position);
@@ -50,11 +50,12 @@ public sealed class PlacementPlanner
 
         bool PreservesAccess(MapPosition approach)
         {
-            var after = new SpatialCollisionField(field.Map with
+            var after = new SpatialCollisionField((completedSite ?? field.Map) with
             {
                 Actor = field.Map.Actor with { Position = approach },
-                Entities = futureEntities
+                Entities = completedSite?.Entities ?? futureEntities
             });
+            if (!CanStop(after, approach)) return false;
             if (!CanEscape(after, futureBounds)) return false;
             if (remainingTargets is null || remainingTargets.Count == 0) return true;
             double radius = Math.Max(.2, reach);

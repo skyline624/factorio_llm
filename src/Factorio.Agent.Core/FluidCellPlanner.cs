@@ -118,7 +118,11 @@ public sealed class FluidCellPlanner
                 if (supplies is null) continue;
                 var piped = new SpatialCollisionField(WithPipes(projected, pipeItem, supplies.SelectMany(s => s.Supply.Route.Pipes).ToArray(), force, "chest",
                     reserveTiles: true));
-                if (!PlacementPlanner.CanEscape(piped, layout.Footprint)) continue;
+                // The actor may currently stand where this cell will be built. Prove a reachable staging point
+                // outside the completed cell instead of rejecting every nearby site because it covers that old position.
+                var approach = new PlacementPlanner().FindApproach(field, equipment.Machine, placement, completedSite: piped.Map);
+                if (approach is null) continue;
+                piped = new(piped.Map with { Actor = piped.Map.Actor with { Position = approach } });
                 if (projected.Entities.Where(e => e.Id.EndsWith("-chest", StringComparison.Ordinal))
                     .All(chest => new PlacementPlanner().FindInteractionApproach(piped, chest) is not null)) found.Add(new(layout, supplies));
             }
@@ -220,7 +224,7 @@ public sealed class FluidCellPlanner
     }
 
     // Planned pipes join every neighbour, so later routes keep their distance as they would from built ones.
-    private static SpatialSnapshot WithPipes(SpatialSnapshot map, string pipeItem, IReadOnlyList<MapPosition> pipes, string force, string tag,
+    internal static SpatialSnapshot WithPipes(SpatialSnapshot map, string pipeItem, IReadOnlyList<MapPosition> pipes, string force, string tag,
         bool reserveTiles = false)
     {
         var pipe = Geometry(map, pipeItem);
