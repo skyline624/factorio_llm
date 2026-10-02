@@ -105,6 +105,10 @@ Ces fixtures isolent le mécanisme. Recherches, objets, gisement et énergie son
 
 `--item processing-unit --from-materials` active explicitement aussi la recette des circuits avancés et retire les circuits électroniques et avancés fournis. Il reste les équipements, 1 000 plaques de chaque métal et 100 charbons ; le câble, le plastique, les circuits, le soufre, l'acide et le processeur doivent être fabriqués par les cellules. Le rapport vérifie séparément les statistiques natives de chacun de ces intermédiaires. La première exécution de cette composition, graine 20261024, a construit toute la chaîne mais a échoué sur la navigation depuis une poche formée par les machines et tuyaux. Cette défaite du test est conservée et a motivé le contrôle de sortie décrit plus haut ; elle ne prouve pas la réussite de cette chaîne.
 
+Après la correction, l'essai neuf de graine **20261025** réussit en headless le 2 octobre 2026. Le directeur a construit quatre cellules de câbles, quatre de circuits électroniques, une de circuits avancés, un extracteur de brut, une raffinerie et les cellules de plastique, soufre, acide et processeurs. Au tick **91 459**, les statistiques natives, toutes nulles au départ, comptent **240 câbles, 58 circuits électroniques, 4 circuits avancés, 60 plastiques, 740 soufres, 200 unités d'acide et 1 processeur**. Le processeur est collecté et a consommé **5 unités d'acide**. La liaison finale est directement adjacente, sans tuyau supplémentaire. Aucun minage ni fabrication manuelle ; aucun pilote connecté. Le débit demandé de deux processeurs par minute n'est pas qualifié par cette première production après construction : les voyages du personnage et les limites des cellules restent à mesurer.
+
+Rapport privé : `.runtime/fixture-20261002-174824-84a05879/fluid-consumer-qualification-c7ecc7d074fd482e855f03c32768dee8.json`. Serveur sauvegardé et arrêté. La suite ordinaire passe **1 142 tests**, avec le seul contrat cloud optionnel ignoré. Cette preuve couvre une chaîne préparée, pas une progression normale jusqu'à la fusée ; aucun client graphique n'était connecté.
+
 Factorio 2.0.77 headless du 2 octobre 2026, aucun client connecté :
 
 | Produit | Graine | Preuve native |
@@ -131,5 +135,6 @@ Les échecs de préparation initiaux sont conservés dans `.runtime/fixture-2026
 - La nouvelle pompe doit tenir contre la machine : une usine alimentée en eau se place donc sur la rive, loin de la raffinerie si besoin.
 - Le raffinage avancé, le craquage et le lubrifiant ne sont pas encore construits en cellules. L'acide vers les batteries et processeurs est couvert par les fixtures ci-dessus ; le béton alimenté en eau est planifiable mais n'a pas encore sa qualification native.
 - Une recette verrouillée ou sans fournisseur compatible reste une matière première explicite du plan. Le plan ne débloque aucune recherche et ne garantit pas que les limites de huit cellules par étape et les voyages du personnage permettent d'atteindre le débit demandé.
+- Les plafonds de stocks interrompent le réapprovisionnement des solides. Ils n'arrêtent pas encore une cellule alimentée uniquement en fluides : les 740 soufres de l'essai de composition montrent cette surproduction. La régulation de ces entrées et les transports permanents entre cellules restent nécessaires pour l'optimisation de la chaîne.
 - L'observation `observe` limitée à 200 entités connues, utilisée par la production pilotée, finit par être dépassée par une usine riche en tuyaux.
 - Aucun client graphique n'était connecté pendant ces essais.
