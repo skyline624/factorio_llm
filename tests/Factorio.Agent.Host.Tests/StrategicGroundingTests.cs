@@ -160,18 +160,21 @@ public sealed class StrategicGroundingTests
     }
 
     [Theory]
-    [InlineData("processing-unit", false)]
-    [InlineData("battery", false)]
+    [InlineData("processing-unit", true)]
+    [InlineData("battery", true)]
     [InlineData("concrete", true)]
-    public void AutomationRatesRejectChainsWaitingOnDeliveredFluidsOrLockedMachines(string target, bool accepted)
+    public void AutomationRatesAcceptPrimedFluidConsumersAndRejectLockedMachines(string target, bool accepted)
     {
-        // Sulfuric acid needs sulfur and iron delivered after the chain build; concrete only needs terrain water.
+        // Acid suppliers are primed before consumer construction; concrete draws terrain water.
         var catalog = OilCatalogs.Advanced();
         var goal = Goal() with { Target = target, Unit = GoalUnit.ItemsPerMinute, Quantity = 10, ObservationId = "observation" };
         Assert.Equal(accepted, StrategicProductionController.GroundingFailure(goal, "observation", catalog, automation: true) is null);
         // Without researched assembling-machine-2, only the locked assembling-machine-3 could make concrete.
         var locked = catalog with { Recipes = catalog.Recipes.Where(r => r.Name != "assembling-machine-2").ToArray() };
-        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", locked, automation: true));
+        if (target != "battery")
+            Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", locked, automation: true));
+        else
+            Assert.Null(StrategicProductionController.GroundingFailure(goal, "observation", locked, automation: true));
     }
 
     private static GoalProposal Goal() => new("observation", "Accumulate iron plates", GoalCategory.Production,

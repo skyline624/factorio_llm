@@ -86,10 +86,9 @@ public static class FluidChainPlanner
         {
             var machine = machines.FirstOrDefault(p => p.Value.Accepts(recipe));
             if (machine.Key is null) continue;
-            // A fluid made from solids (sulfuric acid) waits for a logistics round that only follows the chain build: its
-            // consumers are not chained. Extraction, terrain and solid-free stages such as oil processing flow on their own.
+            // The director primes solid-fed fluid suppliers before constructing their consumers.
             if (recipe.Ingredients.Where(i => i.DeterministicFluid).All(i => Resource(catalog, i.Name) is not null || Terrain(catalog, i.Name)
-                || Choose(catalog, i.Name, machineItems, [.. path, product]) is { } supplier && supplier.Recipe.Ingredients.All(s => !s.DeterministicItem)))
+                || Choose(catalog, i.Name, machineItems, [.. path, product]) is not null))
                 return (recipe, machine.Key);
         }
         return null;

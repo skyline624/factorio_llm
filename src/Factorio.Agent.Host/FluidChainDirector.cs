@@ -1,9 +1,10 @@
 using Factorio.Agent.Core;
+using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
 /// <summary>
-/// Grows persistent fluid chains (plastic, sulfur) stage by stage, suppliers first. A stage consuming an extracted fluid is
+/// Grows persistent fluid chains stage by stage, suppliers first. A stage consuming an extracted fluid is
 /// built as extractor and machine pairs until both its planned machine count and the extractors' native deposit yield cover
 /// the plan; solid ingredients and products stay with factory logistics.
 /// </summary>
@@ -45,8 +46,51 @@ public sealed class FluidChainDirector(IGameClient game, IControllerJournal jour
                 await power.EnsureCapacityForCellsAsync(stage.MachineItem, 1, io, token);
                 await builder.BuildMachineAsync(stage.MachineItem, stage.Recipe, token);
             }
+            if (recipe.Products[0].DeterministicFluid && recipe.Ingredients.Any(i => i.DeterministicItem))
+                await PrimeFluidAsync(recipe, catalog, token);
         }
         return plan;
+    }
+
+    /// <summary>Solid-fed fluid stages must actually produce before the next builder waits for their fluid stock.</summary>
+    private async Task PrimeFluidAsync(NativeRecipe recipe, ProductionCatalog catalog, CancellationToken token)
+    {
+        var reader = new FactorySnapshotClient(game);
+        var registry = new FactoryRegistry(directory);
+        var logistics = new FactoryLogistics(game, journal, directory);
+        var executor = new ProductionGoalExecutor(game, journal);
+        await using var controller = new SpatialController(game, journal);
+        for (int round = 0; round < 30; round++)
+        {
+            var snapshot = await reader.CaptureAsync(cancellationToken: token);
+            if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while priming a fluid supplier.");
+            double amount = snapshot.SummarizeStocks().Fluids.GetValueOrDefault(recipe.Products[0].Name);
+            if (amount > 0)
+            {
+                await journal.AppendAsync("fluid-stage-primed", new { recipe.Name, fluid = recipe.Products[0].Name, amount, round, snapshot.CollectedTick }, token);
+                return;
+            }
+            var service = await logistics.ServiceAsync(5, token);
+            var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            var producers = state.Cells.Where(c => c.Status == "ready" && c.Recipe is not null)
+                .Select(c => catalog.Recipes.FirstOrDefault(r => r.Name == c.Recipe)?.Products[0].Name ?? c.Recipe!)
+                .ToHashSet(StringComparer.Ordinal);
+            // A registered producer gets subsequent collection rounds. Only missing external solid inputs are procured.
+            foreach (var ingredient in recipe.Ingredients.Where(i => i.DeterministicItem && !producers.Contains(i.Name)))
+            {
+                long missing = service.Shortfall.GetValueOrDefault(ingredient.Name);
+                if (missing <= 0) continue;
+                var carriedSnapshot = await reader.CaptureAsync(cancellationToken: token);
+                if (carriedSnapshot.Scope != catalog.Scope) throw new InvalidDataException("Actor changed before procuring a fluid supplier's solid inputs.");
+                var carried = FactoryLogistics.Carried(carriedSnapshot);
+                int target = checked((int)Math.Min(1000, carried.GetValueOrDefault(ingredient.Name) + Math.Min(missing, 40 * ingredient.Amount!.Value)));
+                using (ProductionReservations.EnterFactory(state))
+                    await executor.RunAsync(ingredient.Name, target, token);
+            }
+            var waited = await controller.WorkAsync("wait", new { ticks = 120 }, 420, token: token);
+            if (waited.Status != "completed") throw new InvalidOperationException("Fluid supplier priming wait did not complete; reconcile before resuming.");
+        }
+        throw new InvalidOperationException($"The solid-fed {recipe.Name} stage did not produce native fluid within its priming budget.");
     }
 
     /// <summary>Machines a chain may use, those with fluid boxes among them: craftable from an enabled recipe, or already carried.</summary>

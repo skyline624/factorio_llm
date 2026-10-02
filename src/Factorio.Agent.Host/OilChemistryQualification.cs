@@ -171,7 +171,7 @@ public sealed class OilChemistryQualification(RuntimeSession session, string ite
 
     // Crude oil about 95 tiles east of the injected power, where the actor starts, and a shore beyond the oil; exactly the
     // chain's machines, generous pipes, poles and coal.
-    private const string Prepare = """
+    internal const string Prepare = """
         /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; for _,e in pairs(s.find_entities_filtered{area={{-112,-48},{48,48}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-112,48 do for y=-48,48 do tiles[#tiles+1]={name=(x>=30 and 'water' or 'grass-1'),position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({-78,4})); c.health=c.max_health; c.get_main_inventory().clear(); for _,t in pairs{'steam-power','electronics','automation','oil-gathering','oil-processing','plastics','sulfur-processing'} do f.technologies[t].researched=true end; for name,count in pairs{pumpjack=1,['oil-refinery']=1,['chemical-plant']=1,['offshore-pump']=1,pipe=150,inserter=4,['iron-chest']=4,['small-electric-pole']=60,coal=100} do assert(c.insert{name=name,count=count}==count) end; local source=s.create_entity{name='electric-energy-interface',position={-84,0},force=f}; assert(source); source.electric_buffer_size=1000000000; source.power_production=3000000; source.energy=1000000000; assert(s.create_entity{name='small-electric-pole',position={-82.5,0.5},force=f}); assert(s.create_entity{name='crude-oil',position={12,6},amount=600000});
         """;
 

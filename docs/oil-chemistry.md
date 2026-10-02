@@ -6,7 +6,7 @@ Les packs bleus demandent du plastique et du soufre, donc du pétrole brut, une 
 
 `FluidChainPlanner` (Core) enchaîne les recettes activées qui déplacent des fluides, à partir des quantités natives :
 
-- une étape chimique (plastique, soufre, acide sulfurique) exige un fournisseur pour chaque ingrédient fluide : un gisement (pétrole brut), le terrain (eau) ou une étape de la chaîne **sans ingrédient solide** (traitement basique du pétrole pour le gaz). Un fluide fabriqué à partir de solides livrés, comme l'acide sulfurique, n'alimente aucune étape : son soufre et son fer n'arriveraient qu'avec la tournée logistique qui suit la construction de la chaîne, et la cellule consommatrice attendrait l'acide indéfiniment. L'acide lui-même reste planifiable ; les unités de traitement et les batteries sont refusées dès l'ancrage stratégique ;
+- une étape exige un fournisseur pour chaque ingrédient fluide : un gisement (pétrole brut), le terrain (eau) ou une étape antérieure de la chaîne. Une étape à sortie fluide qui consomme des solides, comme l'acide sulfurique, est alimentée par des services logistiques bornés et doit présenter un stock natif positif avant la construction de son consommateur. Les sorties de cellules existantes sont attendues et collectées ; seuls les solides externes manquants passent par l'approvisionnement habituel. L'ancrage stratégique accepte ainsi les batteries et les processeurs quand leurs recherches et machines sont disponibles ;
 - seules les machines dont la recette est activée, ou que le personnage porte déjà, servent une chaîne (`FluidChainDirector.Machines`). Le catalogue exporte aussi les prototypes non recherchés : sans ce filtre, le béton choisissait l'assembleur 3 non débloqué au lieu de l'assembleur 2 ;
 - les fluides du terrain viennent du catalogue natif : le mod exporte les fluides portés par les prototypes de tuiles (`terrainFluids`). Une recette de vidage de baril ne fait donc pas de l'eau un produit à enchaîner ; ce défaut a été observé lors du premier essai du soufre ;
 - une recette dont un fluide ne peut être fourni n'est pas retenue : le craquage attend l'huile légère du raffinage avancé, à plusieurs produits, non encore pris en charge ;
@@ -14,7 +14,7 @@ Les packs bleus demandent du plastique et du soufre, donc du pétrole brut, une 
 - le nombre de machines vient de la vitesse native de fabrication, bornée comme pour les assembleurs par le débit mesuré d'un bras simple (`AutomationPlanner.InserterItemsPerSecond`) quand la recette déplace des solides ;
 - le débit d'une foreuse à fluide vient du gisement : vitesse de minage × quantité par cycle × montant du gisement / montant normal, divisé par le temps de minage. Le mod exporte `infinite_resource` et `normal_resource_amount`. Un chevalet sur 300 000 unités donne 600 unités de brut par minute, sur 600 000 unités 1 200.
 
-`FactoryDirector.AutomateAsync(item, rate)` délègue à `FluidChainDirector` quand aucune recette d'assembleur solide n'existe pour l'objet et qu'une chaîne fluide le fabrique. L'ancrage stratégique accepte les objectifs `items_per_minute` dont le produit est un solide d'une telle chaîne, comme `plastic-bar` et `sulfur` ; les fluides eux-mêmes restent des objectifs en `fluid_units`.
+`FactoryDirector.AutomateAsync(item, rate)` délègue à `FluidChainDirector` quand aucune recette d'assembleur solide n'existe pour l'objet et qu'une chaîne fluide le fabrique. L'ancrage stratégique accepte les objectifs `items_per_minute` dont le produit est un solide d'une telle chaîne, comme `plastic-bar`, `sulfur`, `battery` et `processing-unit` ; les fluides eux-mêmes restent des objectifs en `fluid_units`.
 
 ## Géométrie calculée en C#
 
@@ -97,6 +97,21 @@ Sur le serveur de mise au point (graine 73105001), les mêmes essais ont aussi r
 
 Ces fixtures isolent le mécanisme. Recherches, objets, gisement et énergie sont fournis, et la cellule reprise est rouverte par la fixture : elles ne prouvent ni le déblocage autonome du pétrole ni une campagne normale, et ne comptent pour aucune des trois qualifications finales.
 
+### Consommateurs d'acide sulfurique
+
+`verify-fluid-consumer --session FILE --item battery|processing-unit` exige une fixture neuve. Elle reprend la préparation de pétrole et d'énergie distante, accorde les recherches nécessaires et fournit les équipements, 50 plaques de fer, 25 de cuivre, 200 circuits électroniques et 25 circuits avancés. Aucun soufre, acide, batterie ou processeur n'est fourni. Le contrôleur doit construire les étapes raffinage → soufre → acide → consommateur, amorcer l'acide par la logistique puis collecter le produit. Les quantités viennent des statistiques natives de production et de consommation, avec un départ nul ; tout minage ou fabrication manuelle refuse l'essai.
+
+Factorio 2.0.77 headless du 2 octobre 2026, aucun client connecté :
+
+| Produit | Graine | Preuve native |
+| --- | --- | --- |
+| Batterie | 20261022 | `passed=true` : 250 unités d'acide produites, 100 consommées, 5 batteries produites et collectées au tick 14747. |
+| Processeur | 20261023 | `passed=true` : 200 unités d'acide produites, 10 consommées, 1 processeur produit et collecté au tick 15126. La consommation peut inclure une fabrication encore engagée. |
+
+Les ports du producteur et du consommateur sont directement adjacents dans les deux implantations calculées : zéro tuyau supplémentaire pour cette liaison, connexion native observée et consommation effective. Le réseau de pétrole et d'eau comporte les tuyaux enregistrés des étapes antérieures. Les essais n'ont fait aucun minage ni fabrication manuelle. Rapports privés : `.runtime/fixture-20261002-165828-c5945f99/fluid-consumer-qualification-4bed1a4ccd7e41a59d1cd4b7f9a91047.json` et `.runtime/fixture-20261002-170003-7ffdc01f/fluid-consumer-qualification-6615a4d572594cc89588ea006460fb1b.json`. Serveurs sauvegardés et arrêtés ; les 1 131 tests ordinaires passent, le test cloud optionnel reste ignoré.
+
+Les échecs de préparation initiaux sont conservés dans `.runtime/fixture-20261002-165158-a287ca02/` : marqueur trop long, ancien nom de recherche, puis assertion exigeant à tort un tuyau quand les ports sont adjacents. Ces preuves restent des fixtures ; elles ne démontrent pas la production autonome des matériaux injectés ni un débit soutenu en campagne normale.
+
 ## Limites
 
 - Portée de la liaison électrique : 128 étapes, soit un peu moins de 128 petits poteaux (environ 900 cases), planifiées chacune sur le sol observé à 48 cases autour du personnage. Une étendue d'eau plus large que la portée des fils, ou un obstacle sans détour visible, arrête la liaison (`NoObservedPath`) sans exploration. Le poteau de départ doit figurer dans la photographie de l'usine, donc avoir été construit ou vu par le personnage.
@@ -110,7 +125,7 @@ Ces fixtures isolent le mécanisme. Recherches, objets, gisement et énergie son
 - La recherche d'un gisement se limite à la zone observée et aux gisements mémorisés ; elle n'explore pas. Les arbres et rochers restent des obstacles : ni l'emplacement ni les tuyaux ne les minent.
 - Les tuyaux se limitent à la zone observée autour du personnage (48 cases) et à 200 tuyaux par route. Une route interrompue à mi-chemin, dont les tuyaux ne sont enregistrés qu'à la fin, n'est pas réparée automatiquement : la reprise ne reconstruit que les rôles enregistrés.
 - La nouvelle pompe doit tenir contre la machine : une usine alimentée en eau se place donc sur la rive, loin de la raffinerie si besoin.
-- Le raffinage avancé, le craquage, le lubrifiant et les produits fluides consommés par d'autres cellules (acide sulfurique vers les batteries) ne sont pas encore construits en cellules ; `FluidChainPlanner` planifie l'acide, mais aucune cellule consommatrice ne l'utilise.
+- Le raffinage avancé, le craquage et le lubrifiant ne sont pas encore construits en cellules. L'acide vers les batteries et processeurs est couvert par les fixtures ci-dessus ; le béton alimenté en eau est planifiable mais n'a pas encore sa qualification native.
 - Une automatisation d'assembleur qui consomme du plastique, comme les circuits avancés, le traite encore comme matière première ; elle ne déclenche pas cette chaîne.
 - L'observation `observe` limitée à 200 entités connues, utilisée par la production pilotée, finit par être dépassée par une usine riche en tuyaux.
 - Aucun client graphique n'était connecté pendant ces essais.

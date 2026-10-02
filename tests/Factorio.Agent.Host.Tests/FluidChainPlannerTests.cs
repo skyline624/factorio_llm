@@ -66,14 +66,34 @@ public sealed class FluidChainPlannerTests
     [Theory]
     [InlineData("processing-unit")]
     [InlineData("battery")]
-    public void AFluidMadeFromDeliveredSolidsDoesNotFeedAChain(string target)
+    public void AFluidMadeFromDeliveredSolidsFeedsItsConsumerAfterPriming(string target)
     {
         // recipe.lua: processing units and batteries consume sulfuric acid, which a chemical cell makes from sulfur and iron.
-        // Those solids arrive with the next logistics round, after the chain build that waits for the acid.
         var catalog = OilCatalogs.Advanced();
-        Assert.Null(OilCatalogs.Choose(catalog, target));
-        Assert.Null(OilCatalogs.Plan(catalog, target, 10));
+        Assert.Equal(target, OilCatalogs.Choose(catalog, target)!.Value.Recipe.Name);
+        var plan = OilCatalogs.Plan(catalog, target, 10)!;
+        Assert.Equal(["basic-oil-processing", "sulfur", "sulfuric-acid", target], plan.Stages.Select(s => s.Recipe));
+        Assert.Equal(target == "battery" ? 4 : 1, plan.Stages.Single(s => s.Recipe == "sulfuric-acid").CraftsPerMinute, 6);
+        Assert.Equal(target == "battery" ? 14 : 1, plan.RawPerMinute["iron-plate"], 6);
+        Assert.Equal(target == "battery" ? 10 : 2.5, plan.Stages.Single(s => s.Recipe == "sulfur").CraftsPerMinute, 6);
         Assert.Equal("sulfuric-acid", OilCatalogs.Choose(catalog, "sulfuric-acid")!.Value.Recipe.Name);
+    }
+
+    [Fact]
+    public void AnUnresearchedAcidRecipeCannotSupplyBatteries()
+    {
+        var catalog = OilCatalogs.Advanced();
+        catalog = catalog with { Recipes = catalog.Recipes.Select(r => r.Name == "sulfuric-acid" ? r with { Enabled = false } : r).ToArray() };
+        Assert.Null(OilCatalogs.Choose(catalog, "battery"));
+    }
+
+    [Fact]
+    public void AFluidSupplierCycleCannotAuthorizeAConsumer()
+    {
+        var catalog = OilCatalogs.Advanced();
+        catalog = catalog with { Recipes = catalog.Recipes.Select(r => r.Name == "sulfuric-acid"
+            ? r with { Ingredients = [OilCatalogs.Fluid("sulfuric-acid", 1)] } : r).ToArray() };
+        Assert.Null(OilCatalogs.Choose(catalog, "processing-unit"));
     }
 
     [Fact]
