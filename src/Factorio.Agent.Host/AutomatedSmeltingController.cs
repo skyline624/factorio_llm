@@ -92,17 +92,11 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
                 await journal.AppendAsync("automated-smelting-result", result, token);
                 return result;
             }
-            ProductionEntity furnace = state.Entities.Single(e => e.Id == receiver.Id);
-            if (furnace.Count("output", item) > 0)
+            // An output inserter may empty the furnace between every observation. Its chest is a finished-stock
+            // source too; waiting only on the furnace kept 203 copper plates in a chest during the normal run.
+            if (state.AvailableOutput(item) is not null)
             {
-                await controller.TravelAsync(receiver.Position, 3, catalog, token);
-                await WorkAsync("take", new
-                {
-                    entityId = receiver.Id,
-                    inventory = "output",
-                    item,
-                    count = Math.Min(furnace.Count("output", item), targetStock - state.Inventory.GetValueOrDefault(item))
-                });
+                await production.CollectAvailableAsync(item, targetStock, token, expectedScope: catalog.Scope);
                 continue;
             }
             FactorySnapshot supplied = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);

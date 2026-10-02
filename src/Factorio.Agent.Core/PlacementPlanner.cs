@@ -76,11 +76,12 @@ public sealed class PlacementPlanner
     // within interaction reach of another machine does not prove the actor can leave a pocket.
     internal static bool CanEscape(SpatialCollisionField field, WorldBox footprint)
     {
-        var neighbourhood = new WorldBox(new(footprint.Min.X - 4, footprint.Min.Y - 4),
-            new(footprint.Max.X + 4, footprint.Max.Y + 4));
         MapPosition start = field.Map.Actor.Position;
+        // A local opening is not an exit from a larger pocket formed by several cells and pipes. Keep the
+        // actor inside the checked neighbourhood even when the last piece stands more than four tiles away.
+        var neighbourhood = new WorldBox(new(Math.Min(footprint.Min.X - 4, start.X - 16), Math.Min(footprint.Min.Y - 4, start.Y - 16)),
+            new(Math.Max(footprint.Max.X + 4, start.X + 16), Math.Max(footprint.Max.Y + 4, start.Y + 16)));
         if (!field.Walkable(start, 0)) return false;
-        if (!neighbourhood.Contains(start)) return true;
         var queue = new Queue<MapPosition>();
         var seen = new HashSet<MapPosition>();
         for (double x = Math.Floor(start.X * 2) / 2; x <= Math.Ceiling(start.X * 2) / 2; x += .5)
@@ -91,7 +92,10 @@ public sealed class PlacementPlanner
             }
         while (queue.TryDequeue(out var point) && seen.Count <= 4096)
         {
-            if (!neighbourhood.Contains(point)) return true;
+            // A small photograph can end before the neighbourhood does. Reaching its clear inner edge proves
+            // access to the next local observation; no route is planned through unknown terrain.
+            if (!neighbourhood.Contains(point) || point.X - field.Map.Bounds.Min.X <= 1 || field.Map.Bounds.Max.X - point.X <= 1
+                || point.Y - field.Map.Bounds.Min.Y <= 1 || field.Map.Bounds.Max.Y - point.Y <= 1) return true;
             foreach (var (dx, dy) in new (double, double)[] { (.5, 0), (-.5, 0), (0, .5), (0, -.5) })
             {
                 var next = new MapPosition(point.X + dx, point.Y + dy);

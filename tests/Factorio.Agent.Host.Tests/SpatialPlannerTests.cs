@@ -203,6 +203,26 @@ public sealed class SpatialPlannerTests
         Assert.True(planner.PreservesExit(new(map with { Actor = map.Actor with { Position = approach } }), "furnace", placement));
     }
 
+    [Fact]
+    public void ALastPieceMoreThanFourTilesAwayCannotEncloseTheActorInALargerPocket()
+    {
+        // Synthetic analogue of the processor fixture: nearby fluid cells surround a room larger than the
+        // old four-tile check around the last part. Leaving that part's neighbourhood did not leave the room.
+        var map = Map([
+            new("west", "wall", new(-6, 0), new(new(-6.5, -6.5), new(-5.5, 6.5)), 0, "agent"),
+            new("north", "wall", new(0, -6), new(new(-6.5, -6.5), new(6.5, -5.5)), 0, "agent"),
+            new("south", "wall", new(0, 6), new(new(-6.5, 5.5), new(6.5, 6.5)), 0, "agent"),
+            new("east-top", "wall", new(6, -3), new(new(5.5, -6.5), new(6.5, -.7)), 0, "agent"),
+            new("east-bottom", "wall", new(6, 3), new(new(5.5, .7), new(6.5, 6.5)), 0, "agent")]);
+        var planner = new PlacementPlanner();
+        var placement = new PlacementCandidate(new(6, 0), 0, 0);
+        Assert.False(planner.PreservesExit(new(map), "furnace", placement));
+        var approach = planner.FindApproach(new(map), "furnace", placement);
+        Assert.NotNull(approach);
+        Assert.False(new WorldBox(new(-6.5, -6.5), new(6.5, 6.5)).Contains(approach));
+        Assert.True(planner.PreservesExit(new(map with { Actor = map.Actor with { Position = approach } }), "furnace", placement));
+    }
+
     internal static SpatialSnapshot Map(IReadOnlyList<SpatialEntity> entities)
     {
         var prototypes = new Dictionary<string, EntityGeometry>

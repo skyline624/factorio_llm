@@ -72,7 +72,8 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
         // CellLayout.Machine names assembler cells only; resource cells journal their parts explicitly.
         await journal.AppendAsync("resource-cell-plan", new { cell.Id, cell.Attempts, row, layout.Slot, layout.Entities, layout.Footprint, layout.Walkway }, token);
         if (cell.Entities.Count > 0) await ReconcileAsync();
-        await CarriedStock.EnsureAsync(game, journal, catalog, CarriedStock.Unplaced(layout, cell.Entities), token);
+        await new FactoryCellBuilder(game, journal, directory).EnsureCarriedAsync(registry, catalog,
+            CarriedStock.Unplaced(layout, cell.Entities), token);
         await controller.TravelAsync(Center(layout.Walkway), 1, catalog, token);
         await ClearAsync();
 
@@ -377,7 +378,8 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
             if (next.Status == PowerGridSearchStatus.Extension && next.Pole is not null)
             {
                 // Link poles come from the carried stock, for the whole planned chain at once.
-                await CarriedStock.EnsureAsync(game, journal, poleItem, PowerGridPlanner.ChainPoles(next), token);
+                await new FactoryCellBuilder(game, journal, directory).EnsureCarriedAsync(new FactoryRegistry(directory), catalog,
+                    poleItem, PowerGridPlanner.ChainPoles(next), token);
                 string added = await new PoweredMachineController(game, journal).BuildAtAsync(poleItem, next.Pole, catalog, controller, token);
                 await registerLink(added, next.Pole);
                 await journal.AppendAsync("resource-power-pole", new { poleId, added, next.Pole.Position }, token);

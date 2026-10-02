@@ -20,36 +20,45 @@ public sealed class FluidChainDirector(IGameClient game, IControllerJournal jour
         var plan = FluidChainPlanner.Plan(catalog, item, perMinute, Machines(catalog, carried))
             ?? throw new InvalidOperationException($"{item} has no enabled recipe chain through researched or carried fluid machines.");
         await journal.AppendAsync("fluid-chain-plan", new { item, perMinute, plan }, token);
+        foreach (var stage in plan.Stages)
+            await EnsureStageAsync(stage, catalog, token);
+        return plan;
+    }
+
+    /// <summary>A shared stage of the whole-factory plan, including its paired extraction and cold-start logistics.</summary>
+    internal async Task EnsureStageAsync(AutomationStage stage, ProductionCatalog catalog, CancellationToken token)
+    {
+        var recipe = catalog.Recipes.Single(r => r.Name == stage.Recipe);
+        bool io = recipe.Ingredients.Any(i => i.DeterministicItem) || recipe.Products.Any(p => p.DeterministicItem);
+        var sources = recipe.Ingredients.Where(i => i.DeterministicFluid && FluidChainPlanner.Resource(catalog, i.Name) is not null).ToArray();
+        if (sources.Length > 1) throw new InvalidOperationException("A fluid cell supports one paired extracted fluid.");
+        var source = sources.Length == 0 ? null : new FluidSource(sources[0].Name, FluidChainPlanner.Resource(catalog, sources[0].Name),
+            sources[0].Amount!.Value * stage.CraftsPerMinute);
         var builder = new FluidCellBuilder(game, journal, directory);
         var power = new PowerExpansionController(game, journal, directory);
         var registry = new FactoryRegistry(directory);
-        foreach (var stage in plan.Stages)
+        for (int added = 0; ; added++)
         {
-            var recipe = catalog.Recipes.Single(r => r.Name == stage.Recipe);
-            bool io = recipe.Ingredients.Any(i => i.DeterministicItem) || recipe.Products.Any(p => p.DeterministicItem);
-            var source = plan.Sources.FirstOrDefault(s => s.Resource is not null && recipe.Ingredients.Any(i => i.Name == s.Fluid));
-            for (int added = 0; ; added++)
+            var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            var ready = state.Cells.Where(c => c.Kind == FluidCellBuilder.MachineKind && c.Recipe == stage.Recipe && c.Status == "ready")
+                .Select(c => c.MachineItem).ToArray();
+            int machines = ready.Length;
+            int wanted = machines + AutomationPlanner.MissingMachines(catalog, stage, ready);
+            var rates = source is null ? null : await builder.ExtractorRatesAsync(source.Fluid, token);
+            var next = rates is null ? (Extractor: false, Machine: machines < wanted)
+                : NextPair(machines, wanted, rates.Count, rates.Values.Sum(), source!.UnitsPerMinute);
+            if (!next.Machine) break;
+            if (added >= MaximumNewMachines || machines >= MaximumNewMachines)
             {
-                var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-                int machines = state.Cells.Count(c => c.Kind == FluidCellBuilder.MachineKind && c.Recipe == stage.Recipe && c.Status == "ready");
-                var rates = source is null ? null : await builder.ExtractorRatesAsync(source.Fluid, token);
-                var next = rates is null ? (Extractor: false, Machine: machines < stage.Machines)
-                    : NextPair(machines, stage.Machines, rates.Count, rates.Values.Sum(), source!.UnitsPerMinute);
-                if (!next.Machine) break;
-                if (added >= MaximumNewMachines)
-                {
-                    await journal.AppendAsync("fluid-chain-stage-short", new { stage, machines, extraction = rates?.Values.Sum(), source }, token);
-                    break;
-                }
-                if (next.Extractor) await builder.BuildExtractorAsync(source!.Resource!, source.Fluid, token);
-                // Power grows before the machine that will draw it.
-                await power.EnsureCapacityForCellsAsync(stage.MachineItem, 1, io, token);
-                await builder.BuildMachineAsync(stage.MachineItem, stage.Recipe, token);
+                await journal.AppendAsync("fluid-chain-stage-short", new { stage, machines, extraction = rates?.Values.Sum(), source }, token);
+                break;
             }
-            if (recipe.Products[0].DeterministicFluid && recipe.Ingredients.Any(i => i.DeterministicItem))
-                await PrimeFluidAsync(recipe, catalog, token);
+            if (next.Extractor) await builder.BuildExtractorAsync(source!.Resource!, source.Fluid, token);
+            await power.EnsureCapacityForCellsAsync(stage.MachineItem, 1, io, token);
+            await builder.BuildMachineAsync(stage.MachineItem, stage.Recipe, token);
         }
-        return plan;
+        if (recipe.Products[0].DeterministicFluid && recipe.Ingredients.Any(i => i.DeterministicItem))
+            await PrimeFluidAsync(recipe, catalog, token);
     }
 
     /// <summary>Solid-fed fluid stages must actually produce before the next builder waits for their fluid stock.</summary>

@@ -116,7 +116,9 @@ public sealed class FluidCellPlanner
                 var projected = Project(vacant, force, layout, equipment);
                 var supplies = RouteEveryAssignment(projected, pipeItem, fluids, route, cancellationToken);
                 if (supplies is null) continue;
-                var piped = new SpatialCollisionField(WithPipes(projected, pipeItem, supplies.SelectMany(s => s.Supply.Route.Pipes).ToArray(), force, "chest"));
+                var piped = new SpatialCollisionField(WithPipes(projected, pipeItem, supplies.SelectMany(s => s.Supply.Route.Pipes).ToArray(), force, "chest",
+                    reserveTiles: true));
+                if (!PlacementPlanner.CanEscape(piped, layout.Footprint)) continue;
                 if (projected.Entities.Where(e => e.Id.EndsWith("-chest", StringComparison.Ordinal))
                     .All(chest => new PlacementPlanner().FindInteractionApproach(piped, chest) is not null)) found.Add(new(layout, supplies));
             }
@@ -218,13 +220,15 @@ public sealed class FluidCellPlanner
     }
 
     // Planned pipes join every neighbour, so later routes keep their distance as they would from built ones.
-    private static SpatialSnapshot WithPipes(SpatialSnapshot map, string pipeItem, IReadOnlyList<MapPosition> pipes, string force, string tag)
+    private static SpatialSnapshot WithPipes(SpatialSnapshot map, string pipeItem, IReadOnlyList<MapPosition> pipes, string force, string tag,
+        bool reserveTiles = false)
     {
         var pipe = Geometry(map, pipeItem);
         return map with
         {
             Entities = [.. map.Entities, .. pipes.Select((position, index) => new SpatialEntity($"{PlannedId}:{tag}:{index}", pipe.Name, position,
-                pipe.CollisionBox.Translate(position), 0, force, FluidConnections: Directions.Select((direction, port) =>
+                reserveTiles ? new(new(position.X - .5, position.Y - .5), new(position.X + .5, position.Y + .5))
+                    : pipe.CollisionBox.Translate(position), 0, force, FluidConnections: Directions.Select((direction, port) =>
                 {
                     var offset = ExtractionPlanner.Rotate(new(0, -1), direction);
                     return new ObservedFluidConnection(1, port + 1, position, new(position.X + offset.X, position.Y + offset.Y),

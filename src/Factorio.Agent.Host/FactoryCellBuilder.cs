@@ -121,10 +121,12 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         {
             var map = await spatial.CaptureAsync(items, 48, token);
             RequireScope(map.Scope, catalog);
+            var known = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            RequireScope(known.Scope, catalog);
             var powered = map.Entities.Where(e => map.Prototypes[e.Name].Type == "electric-pole" && e.Power?.NetworkId is not null
-                    && map.Entities.Any(o => o.Id != e.Id && o.Power?.NetworkId == e.Power.NetworkId && IsPowerSource(map.Prototypes[o.Name].Type)))
+                    && FactoryPower.IsFed(known, e.Id) == true)
                 .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).FirstOrDefault()
-                ?? throw new InvalidOperationException("A factory zone needs an observed generator network near the actor; build steam power first.");
+                ?? throw new InvalidOperationException("A factory zone needs a local pole on a known generator network; build or repair power first.");
             var current = await registry.LoadAsync(catalog.Scope.WorldId, token);
             var site = new FactoryZonePlanner().Find(KeepSteamGrowth(map, current.Zones), machine, powered.Position, Slots(kind), token);
             if (site is null && steam is not null)

@@ -15,10 +15,11 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
 
     /// <summary>Collects existing outputs only; FinalStock may be below the target if a source was depleted.</summary>
     public Task<ProductionResult> CollectAvailableAsync(string item, int targetStock, CancellationToken token = default,
-        IReadOnlySet<string>? reservedEntityIds = null) => RunAsync(item, targetStock, token, reservedEntityIds, existingStockOnly: true);
+        IReadOnlySet<string>? reservedEntityIds = null, ActorScope? expectedScope = null) =>
+        RunAsync(item, targetStock, token, reservedEntityIds, existingStockOnly: true, expectedScope);
 
     private async Task<ProductionResult> RunAsync(string item, int targetStock, CancellationToken token,
-        IReadOnlySet<string>? reservedEntityIds, bool existingStockOnly)
+        IReadOnlySet<string>? reservedEntityIds, bool existingStockOnly, ActorScope? expectedScope = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(item);
         if (targetStock is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(targetStock));
@@ -31,6 +32,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
         var exploration = new ExplorationPlanner();
         var charting = new ChartedResourceSurvey(game, journal);
         ProductionState initial = await ObserveAsync(deadline.Token);
+        if (expectedScope is not null && initial.Scope != expectedScope)
+            throw new InvalidDataException("Actor changed before stock collection; reconcile before choosing new transfers.");
         var receipts = new List<OperationReceipt>();
         for (int stepNumber = 0; stepNumber < 256; stepNumber++)
         {

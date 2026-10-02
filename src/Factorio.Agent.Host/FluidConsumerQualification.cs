@@ -5,12 +5,13 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 /// <summary>Explicitly prepared oil chain that must manufacture acid and consume it in a battery or processor cell.</summary>
-public sealed class FluidConsumerQualification(RuntimeSession session, string item = "battery")
+public sealed class FluidConsumerQualification(RuntimeSession session, string item = "battery", bool fromMaterials = false)
 {
     public async Task<string> RunAsync(CancellationToken token)
     {
         if (!session.IsFixture) throw new InvalidOperationException("Fluid consumer qualification requires an explicit fixture session.");
         if (item is not ("battery" or "processing-unit")) throw new ArgumentException("The fluid consumer fixture covers battery and processing-unit.");
+        if (fromMaterials && item != "processing-unit") throw new ArgumentException("The intermediate production fixture requires processing-unit.");
         using var lease = ActorControlLease.Acquire(session.Directory);
         await using var game = session.CreateClient(lease);
         string path = Path.Combine(session.Directory, $"fluid-consumer-qualification-{Guid.NewGuid():N}.json");
@@ -26,7 +27,14 @@ public sealed class FluidConsumerQualification(RuntimeSession session, string it
             const string extra = """
                 local f=game.forces.factorio_agent; local c=game.surfaces.nauvis.find_entities_filtered{type='character',force=f}[1]; for _,t in pairs{'battery','processing-unit','automation-2'} do assert(f.technologies[t]); f.technologies[t].researched=true end; for name,count in pairs{['chemical-plant']=2,['assembling-machine-2']=1,['offshore-pump']=2,inserter=4,['iron-chest']=4,['iron-plate']=50,['copper-plate']=25,['electronic-circuit']=200,['advanced-circuit']=25} do assert(c.insert{name=name,count=count}==count) end; assert(c.get_item_count('sulfur')==0 and c.get_item_count('battery')==0 and c.get_item_count('processing-unit')==0);
                 """;
-            string preparation = await session.CreateRcon().ExecuteAsync(OilChemistryQualification.Prepare + extra + Statistics, token);
+            const string processorEquipment = """
+                for name,count in pairs{['assembling-machine-2']=9,inserter=24,['iron-chest']=24,['iron-plate']=950,['copper-plate']=975} do assert(c.insert{name=name,count=count}==count) end;
+                """;
+            const string intermediateSetup = """
+                f.technologies['advanced-circuit'].researched=true; assert(c.remove_item{name='electronic-circuit',count=200}==200); assert(c.remove_item{name='advanced-circuit',count=25}==25); assert(c.get_item_count('electronic-circuit')==0 and c.get_item_count('advanced-circuit')==0);
+                """;
+            string preparation = await session.CreateRcon().ExecuteAsync(OilChemistryQualification.Prepare + extra
+                + (item == "processing-unit" ? processorEquipment : "") + (fromMaterials ? intermediateSetup : "") + Statistics, token);
             await journal.AppendAsync("fixture-preparation-response", new { response = preparation }, token);
             using var prepared = JsonDocument.Parse(preparation);
             var before = prepared.RootElement.Clone();
@@ -38,6 +46,9 @@ public sealed class FluidConsumerQualification(RuntimeSession session, string it
             var plan = await new FactoryDirector(game, journal, session.Directory).AutomateAsync(item, 2, token);
             var state = await new FactoryRegistry(session.Directory).LoadAsync(catalog.Scope.WorldId, token);
             evidence.Add(new { check = "acid-consumer-chain-built", plan, state.Cells });
+            if (fromMaterials)
+                Require(new[] { "copper-cable", "electronic-circuit", "advanced-circuit", "plastic-bar" }.All(recipe =>
+                    state.Cells.Any(c => c.Recipe == recipe && c.Status == "ready")), "A solid or chemical intermediate producer was not constructed.");
             Require(new[] { "basic-oil-processing", "sulfur", "sulfuric-acid", item }.All(recipe =>
                 state.Cells.Any(c => c.Kind == FluidCellBuilder.MachineKind && c.Recipe == recipe && c.Status == "ready")),
                 "A required fluid chain stage was not completed.");
@@ -68,6 +79,10 @@ public sealed class FluidConsumerQualification(RuntimeSession session, string it
                 && after.GetProperty("acidConsumed").GetDouble() > before.GetProperty("acidConsumed").GetDouble()
                 && after.GetProperty(item).GetDouble() > before.GetProperty(item).GetDouble(),
                 "The engine did not both produce and consume acid to manufacture the target.");
+            if (fromMaterials)
+                Require(new[] { "cableProduced", "circuitProduced", "advancedProduced", "plasticProduced" }.All(name =>
+                    before.GetProperty(name).GetDouble() == 0 && after.GetProperty(name).GetDouble() > 0),
+                    "The engine did not manufacture every unsupplied circuit intermediate.");
             var rows = (await File.ReadAllLinesAsync(journalPath, token)).Select(line => JsonDocument.Parse(line)).ToArray();
             try
             {
@@ -81,14 +96,14 @@ public sealed class FluidConsumerQualification(RuntimeSession session, string it
         }
         finally
         {
-            await LocalJson.WriteAsync(path, new { kind = "prepared-fluid-consumer-qualification", item, passed,
+            await LocalJson.WriteAsync(path, new { kind = "prepared-fluid-consumer-qualification", item, fromMaterials, passed,
                 isAutonomousCampaign = false, journalPath, evidence }, CancellationToken.None);
         }
         return path;
     }
 
     private const string Statistics = """
-        local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local fs=f.get_fluid_production_statistics(s); local is=f.get_item_production_statistics(s); rcon.print(helpers.table_to_json{tick=game.tick,acidProduced=fs.get_input_count('sulfuric-acid'),acidConsumed=fs.get_output_count('sulfuric-acid'),battery=is.get_input_count('battery'),['processing-unit']=is.get_input_count('processing-unit'),sulfurProduced=is.get_input_count('sulfur'),crudeProduced=fs.get_input_count('crude-oil'),gasProduced=fs.get_input_count('petroleum-gas'),players=#game.connected_players})
+        local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local fs=f.get_fluid_production_statistics(s); local is=f.get_item_production_statistics(s); rcon.print(helpers.table_to_json{tick=game.tick,acidProduced=fs.get_input_count('sulfuric-acid'),acidConsumed=fs.get_output_count('sulfuric-acid'),battery=is.get_input_count('battery'),['processing-unit']=is.get_input_count('processing-unit'),sulfurProduced=is.get_input_count('sulfur'),crudeProduced=fs.get_input_count('crude-oil'),gasProduced=fs.get_input_count('petroleum-gas'),cableProduced=is.get_input_count('copper-cable'),circuitProduced=is.get_input_count('electronic-circuit'),advancedProduced=is.get_input_count('advanced-circuit'),plasticProduced=is.get_input_count('plastic-bar'),players=#game.connected_players})
         """;
 
     private static void Require(bool condition, string message)

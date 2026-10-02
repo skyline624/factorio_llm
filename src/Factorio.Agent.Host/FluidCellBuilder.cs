@@ -15,7 +15,7 @@ namespace Factorio.Agent.Host;
 public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journal, string directory)
 {
     public const string ExtractorKind = "extractor";
-    public const string MachineKind = "fluid";
+    public const string MachineKind = AutomationPlanner.FluidKind;
     // The machine is committed before the small parts whose approach must avoid its footprint.
     private static readonly string[] PartOrder = ["drill", "machine", "pole", "input-inserter", "input-chest", "output-inserter", "output-chest"];
 

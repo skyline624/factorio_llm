@@ -77,9 +77,10 @@ public sealed class SiloCellTests
         var state = new FactoryState(1, "world", [], [Cell()]).WithTarget("rocket-part", 1);
         var shares = FactoryLogistics.CellShares(SiloCatalogs.Rocket(), state)!;
         Assert.Equal(1, shares["rocket-part"], 6);
-        // Ten minutes of one part a minute, as planned assembler cells keep; fluid chain cells keep the caller's buffer.
+        // Ten minutes of one part a minute; planned fluid cells now use the same demand shares.
         Assert.Equal(10, FactoryLogistics.CellBufferCrafts(Cell(), shares, 40));
-        Assert.Equal(40, FactoryLogistics.CellBufferCrafts(Cell() with { Kind = FluidCellBuilder.MachineKind }, shares, 40));
+        Assert.Equal(10, FactoryLogistics.CellBufferCrafts(Cell() with { Kind = FluidCellBuilder.MachineKind }, shares, 40));
+        Assert.Equal(40, FactoryLogistics.CellBufferCrafts(Cell() with { Kind = FluidCellBuilder.MachineKind }, null, 40));
         Assert.Empty(FactoryLogistics.OutputChests([Cell()]));
     }
 

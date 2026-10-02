@@ -37,7 +37,8 @@ public static class FluidChainPlanner
             double limit = Math.Max(solidIn, solidOut) > 0
                 ? Math.Min(machineCrafts, 60 * AutomationPlanner.InserterItemsPerSecond / Math.Max(solidIn, solidOut)) : machineCrafts;
             int machines = (int)Math.Ceiling(needed / limit - 1e-9);
-            return new AutomationStage(recipe.Name, recipe.Products[0].Name, machine, needed, Math.Clamp(machines, 1, maximumMachinesPerStage));
+            return new AutomationStage(recipe.Name, recipe.Products[0].Name, machine, needed,
+                Math.Clamp(machines, 1, maximumMachinesPerStage), AutomationPlanner.FluidKind);
         }).ToArray();
         return new(item, perMinute, stages, sources.Select(p => new FluidSource(p.Key, p.Value.Resource, p.Value.Units))
             .OrderBy(s => s.Fluid, StringComparer.Ordinal).ToArray(), raw);

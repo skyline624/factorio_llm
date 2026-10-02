@@ -74,7 +74,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         // Demand pulls production: a producer whose product already holds enough stock is not refilled and drains to a stop.
         var caps = StockCaps(catalog, state);
         var stocks = AvailableStock(snapshot);
-        var paused = cells.Where(c => c.Kind is "assembler" or FurnaceCellPlanner.Kind && c.Recipe is not null)
+        var paused = cells.Where(c => c.Kind is "assembler" or FurnaceCellPlanner.Kind or FluidCellBuilder.MachineKind && c.Recipe is not null)
+            .Where(c => catalog.Recipes.Single(r => r.Name == c.Recipe).Products[0].DeterministicItem)
             .Select(c => (Cell: c, Product: catalog.Recipes.Single(r => r.Name == c.Recipe).Products[0].Name))
             .Where(p => Paused(caps, p.Product, stocks.GetValueOrDefault(p.Product))).ToArray();
         if (paused.Length > 0)
@@ -215,7 +216,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 NativeRecipe recipe = catalog.Recipes.Single(r => r.Name == cell.Recipe);
                 string chest = cell.Entities["input-chest"];
                 var inChest = Items(photograph, chest);
-                // Fluid chain cells are sized by their own chain, not by the assembler plan, and keep the caller's buffer.
+                // Solid and fluid stages share the root demand; cells outside that plan keep the caller's buffer.
                 int crafts = CellBufferCrafts(cell, shares, bufferCrafts);
                 return recipe.Ingredients.Where(i => i.DeterministicItem).Select(i => (Chest: chest, Item: i.Name,
                     Loaded: inChest.GetValueOrDefault(i.Name), Target: checked((long)(i.Amount!.Value * crafts))));
@@ -316,8 +317,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     internal static IReadOnlyDictionary<string, double>? CellShares(ProductionCatalog catalog, FactoryState state)
     {
         var machines = FactoryDirector.MachineItems(catalog);
-        if (state.Targets is not { Count: > 0 } targets || machines.Count == 0) return null;
-        return AutomationPlanner.Plan(catalog, targets, machines).Stages.ToDictionary(s => s.Recipe, s => s.CraftsPerMinute
+        if (state.Targets is not { Count: > 0 } targets || machines.Count == 0 && FluidChainDirector.Machines(catalog).Count == 0) return null;
+        return AutomationPlanner.Plan(catalog, targets, machines, fluidMachineItems: FluidChainDirector.Machines(catalog)).Stages.ToDictionary(s => s.Recipe, s => s.CraftsPerMinute
             / Math.Max(1, state.Cells.Count(c => c.Kind == s.Kind && c.Recipe == s.Recipe && c.Status == "ready")), StringComparer.Ordinal);
     }
 
@@ -367,8 +368,10 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     internal static IReadOnlyDictionary<string, long>? StockCaps(ProductionCatalog catalog, FactoryState state)
     {
         var machines = FactoryDirector.MachineItems(catalog);
-        if (state.Targets is not { Count: > 0 } targets || machines.Count == 0) return null;
-        return AutomationPlanner.Plan(catalog, targets, machines).Stages.ToDictionary(s => s.Item, s => (long)Math.Ceiling(s.CraftsPerMinute
+        if (state.Targets is not { Count: > 0 } targets || machines.Count == 0 && FluidChainDirector.Machines(catalog).Count == 0) return null;
+        return AutomationPlanner.Plan(catalog, targets, machines, fluidMachineItems: FluidChainDirector.Machines(catalog)).Stages
+            .Where(s => catalog.Recipes.Single(r => r.Name == s.Recipe).Products[0].DeterministicItem)
+            .ToDictionary(s => s.Item, s => (long)Math.Ceiling(s.CraftsPerMinute
             * catalog.Recipes.Single(r => r.Name == s.Recipe).Products[0].Amount!.Value * StockMinutes - 1e-9), StringComparer.Ordinal);
     }
 
@@ -408,11 +411,11 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             : Math.Min(MinimumBufferCrafts, maximum);
 
     /// <summary>
-    /// Crafts a cell's input chest holds: assembler, furnace and silo cells are planned stages; fluid chain cells are sized by
-    /// their own chain, not by the assembler plan, and keep the caller's buffer.
+    /// Crafts a cell's input chest holds under the shared plan; a registry without targets keeps the caller's buffer.
     /// </summary>
     internal static int CellBufferCrafts(FactoryCell cell, IReadOnlyDictionary<string, double>? shares, int bufferCrafts) =>
-        cell.Kind is "assembler" or FurnaceCellPlanner.Kind or SiloCellPlanner.Kind ? BufferCrafts(shares, cell.Recipe!, bufferCrafts) : bufferCrafts;
+        cell.Kind is "assembler" or FurnaceCellPlanner.Kind or SiloCellPlanner.Kind or FluidCellBuilder.MachineKind
+            ? BufferCrafts(shares, cell.Recipe!, bufferCrafts) : bufferCrafts;
 
     /// <summary>
     /// Splits a carried item among input chests: every chest first reaches a quarter of its target, then chests are filled

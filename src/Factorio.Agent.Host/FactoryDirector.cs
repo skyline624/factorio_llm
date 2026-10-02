@@ -47,24 +47,31 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     {
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         var machines = MachineItems(catalog);
-        // Recipes moving fluids chain extractor, refinery and chemical cells instead of assembler bands.
-        if (AutomationPlanner.Choose(catalog, item, machines) is null && FluidChainPlanner.Choose(catalog, item, FluidChainDirector.Machines(catalog)) is not null)
+        var fluidMachines = FluidChainDirector.Machines(catalog);
+        // A fluid-unit target keeps the dedicated fluid API; item targets share every solid and chemical intermediate.
+        if (!catalog.Items.ContainsKey(item) && FluidChainPlanner.Choose(catalog, item, FluidChainDirector.Machines(catalog)) is not null)
         {
             var chain = await new FluidChainDirector(game, journal, directory).AutomateAsync(item, perMinute, token);
             return new(chain.Stages, chain.RawPerMinute);
         }
-        if (machines.Count == 0) throw new InvalidOperationException("No assembling machine or furnace recipe is enabled; research automation first.");
+        if (machines.Count == 0 && fluidMachines.Count == 0) throw new InvalidOperationException("No factory machine recipe is enabled; research its equipment first.");
         var registry = new FactoryRegistry(directory);
         var registered = (await registry.LoadAsync(catalog.Scope.WorldId, token)).WithTarget(item, perMinute);
         await registry.SaveAsync(registered, token);
         // Every registered target shares the stages: a second science pack adds its gears to the first one's.
-        var plan = AutomationPlanner.Plan(catalog, registered.Targets!, machines);
+        var plan = AutomationPlanner.Plan(catalog, registered.Targets!, machines, fluidMachineItems: fluidMachines);
         await journal.AppendAsync("factory-automation-plan", new { item, perMinute, targets = registered.Targets, plan }, token);
         await SeedRawAsync(catalog, plan.RawPerMinute, token);
         var builder = new FactoryCellBuilder(game, journal, directory);
+        var fluids = new FluidChainDirector(game, journal, directory);
         // Consumers after their suppliers keeps early cells useful even if a later build is interrupted.
-        foreach (var stage in plan.Stages.OrderBy(s => Depth(catalog, s.Recipe, machines)))
+        foreach (var stage in plan.Stages)
         {
+            if (stage.Kind == FluidCellBuilder.MachineKind)
+            {
+                await fluids.EnsureStageAsync(stage, catalog, token);
+                continue;
+            }
             var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
             var ready = state.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready").Select(c => c.MachineItem).ToArray();
             int missing = AutomationPlanner.MissingMachines(catalog, stage, ready);
@@ -245,11 +252,4 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         return (ready.Length, ready.Sum(c => rows[c.Slot.Band].CellPerMinute));
     }
 
-    private static int Depth(ProductionCatalog catalog, string recipeName, IReadOnlySet<string> machines, int guard = 0)
-    {
-        if (guard > 16) return guard;
-        var recipe = catalog.Recipes.Single(r => r.Name == recipeName);
-        return recipe.Ingredients.Select(i => AutomationPlanner.Choose(catalog, i.Name, machines))
-            .Where(c => c is not null).Select(c => 1 + Depth(catalog, c!.Value.Recipe.Name, machines, guard + 1)).DefaultIfEmpty(0).Max();
-    }
 }

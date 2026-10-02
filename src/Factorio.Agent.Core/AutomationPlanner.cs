@@ -1,53 +1,70 @@
 namespace Factorio.Agent.Core;
 
-/// <summary>Kind is the cell kind that serves the stage: "assembler", "furnace" for chest-fed burner furnaces, or "silo" for rocket parts.</summary>
+/// <summary>Kind is the cell kind that serves the stage: assembler, furnace, fluid or silo.</summary>
 public sealed record AutomationStage(string Recipe, string Item, string MachineItem, double CraftsPerMinute, int Machines, string Kind = "assembler");
-/// <summary>Assembler, furnace and silo stages for a target rate; raw inputs (ore plates, ores, fluids, unsupported items) are supplied otherwise.</summary>
-public sealed record AutomationPlan(IReadOnlyList<AutomationStage> Stages, IReadOnlyDictionary<string, double> RawPerMinute);
+/// <summary>Solid and optional fluid stages for target rates; raw item inputs and external fluid sources are distinct.</summary>
+public sealed record AutomationPlan(IReadOnlyList<AutomationStage> Stages, IReadOnlyDictionary<string, double> RawPerMinute)
+{
+    public IReadOnlyList<FluidSource> FluidSources { get; init; } = [];
+}
 
-/// <summary>Sizes chest-fed assembler and furnace cells from native recipe amounts, crafting speed and one basic inserter per side.</summary>
+/// <summary>Sizes factory cells from native recipes, crafting speed and the solid throughput of their basic inserters.</summary>
 public static class AutomationPlanner
 {
+    public const string FluidKind = "fluid";
     /// <summary>Observed native throughput of one basic inserter between a chest and a machine.</summary>
     public const double InserterItemsPerSecond = 0.8;
 
     public static AutomationPlan Plan(ProductionCatalog catalog, string item, double perMinute, IReadOnlySet<string> machineItems,
-        int maximumMachinesPerStage = 8) => Plan(catalog, new Dictionary<string, double>(StringComparer.Ordinal) { [item] = perMinute },
-            machineItems, maximumMachinesPerStage);
+        int maximumMachinesPerStage = 8, IReadOnlySet<string>? fluidMachineItems = null) => Plan(catalog,
+            new Dictionary<string, double>(StringComparer.Ordinal) { [item] = perMinute }, machineItems, maximumMachinesPerStage, fluidMachineItems);
 
     /// <summary>Several targets share their intermediate stages: crafts add up per recipe before machines are counted.</summary>
     public static AutomationPlan Plan(ProductionCatalog catalog, IReadOnlyDictionary<string, double> targets, IReadOnlySet<string> machineItems,
-        int maximumMachinesPerStage = 8)
+        int maximumMachinesPerStage = 8, IReadOnlySet<string>? fluidMachineItems = null)
     {
         if (targets.Count == 0 || targets.Values.Any(rate => !double.IsFinite(rate) || rate <= 0 || rate > 10000))
             throw new ArgumentOutOfRangeException(nameof(targets));
         var crafts = new Dictionary<string, (NativeRecipe Recipe, string Machine, double Crafts)>(StringComparer.Ordinal);
+        var order = new List<string>();
         var raw = new Dictionary<string, double>(StringComparer.Ordinal);
+        var fluids = new Dictionary<string, double>(StringComparer.Ordinal);
         foreach (var (item, perMinute) in targets.OrderBy(p => p.Key, StringComparer.Ordinal)) Add(item, perMinute, []);
-        var stages = crafts.Values.Select(stage =>
+        var ordered = fluidMachineItems is null ? crafts.Values.OrderBy(s => s.Recipe.Name, StringComparer.Ordinal)
+            : order.Select(name => crafts[name]);
+        var stages = ordered.Select(stage =>
         {
-            string kind = Kind(catalog, stage.Machine);
+            string kind = stage.Recipe.Ingredients.Concat(stage.Recipe.Products).Any(i => i.DeterministicFluid)
+                ? FluidKind : Kind(catalog, stage.Machine);
             int machines = (int)Math.Ceiling(stage.Crafts / CellCraftsPerMinute(catalog, stage.Recipe, stage.Machine) - 1e-9);
             return new AutomationStage(stage.Recipe.Name, stage.Recipe.Products[0].Name, stage.Machine, stage.Crafts,
                 Math.Clamp(machines, 1, Maximum(kind, maximumMachinesPerStage)), kind);
-        }).OrderBy(s => s.Recipe, StringComparer.Ordinal).ToArray();
-        return new(stages, raw);
+        }).ToArray();
+        return new(stages, raw)
+        {
+            FluidSources = fluids.Select(p => new FluidSource(p.Key, FluidChainPlanner.Resource(catalog, p.Key), p.Value))
+                .OrderBy(s => s.Fluid, StringComparer.Ordinal).ToArray()
+        };
 
         void Add(string name, double rate, IReadOnlyList<string> path)
         {
             if (path.Contains(name)) throw new InvalidOperationException("Automation recipes form a cycle: " + string.Join(" -> ", path.Append(name)));
-            var choice = Choose(catalog, name, machineItems);
+            if (path.Count > 32) throw new InvalidOperationException("Automation dependency depth exceeds its budget.");
+            var choice = Choose(catalog, name, machineItems) ?? (fluidMachineItems is null ? null
+                : FluidChainPlanner.Choose(catalog, name, fluidMachineItems));
             if (choice is null)
             {
-                raw[name] = raw.GetValueOrDefault(name) + rate;
+                if (fluidMachineItems is not null && catalog.Recipes.SelectMany(r => r.Ingredients.Concat(r.Products)).Any(m => m.Name == name && m.DeterministicFluid))
+                    fluids[name] = fluids.GetValueOrDefault(name) + rate;
+                else raw[name] = raw.GetValueOrDefault(name) + rate;
                 return;
             }
             var (recipe, machine) = choice.Value;
             double recipeCrafts = rate / recipe.Products[0].Amount!.Value;
-            var previous = crafts.GetValueOrDefault(recipe.Name);
-            crafts[recipe.Name] = (recipe, machine, previous.Crafts + recipeCrafts);
             foreach (var ingredient in recipe.Ingredients)
                 Add(ingredient.Name, recipeCrafts * ingredient.Amount!.Value, [.. path, name]);
+            if (!crafts.ContainsKey(recipe.Name)) order.Add(recipe.Name);
+            crafts[recipe.Name] = (recipe, machine, crafts.GetValueOrDefault(recipe.Name).Crafts + recipeCrafts);
         }
     }
 
@@ -63,7 +80,7 @@ public static class AutomationPlanner
         double machineCrafts = 60 * speed / recipe.EnergySeconds;
         // A furnace's input arm also carries its fuel, a small share next to the ingredient (0.36 coal per steel craft).
         double inputs = recipe.Ingredients.Where(i => i.DeterministicItem).Sum(i => i.Amount!.Value);
-        double outputs = recipe.Products.Sum(p => p.Amount!.Value);
+        double outputs = recipe.Products.Where(p => p.DeterministicItem).Sum(p => p.Amount!.Value);
         return Math.Min(machineCrafts, 60 * InserterItemsPerSecond / Math.Max(inputs, outputs));
     }
 

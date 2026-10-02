@@ -41,6 +41,33 @@ public sealed class ProductionGoalExecutorTests
         Assert.Equal(new[] { "observe", "production_catalog" }, game.Calls);
     }
 
+    [Fact]
+    public async Task ExistingOutputIsCollectedBeforeAssessingAnotherSmeltingBatch()
+    {
+        var game = new SelectionGame(stock: 0, installed: true) { OutputStock = 20 };
+        var journal = new Journal();
+        // Loss of the first collection observation must propagate without installing another connection.
+        await Assert.ThrowsAsync<IOException>(() => new ProductionGoalExecutor(game, journal).RunAsync("plate", 20));
+        Assert.Empty(journal.Selections);
+        Assert.Equal(new[] { "observe", "observe" }, game.Calls);
+    }
+
+    [Fact]
+    public async Task PreparedSmeltingCollectionCannotTouchANormalWorld()
+    {
+        var session = new RuntimeSession("nonexistent-normal-campaign", "factorio.exe", "config.ini", "mods", "save.zip",
+            0, 1, 2, "test-only", "session", "world", 1, false);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new SmeltingCollectionQualification(session).RunAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RespawnBeforeCollectingExistingStockCannotDispatchTransfersForThePreviousActor()
+    {
+        var game = new SelectionGame(stock: 0, installed: true) { OutputStock = 20, RespawnBeforeCollection = true };
+        await Assert.ThrowsAsync<InvalidDataException>(() => new ProductionGoalExecutor(game, new Journal()).RunAsync("plate", 20));
+        Assert.Equal(new[] { "observe", "observe" }, game.Calls);
+    }
+
     private sealed class Journal : IControllerJournal
     {
         public List<JsonElement> Selections { get; } = [];
@@ -54,22 +81,26 @@ public sealed class ProductionGoalExecutorTests
     private sealed class SelectionGame(long stock, bool installed) : IGameClient
     {
         public bool MismatchedScope { get; init; }
+        public long OutputStock { get; init; }
+        public bool RespawnBeforeCollection { get; init; }
         public List<string> Calls { get; } = [];
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
             Calls.Add(request.Action);
             var (map, catalog) = SmeltingPlannerTests.Setup(installed);
-            if (request.Action == "observe" && Calls.Count > 1) throw new IOException("Native execution observation unavailable.");
+            if (request.Action == "observe" && Calls.Count > 1 && !RespawnBeforeCollection)
+                throw new IOException("Native execution observation unavailable.");
             object data = request.Action switch
             {
                 "observe" => new
                 {
-                    scope = map.Scope,
+                    scope = Calls.Count > 1 && RespawnBeforeCollection ? map.Scope with { Incarnation = 2 } : map.Scope,
                     collectedTick = 1,
                     coverage = new { knownInventoriesComplete = true },
                     agent = new { alive = true, controlMode = "ai", inventory = new Dictionary<string, long> { ["plate"] = stock } },
                     entities = map.Entities.Where(e => e.Force == "agent").Select(e => new
-                    { e.Id, e.Name, e.Position, recipe = (string?)null, inventories = new { } }).ToArray()
+                    { e.Id, e.Name, e.Position, recipe = (string?)null,
+                        inventories = new { output = new { items = new Dictionary<string, long> { ["plate"] = e.Id == "receiver" ? OutputStock : 0 } } } }).ToArray()
                 },
                 "production_catalog" => MismatchedScope ? catalog with { Scope = catalog.Scope with { Generation = 2 } } : catalog,
                 "spatial" => map,

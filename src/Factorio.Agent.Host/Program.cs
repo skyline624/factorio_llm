@@ -39,7 +39,7 @@ try
           verify-factory-cells|verify-factory-research|verify-resource-cells|verify-power-expansion --session FILE
           verify-factory-cells --session FILE --from-materials
           verify-resource-cells --session FILE [--burner]
-          verify-fluid-consumer --session FILE [--item battery|processing-unit]
+          verify-fluid-consumer --session FILE [--item battery|processing-unit] [--from-materials]
           verify-furnace-bands --session FILE
           resource-cells --session FILE --item NAME --quantity PER_MINUTE
           power-expand --session FILE
@@ -51,6 +51,7 @@ try
           verify-rocket --session FILE
           verify-silo-cell --session FILE
           verify-furnace-fuel --session FILE
+          verify-smelting-collection --session FILE
           verify-assembly-batches --session FILE
           verify-campaign-journals --session FILE
           verify-fluid-extraction --session FILE [--reuse] [--stationary-threat]
@@ -177,7 +178,7 @@ try
         case "verify-fluid-consumer":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
-            Print(new { report = await new FluidConsumerQualification(session, Option("item") ?? "battery").RunAsync(shutdown.Token) });
+            Print(new { report = await new FluidConsumerQualification(session, Option("item") ?? "battery", options.ContainsKey("from-materials")).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-factory-research":
@@ -414,6 +415,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new ArmedCraftingQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-smelting-collection":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new SmeltingCollectionQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-furnace-fuel":

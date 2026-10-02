@@ -14,7 +14,7 @@ Les packs bleus demandent du plastique et du soufre, donc du pétrole brut, une 
 - le nombre de machines vient de la vitesse native de fabrication, bornée comme pour les assembleurs par le débit mesuré d'un bras simple (`AutomationPlanner.InserterItemsPerSecond`) quand la recette déplace des solides ;
 - le débit d'une foreuse à fluide vient du gisement : vitesse de minage × quantité par cycle × montant du gisement / montant normal, divisé par le temps de minage. Le mod exporte `infinite_resource` et `normal_resource_amount`. Un chevalet sur 300 000 unités donne 600 unités de brut par minute, sur 600 000 unités 1 200.
 
-`FactoryDirector.AutomateAsync(item, rate)` délègue à `FluidChainDirector` quand aucune recette d'assembleur solide n'existe pour l'objet et qu'une chaîne fluide le fabrique. L'ancrage stratégique accepte les objectifs `items_per_minute` dont le produit est un solide d'une telle chaîne, comme `plastic-bar`, `sulfur`, `battery` et `processing-unit` ; les fluides eux-mêmes restent des objectifs en `fluid_units`.
+`FactoryDirector.AutomateAsync(item, rate)` inscrit les cibles d'objets dans un plan commun d'assembleurs, de fours, de silo et de chimie. Les recettes solides qui consomment du plastique déclenchent donc aussi sa chaîne ; les processeurs déclenchent leurs circuits, câbles et acide quand ces recettes sont débloquées. Les demandes partagées s'additionnent, avec des tampons calculés par la même logistique. `FluidChainDirector` construit chaque étape fluide de ce plan. Les objectifs portant directement sur un fluide gardent son API dédiée ; les objectifs stratégiques de fluides restent en `fluid_units`.
 
 ## Géométrie calculée en C#
 
@@ -26,6 +26,8 @@ Les packs bleus demandent du plastique et du soufre, donc du pétrole brut, une 
 - la machine et ses pièces restent hors des gisements, sur des cases libres ; les coffres doivent rester accessibles une fois les tuyaux prévus posés ;
 - parmi les six premiers emplacements valides autour de l'ancrage, celui qui demande le moins de tuyaux l'emporte. Lors du premier essai, la raffinerie la plus proche demandait 18 tuyaux pour contourner le chevalet ; la même préparation en demande désormais 4 ;
 - une foreuse à fluide se place sur un gisement libre, orientée pour que la case devant son port reste libre et hors d'un autre gisement, avec son poteau sur une autre face.
+
+Le choix vérifie aussi une sortie du personnage après projection de toute la cellule et des tuyaux. Pour cette vérification, les tuyaux à construire réservent toute leur case : leurs boîtes de collision changent avec leurs connexions. Le contrôle de chaque pièce conserve une sortie sur une zone plus large autour du personnage, au lieu de considérer un simple dégagement de quatre cases comme suffisant.
 
 ### Sol réservé
 
@@ -99,7 +101,9 @@ Ces fixtures isolent le mécanisme. Recherches, objets, gisement et énergie son
 
 ### Consommateurs d'acide sulfurique
 
-`verify-fluid-consumer --session FILE --item battery|processing-unit` exige une fixture neuve. Elle reprend la préparation de pétrole et d'énergie distante, accorde les recherches nécessaires et fournit les équipements, 50 plaques de fer, 25 de cuivre, 200 circuits électroniques et 25 circuits avancés. Aucun soufre, acide, batterie ou processeur n'est fourni. Le contrôleur doit construire les étapes raffinage → soufre → acide → consommateur, amorcer l'acide par la logistique puis collecter le produit. Les quantités viennent des statistiques natives de production et de consommation, avec un départ nul ; tout minage ou fabrication manuelle refuse l'essai.
+`verify-fluid-consumer --session FILE --item battery|processing-unit` exige une fixture neuve. Elle reprend la préparation de pétrole et d'énergie distante, accorde les recherches nécessaires et fournit les équipements, des plaques, 200 circuits électroniques et 25 circuits avancés. La variante processeur fournit maintenant 1 000 plaques de chaque métal et dix assembleuses de niveau 2 au total, pour que les recherches activées et le plan commun puissent construire les câbles et circuits compatibles ; la variante batterie garde 50 plaques de fer et 25 de cuivre. Aucun soufre, acide, batterie ou processeur n'est fourni. Le contrôleur doit construire les étapes raffinage → soufre → acide → consommateur, amorcer l'acide par la logistique puis collecter le produit. Les quantités viennent des statistiques natives de production et de consommation, avec un départ nul ; tout minage ou fabrication manuelle refuse l'essai.
+
+`--item processing-unit --from-materials` active explicitement aussi la recette des circuits avancés et retire les circuits électroniques et avancés fournis. Il reste les équipements, 1 000 plaques de chaque métal et 100 charbons ; le câble, le plastique, les circuits, le soufre, l'acide et le processeur doivent être fabriqués par les cellules. Le rapport vérifie séparément les statistiques natives de chacun de ces intermédiaires. La première exécution de cette composition, graine 20261024, a construit toute la chaîne mais a échoué sur la navigation depuis une poche formée par les machines et tuyaux. Cette défaite du test est conservée et a motivé le contrôle de sortie décrit plus haut ; elle ne prouve pas la réussite de cette chaîne.
 
 Factorio 2.0.77 headless du 2 octobre 2026, aucun client connecté :
 
@@ -120,12 +124,12 @@ Les échecs de préparation initiaux sont conservés dans `.runtime/fixture-2026
 - La croissance de la vapeur n'est réservée que pour les chaudières en vue lors de chaque planification ; les tuyaux et la pompe gardent le sol lu autour de la machine.
 - La pompe prévue n'est pas projetée pendant le choix de l'emplacement : les routes des autres fluides et l'accès aux coffres peuvent traverser sa case, et `PrepareJointSourceAsync` peut alors échouer après la pose de la machine.
 - Le choix de l'emplacement ne vérifie que les ports d'entrée : un arbre devant le seul port de sortie de gaz d'une raffinerie bloque l'étape suivante, faute de minage des obstacles.
-- Le dimensionnement des étapes ne cumule pas les objectifs : une raffinerie construite pour le plastique compte aussi pour un objectif de soufre, sans entrée `fluid-chain-stage-short`. La puissance des chevalets construits par paires n'est pas budgétée avant leur pose.
+- Les objectifs d'objets cumulent maintenant leurs étapes de raffinage. Les appels directs portant sur un fluide conservent leur plan dédié. La puissance des chevalets construits par paires n'est pas budgétée avant leur pose.
 - Un extracteur n'alimente qu'une machine. Si un chevalet ne couvre pas une raffinerie, la chaîne ajoute des paires au lieu de rejoindre un réseau de brut commun.
 - La recherche d'un gisement se limite à la zone observée et aux gisements mémorisés ; elle n'explore pas. Les arbres et rochers restent des obstacles : ni l'emplacement ni les tuyaux ne les minent.
 - Les tuyaux se limitent à la zone observée autour du personnage (48 cases) et à 200 tuyaux par route. Une route interrompue à mi-chemin, dont les tuyaux ne sont enregistrés qu'à la fin, n'est pas réparée automatiquement : la reprise ne reconstruit que les rôles enregistrés.
 - La nouvelle pompe doit tenir contre la machine : une usine alimentée en eau se place donc sur la rive, loin de la raffinerie si besoin.
 - Le raffinage avancé, le craquage et le lubrifiant ne sont pas encore construits en cellules. L'acide vers les batteries et processeurs est couvert par les fixtures ci-dessus ; le béton alimenté en eau est planifiable mais n'a pas encore sa qualification native.
-- Une automatisation d'assembleur qui consomme du plastique, comme les circuits avancés, le traite encore comme matière première ; elle ne déclenche pas cette chaîne.
+- Une recette verrouillée ou sans fournisseur compatible reste une matière première explicite du plan. Le plan ne débloque aucune recherche et ne garantit pas que les limites de huit cellules par étape et les voyages du personnage permettent d'atteindre le débit demandé.
 - L'observation `observe` limitée à 200 entités connues, utilisée par la production pilotée, finit par être dépassée par une usine riche en tuyaux.
 - Aucun client graphique n'était connecté pendant ces essais.
