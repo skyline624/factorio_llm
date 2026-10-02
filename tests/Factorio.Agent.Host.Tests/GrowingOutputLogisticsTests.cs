@@ -7,6 +7,73 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class GrowingOutputLogisticsTests
 {
     [Fact]
+    public async Task LaboratoryTourFreshnessStartsAfterTheFinalNativeScienceTransfer()
+    {
+        string directory = Directory.CreateTempSubdirectory("science-tour-completion-").FullName;
+        try
+        {
+            var game = new OutputGame(30, 0, false, labScience: true) { TransferTicks = 600 };
+            var labs = game.LabStocks.Keys.Select(id => new FactoryCell(id, 1, new(0, 0, true), "lab", "lab", null,
+                new Dictionary<string, string> { ["machine"] = id }, "ready", 100, Plan: new Dictionary<string, PlannedEntity>())).ToArray();
+            await new FactoryRegistry(directory).SaveAsync(new(1, game.Scope.WorldId, [], labs), default);
+            var journal = new Journal();
+            var first = await new FactoryLogistics(game, journal, directory).ServiceAsync();
+            Assert.Equal(1900, first.Tick);
+            game.Tick++;
+            await new FactoryLogistics(game, journal, directory).ServiceAsync(minimumIntervalTicks: FactoryLogistics.BetweenGoalsFreshnessTicks);
+            Assert.Equal(3, game.Submissions);
+            Assert.Contains("factory-logistics-recent-tour", journal.Types);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Theory]
+    [InlineData("fresh", true)]
+    [InlineData("expired", false)]
+    [InlineData("future", false)]
+    [InlineData("scope", false)]
+    [InlineData("factory", false)]
+    [InlineData("buffer", false)]
+    [InlineData("corrupt", false)]
+    [InlineData("fuel", false)]
+    [InlineData("missing", false)]
+    public async Task BetweenGoalsReusesOnlyACompletedRecentTourAfterFreshMaintenance(string change, bool deferred)
+    {
+        string directory = Directory.CreateTempSubdirectory("recent-logistics-").FullName;
+        try
+        {
+            var game = new OutputGame(0, 12, false) { TransferTicks = 100, BoilerFuel = 50 };
+            var cell = new FactoryCell("producer", 1, new(0, 0, true), "assembler", "assembling-machine-1", null,
+                new Dictionary<string, string> { ["output-chest"] = "chest" }, "ready", 100,
+                Plan: new Dictionary<string, PlannedEntity>());
+            var registry = new FactoryRegistry(directory);
+            await registry.SaveAsync(new(1, game.Scope.WorldId, [], [cell]), default);
+            var journal = new Journal();
+            var first = await new FactoryLogistics(game, journal, directory).ServiceAsync();
+            Assert.Equal(200, first.Tick);
+            Assert.Equal(1, game.Submissions);
+            game.CurrentStock = 20;
+            game.TransferTicks = 0;
+            game.Tick += change == "expired" ? 1801 : change == "future" ? -1 : 1;
+            if (change == "scope") game.Generation++;
+            if (change == "factory") await registry.SaveAsync((await registry.LoadAsync(game.Scope.WorldId, default)).WithTarget("iron-plate", 60), default);
+            if (change == "corrupt") await File.WriteAllTextAsync(Path.Combine(directory, "factory-logistics-completion.json"), "{broken");
+            if (change == "fuel") game.BoilerFuel = 0;
+            if (change == "missing") game.ChestPresent = false;
+            int observations = game.FactoryPhotographs;
+            var second = await new FactoryLogistics(game, journal, directory).ServiceAsync(change == "buffer" ? 80 : 40,
+                minimumIntervalTicks: FactoryLogistics.BetweenGoalsFreshnessTicks);
+            Assert.True(game.FactoryPhotographs > observations);
+            Assert.Equal(2, journal.Types.Count(t => t == "factory-maintenance"));
+            Assert.Equal(deferred, journal.Types.Contains("factory-logistics-recent-tour"));
+            Assert.Equal(deferred || change == "missing" ? 1 : 2, game.Submissions);
+            Assert.Equal(deferred || change == "missing" ? 0 : 20, second.Collected.GetValueOrDefault("iron-plate"));
+            if (change == "fuel") Assert.True(second.PowerStarved);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
     public async Task ScarceScienceFeedsAllRegisteredLabsInsteadOfFillingTheFirstStack()
     {
         string directory = Directory.CreateTempSubdirectory("science-sharing-").FullName;
@@ -54,7 +121,8 @@ public sealed class GrowingOutputLogisticsTests
 
     private sealed class Journal : IControllerJournal
     {
-        public Task AppendAsync(string type, object data, CancellationToken token) => Task.CompletedTask;
+        public List<string> Types { get; } = [];
+        public Task AppendAsync(string type, object data, CancellationToken token) { Types.Add(type); return Task.CompletedTask; }
     }
 
     /// <summary>Six items in the cycle photograph; a different native quantity after approach, with measured receipts.</summary>
@@ -68,7 +136,14 @@ public sealed class GrowingOutputLogisticsTests
         private string? operationId;
         private string Item => labScience ? "automation-science-pack" : "iron-plate";
         public Dictionary<string, long> LabStocks { get; } = new() { ["lab-0"] = 10, ["lab-1"] = 0, ["lab-2"] = 0 };
-        public ActorScope Scope => catalog.Scope;
+        public ActorScope Scope => catalog.Scope with { Generation = Generation };
+        public long Generation { get; set; } = Catalogs.Raw().Scope.Generation;
+        public long Tick { get; set; } = 100;
+        public long TransferTicks { get; set; }
+        public int CurrentStock { get; set; } = currentStock;
+        public int? BoilerFuel { get; set; }
+        public bool ChestPresent { get; set; } = true;
+        public int FactoryPhotographs { get; private set; }
         public int Carried { get; private set; } = carried;
         public int Submissions { get; private set; }
         public int Queries { get; private set; }
@@ -78,19 +153,20 @@ public sealed class GrowingOutputLogisticsTests
             object data;
             switch (request.Action)
             {
-                case "production_catalog": data = catalog with { CollectedTick = 100 }; break;
-                case "spatial": data = map; break;
+                case "production_catalog": data = catalog with { Scope = Scope, CollectedTick = Tick }; break;
+                case "spatial": data = map with { Scope = Scope, CollectedTick = Tick }; break;
                 case "observe":
                     data = new
                     {
-                        scope = Scope, collectedTick = 100,
-                        coverage = new { atomic = true, collectionStartTick = 100, collectionEndTick = 100,
+                        scope = Scope, collectedTick = Tick,
+                        coverage = new { atomic = true, collectionStartTick = Tick, collectionEndTick = Tick,
                             enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
                         agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = map.Actor.Position,
                             health = 250, weapon = new { ready = false, rounds = 0, range = 0 } }, enemies = Array.Empty<object>()
                     };
                     break;
                 case "factory_snapshot":
+                    FactoryPhotographs++;
                     var records = new List<FactoryRecord>
                     {
                         Record("actor", "entity", "actor", new { role = "actor", type = "character", position = map.Actor.Position, mainInventoryId = "bag" }),
@@ -102,12 +178,17 @@ public sealed class GrowingOutputLogisticsTests
                             records.Add(Record(lab.Id, "entity", lab.Id, new { role = "factory", type = "lab", position = lab.Position }));
                             records.Add(Record(lab.Id + "-stock", "inventory", lab.Id, new { items = new Dictionary<string, long> { [Item] = LabStocks[lab.Id] } }));
                         }
-                    else
+                    else if (ChestPresent)
                     {
                         records.Add(Record("chest", "entity", "chest", new { role = "factory", type = "container", position = new MapPosition(2.5, .5) }));
-                        records.Add(Record("stock", "inventory", "chest", new { items = new Dictionary<string, long> { [Item] = 6 } }));
+                        records.Add(Record("stock", "inventory", "chest", new { items = new Dictionary<string, long> { [Item] = Submissions == 0 ? 6 : CurrentStock } }));
                     }
-                    data = new { snapshotId = "stock", scope = Scope, snapshotScope = Scope, collectedTick = 100, expiresTick = 1000,
+                    if (BoilerFuel is { } fuel)
+                    {
+                        records.Add(Record("boiler", "entity", "boiler", new { role = "factory", type = "boiler", fuelInventoryId = "burner", position = new MapPosition(5, 5) }));
+                        records.Add(Record("burner", "inventory", "boiler", new { items = new Dictionary<string, long> { ["coal"] = fuel } }));
+                    }
+                    data = new { snapshotId = "stock", scope = Scope, snapshotScope = Scope, collectedTick = Tick, expiresTick = Tick + 1000,
                         totalRecords = records.Count, offset = 0, nextOffset = records.Count, complete = true,
                         coverage = new { atomic = true, knownInventoriesComplete = true, knownBeltAndInserterTransitComplete = true, fluidSegmentsDeduplicated = true }, records };
                     break;
@@ -122,11 +203,13 @@ public sealed class GrowingOutputLogisticsTests
                     Submissions++;
                     operationId = submission.OperationId;
                     int requested = submission.Args.GetProperty("count").GetInt32();
-                    int moved = Math.Min(requested, labScience ? Carried : currentStock);
+                    int moved = Math.Min(requested, labScience ? Carried : CurrentStock);
                     Carried += labScience ? -moved : moved;
                     if (labScience) LabStocks[target] += moved;
+                    else CurrentStock -= moved;
+                    Tick += TransferTicks;
                     receipt = new { submission.OperationId, submission.Kind, status = moved == requested ? "completed" : "partial",
-                        acceptedTick = 100, updatedTick = 100, effects = new { requested, transferred = moved } };
+                        acceptedTick = Tick - TransferTicks, updatedTick = Tick, effects = new { requested, transferred = moved } };
                     if (lostReply) throw new IOException("The transfer occurred but its response was lost.");
                     data = receipt;
                     break;
@@ -137,7 +220,7 @@ public sealed class GrowingOutputLogisticsTests
                     break;
                 default: throw new InvalidOperationException($"Unexpected call: {request.Action}");
             }
-            return Task.FromResult(new GameResponse(1, request.RequestId, true, 100, Protocol.ToElement(data)));
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, Tick, Protocol.ToElement(data)));
         }
 
         private static FactoryRecord Record(string id, string kind, string entity, object data) => new(id, kind, entity, id, Protocol.ToElement(data));

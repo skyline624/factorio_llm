@@ -655,7 +655,8 @@ try
                                 var cells = await new FactoryRegistry(session.Directory).LoadAsync(session.ProposedWorldId, token);
                                 if (cells.Cells.Any(c => c.Status == "ready"))
                                 {
-                                    var round = await new FactoryLogistics(game, maintenanceJournal, session.Directory).ServiceAsync(40, token);
+                                    var round = await new FactoryLogistics(game, maintenanceJournal, session.Directory)
+                                        .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks);
                                     // An attack can cut cells from the generators; on 2026-10-01 (seed 20261002) the whole mining
                                     // area stayed on an unfed island for hours. Reconnect before the next decision.
                                     if (round.Maintenance?.Unpowered.Count > 0)

@@ -33,9 +33,14 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// </summary>
     public const int PowerChestStacks = 4;
 
-    public async Task<LogisticsResult> ServiceAsync(int bufferCrafts = 40, CancellationToken token = default)
+    /// <summary>Between strategic goals, a just-completed tour may be reused after fresh upkeep and fuel checks.</summary>
+    public const long BetweenGoalsFreshnessTicks = 30 * 60;
+
+    public async Task<LogisticsResult> ServiceAsync(int bufferCrafts = 40, CancellationToken token = default,
+        long minimumIntervalTicks = 0)
     {
         if (bufferCrafts is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(bufferCrafts));
+        if (minimumIntervalTicks < 0) throw new ArgumentOutOfRangeException(nameof(minimumIntervalTicks));
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         await using var controller = new SpatialController(game, journal);
         // Upkeep first: destroyed registered entities are rebuilt and turrets rearmed before production transport.
@@ -53,7 +58,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         var inspected = ResourceCellHealth.Inspect(snapshot, cells);
         if (inspected.Count > 0)
         {
-            await new FactoryRegistry(directory).SaveAsync(inspected.Aggregate(state, (current, cell) => current.With(cell)), token);
+            state = inspected.Aggregate(state, (current, cell) => current.With(cell));
+            await new FactoryRegistry(directory).SaveAsync(state, token);
             await journal.AppendAsync("resource-cell-health", inspected, token);
             cells = cells.Where(c => inspected.All(i => i.Id != c.Id)).ToArray();
         }
@@ -65,10 +71,25 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             if (missing.Length == 0) present.Add(cell);
             else await journal.AppendAsync("factory-cell-missing", new { cell.Id, cell.Kind, missing, snapshot.CollectedTick }, token);
         }
+        bool allCellsPresent = present.Count == cells.Length;
         cells = present.ToArray();
         var degraded = FactoryMaintenance.Degraded(cells, FactoryMaintenance.Present(snapshot));
         foreach (var cell in degraded)
             await journal.AppendAsync("factory-cell-degraded", new { cell.Cell, cell.Missing, rebuildable = cell.Missing.All(m => m.Item is not null) }, token);
+
+        // A research goal can finish during its last tour. Starting another full tour immediately delayed the next
+        // model decision by several minutes. Repairs, rearming and current fuel faults still prevent this reuse.
+        if (minimumIntervalTicks > 0 && allCellsPresent && inspected.Count == 0 && upkeep.Actions == 0
+            && upkeep.Blocked.Count == 0 && upkeep.Shortfall.Count == 0 && upkeep.Unpowered.Count == 0
+            && FuelReserve(snapshot, cells, catalog.Items[Fuel].StackSize) == 0
+            && await new FactoryLogisticsCompletionStore(directory).IsFreshAsync(catalog.Scope, snapshot.CollectedTick,
+                state, bufferCrafts, minimumIntervalTicks, token))
+        {
+            var deferred = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick,
+                Maintenance: upkeep, Degraded: degraded);
+            await journal.AppendAsync("factory-logistics-recent-tour", deferred, token);
+            return deferred;
+        }
 
         var shares = CellShares(catalog, state);
         // Demand pulls production: a producer whose product already holds enough stock is not refilled and drains to a stop.
@@ -229,8 +250,22 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             long furnaceShort = PowerFuelShortfall(Math.Max(0, reserve - inChest - moved), inChest + moved + burning, stack);
             if (furnaceShort > 0) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + furnaceShort;
         }
+        // The completion tick belongs after the final native transfer, rather than to the photograph before refills.
+        snapshot = await snapshots.CaptureAsync(cancellationToken: token);
+        Require(snapshot.Scope, catalog);
+        state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
         var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, powerStarved, upkeep, degraded);
         await journal.AppendAsync("factory-logistics", result, token);
+        try
+        {
+            await new FactoryLogisticsCompletionStore(directory).RecordAsync(catalog.Scope, result.Tick, state, bufferCrafts,
+                powerStarved || FuelReserve(snapshot, state.Cells.Where(c => c.Status == "ready").ToArray(), catalog.Items[Fuel].StackSize) > 0,
+                token);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException && !token.IsCancellationRequested)
+        {
+            await journal.AppendAsync("factory-logistics-completion-record-error", new { error.Message }, token);
+        }
         return result;
 
         bool IsSciencePack(string item) => item.EndsWith("-science-pack", StringComparison.Ordinal);

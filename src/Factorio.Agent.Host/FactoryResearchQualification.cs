@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Factorio.Agent.Core;
+using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
@@ -40,6 +41,32 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
             if (result.Technology != "gun-turret" || state.Cells.Count(c => c.Kind == "lab") < 1
                 || !state.Cells.Any(c => c.Recipe == "automation-science-pack") || !state.Cells.Any(c => c.Recipe == "iron-gear-wheel"))
                 throw new InvalidDataException("Research did not use the expected science cells and laboratory.");
+
+            var recent = await new FactoryLogistics(game, journal, session.Directory)
+                .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks);
+            evidence.Add(new { check = "recent-tour-keeps-fresh-upkeep", result = recent });
+            if (recent.Actions != 0 || recent.Collected.Count != 0 || recent.Supplied.Count != 0 || recent.Maintenance is null
+                || !(await File.ReadAllLinesAsync(journalPath, token)).Any(line => line.Contains("\"type\":\"factory-logistics-recent-tour\"", StringComparison.Ordinal)))
+                throw new InvalidDataException("A just-completed healthy research tour must allow fresh upkeep without another transport tour.");
+
+            // Explicit fixture damage and spare item: native repairs must remain active despite the recent-tour receipt.
+            var damagedCell = state.Cells.First(c => c.Status == "ready" && c.Entities.ContainsKey("pole") && c.Plan?.ContainsKey("pole") == true);
+            string poleId = damagedCell.Entities["pole"];
+            if (!long.TryParse(poleId, out _)) throw new InvalidDataException("Expected a native pole unit number.");
+            string damage = $$"""
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c); local pole; for _,e in pairs(s.find_entities_filtered{type='electric-pole',force=f}) do if tostring(e.unit_number)=='{{poleId}}' then pole=e end end; assert(pole); pole.destroy(); assert(c.insert{name='small-electric-pole',count=1}==1); rcon.print(helpers.table_to_json{tick=game.tick,destroyed='{{poleId}}',fixtureSparePoles=1})
+                """;
+            using var damaged = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(damage, token));
+            var repaired = await new FactoryLogistics(game, journal, session.Directory)
+                .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks);
+            var repairedState = await new FactoryRegistry(session.Directory).LoadAsync(state.WorldId, token);
+            string newPole = repairedState.Cells.Single(c => c.Id == damagedCell.Id).Entities["pole"];
+            var photograph = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            evidence.Add(new { check = "recent-tour-does-not-skip-native-repair", prepared = damaged.RootElement.Clone(), result = repaired,
+                previousPole = poleId, newPole, photograph.CollectedTick });
+            if (newPole == poleId || repaired.Maintenance?.Rebuilt.Contains(newPole) != true
+                || !photograph.Records.Any(r => r.Kind == "entity" && r.EntityId == newPole))
+                throw new InvalidDataException("The damaged native pole was not rebuilt during fresh maintenance.");
 
             var rows = (await File.ReadAllLinesAsync(journalPath, token)).Select(l => JsonDocument.Parse(l)).ToArray();
             try
