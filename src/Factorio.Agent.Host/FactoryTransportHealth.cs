@@ -32,7 +32,14 @@ public static class FactoryTransportHealth
         var beltIds = ordered.Select(role => cell.Entities[role]).ToArray();
         if (beltIds.Distinct().Count() != beltIds.Length || !cell.Entities.TryGetValue("source-inserter", out var sourceArm)) return false;
         var arms = new HashSet<string>(StringComparer.Ordinal) { sourceArm };
-        if (!Arm(sourceArm, sourceId, beltIds[0], null, null)) return false;
+        if (bus.ActorReserve is < 0 or > 10000
+            || !Arm(sourceArm, sourceId, beltIds[0], bus.ActorReserve is null ? null : sourceId, bus.ActorReserve,
+                bus.ActorReserve is null ? "<" : ">")) return false;
+        if (bus.ActorReserve is not null)
+        {
+            var sourceCircuit = Facts(source);
+            if (sourceCircuit?.RedNeighbourCount != 1 || sourceCircuit.RedNeighbours?.SequenceEqual([sourceArm]) != true) return false;
+        }
         foreach (var consumer in bus.Consumers)
         {
             var target = state.Cells.SingleOrDefault(c => c.Id == consumer.TargetCellId);
@@ -68,14 +75,14 @@ public static class FactoryTransportHealth
                 || native.DropTargetId is { } drop && belts.Contains(drop)));
 
         bool Own(JsonElement data) => data.GetProperty("force").GetString() == force && data.GetProperty("surfaceIndex").GetInt32() == surface;
-        bool Arm(string id, string pickup, string drop, string? chest, int? maximum)
+        bool Arm(string id, string pickup, string drop, string? chest, int? maximum, string comparator = "<")
         {
             if (!records.TryGetValue(id, out var data) || !Own(data) || data.GetProperty("type").GetString() != "inserter"
                 || !data.TryGetProperty("power", out var power) || !power.TryGetProperty("networkId", out var network)
                 || network.ValueKind != JsonValueKind.Number || FactoryPower.IsFed(snapshot, id) != true) return false;
             var native = Facts(data);
             return native?.PickupTargetId == pickup && native.DropTargetId == drop
-                && FactoryTransportControl.Matches(native.InserterControl, bus.Item, chest, maximum);
+                && FactoryTransportControl.Matches(native.InserterControl, bus.Item, chest, maximum, comparator);
         }
     }
 

@@ -60,13 +60,14 @@ public sealed class FactoryRegistryTests : IDisposable
     public async Task TransportEndpointsAndPausedStockLimitsSurviveARegistryReload()
     {
         var registry = new FactoryRegistry(directory);
-        var bus = new FactoryTransportBus("bus", "producer", "iron-gear-wheel", "line", [new("consumer", "target-inserter-0", 30, true)]);
+        var bus = new FactoryTransportBus("bus", "producer", "iron-gear-wheel", "line", [new("consumer", "target-inserter-0", 30, true)], ActorReserve: 25);
         await registry.SaveAsync(new FactoryState(1, "world", [], []).With(bus), default);
         var reloaded = await registry.LoadAsync("world", default);
         var saved = Assert.Single(reloaded.Transports!);
         Assert.Equal(bus.SourceCellId, saved.SourceCellId);
         Assert.Equal(bus.CellId, saved.CellId);
         Assert.Equal(bus.Consumers[0], Assert.Single(saved.Consumers));
+        Assert.Equal(25, saved.ActorReserve);
     }
 
     [Fact]

@@ -111,6 +111,68 @@ public sealed class FactoryTransportQualification(RuntimeSession session)
                 evidence.Add(new { check = "native-production-without-actor-intermediate-transfers", native = counters.RootElement.Clone() });
             }
             finally { foreach (var row in rows) row.Dispose(); }
+            // A third, unconnected consumer must share scarce source output with the native bus. No gears are injected.
+            using var sharingKit = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync("""
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and #game.connected_players==0); for name,count in pairs{['assembling-machine-1']=1,inserter=3,['iron-chest']=2,['small-electric-pole']=3,['iron-plate']=80} do assert(c.insert{name=name,count=count}==count) end; rcon.print(helpers.table_to_json{fixture='additional-sharing-consumer-equipment-and-plates',tick=game.tick})
+                """, token));
+            var actorConsumer = await builder.BuildAsync("assembler", "assembling-machine-1", "transport-belt", token);
+            state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            state = await transports.ApplyPausesAsync(state, new HashSet<string>(StringComparer.Ordinal), token);
+            snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            await transports.RepairControlsAsync(state, snapshot, catalog, controller, token);
+            long collectedForActor = 0, suppliedForActor = 0;
+            for (int attempt = 0; attempt < 4; attempt++)
+            {
+                var shared = await new FactoryLogistics(game, journal, session.Directory).ServiceAsync(5, token);
+                collectedForActor += shared.Collected.GetValueOrDefault("iron-gear-wheel");
+                suppliedForActor += shared.Supplied.GetValueOrDefault("iron-gear-wheel");
+                Require((await controller.WorkAsync("wait", new { ticks = 900 }, 1200, token: token)).Status == "completed", "Source sharing wait failed.");
+                state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+                snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+                Require(FactoryTransportHealth.Healthy(state, snapshot, state.Transports!.Single()), "Source sharing changed the native bus graph.");
+                if (FactoryLogistics.Items(snapshot, actorConsumer.Entities["output-chest"]).GetValueOrDefault("transport-belt") >= 2) break;
+            }
+            Require(collectedForActor > 0 && suppliedForActor > 0
+                && FactoryLogistics.Items(snapshot, actorConsumer.Entities["output-chest"]).GetValueOrDefault("transport-belt") >= 2,
+                "The native bus monopolized the source and starved its unconnected consumer.");
+            Require(state.Transports!.Single().ActorReserve is > 0 and <= 25, "Actor sharing must keep only a bounded quarter-stack lot.");
+            evidence.Add(new { check = "native-source-sharing-with-actor-consumer", collectedForActor, suppliedForActor,
+                bus = state.Transports!.Single(), output = FactoryLogistics.Items(snapshot, actorConsumer.Entities["output-chest"]),
+                snapshot.CollectedTick, preparation = sharingKit.RootElement.Clone() });
+            state = await transports.ApplyActorReservationsAsync(state, snapshot, new Dictionary<string, long>(),
+                new Dictionary<string, long>(), catalog, token);
+            await transports.RepairControlsAsync(state, snapshot, catalog, controller, token);
+            snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            Require(state.Transports!.Single().ActorReserve == 0 && FactoryTransportHealth.Healthy(state, snapshot, state.Transports!.Single()),
+                "An actor consumer with no remaining demand must release its source reserve through native control.");
+            evidence.Add(new { check = "native-source-reserve-release", bus = state.Transports!.Single(), snapshot.CollectedTick });
+            var sharedBus = state.Transports!.Single();
+            var sharedCell = state.Cells.Single(c => c.Id == sharedBus.CellId);
+            string sourceId = gears.Entities["output-chest"], sourceArm = sharedCell.Entities["source-inserter"];
+            using var foreign = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(
+                $"/silent-command local s=game.surfaces.nauvis; local chest; for _,e in pairs(s.find_entities_filtered{{force='factorio_agent'}}) do if e.unit_number=={sourceId} then chest=e end end; assert(chest); local p=s.find_non_colliding_position('iron-chest',chest.position,6,0.5); assert(p); local foreign=s.create_entity{{name='iron-chest',position=p,force=chest.force}}; assert(foreign); local a=chest.get_wire_connector(defines.wire_connector_id.circuit_red,true); local b=foreign.get_wire_connector(defines.wire_connector_id.circuit_red,true); assert(a.connect_to(b,true,defines.wire_origin.player)); rcon.print(helpers.table_to_json{{fixtureFault='foreign-source-wire',entityId=foreign.unit_number,tick=game.tick}})", token));
+            var rejected = await controller.WorkAsync("configure_inserter", new { entityId = sourceArm, item = sharedBus.Item,
+                chestEntityId = sourceId, maximum = 5, comparator = ">" }, 600, token: token);
+            Require(rejected.Status == "failed" && rejected.Error?.Code == "foreign_circuit", "Source reservation accepted an unrelated native circuit.");
+            using var removed = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(
+                $"/silent-command local found=0; for _,e in pairs(game.surfaces.nauvis.find_entities_filtered{{force='factorio_agent'}}) do if e.unit_number=={foreign.RootElement.GetProperty("entityId").GetInt64()} then e.destroy(); found=found+1 end end; assert(found==1); rcon.print(helpers.table_to_json{{fixtureFault='foreign-wire-removed',tick=game.tick}})", token));
+            snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            Require(FactoryTransportHealth.Healthy(state, snapshot, sharedBus), "Rejected source configuration mutated its previous native control.");
+            evidence.Add(new { check = "native-foreign-source-circuit-rejected", rejected, preparation = foreign.RootElement.Clone() });
+            state = await transports.ApplyActorReservationsAsync(state, snapshot, new Dictionary<string, long> { [sharedBus.Item] = 5 },
+                new Dictionary<string, long>(), catalog, token);
+            await transports.RepairControlsAsync(state, snapshot, catalog, controller, token);
+            using var sourceFault = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(
+                $"/silent-command local found=0; for _,e in pairs(game.surfaces.nauvis.find_entities_filtered{{force='factorio_agent'}}) do if e.unit_number=={sourceArm} then e.destroy(); found=found+1 end end; assert(found==1); rcon.print(helpers.table_to_json{{fixtureFault='reserved-source-arm-destroyed',tick=game.tick}})", token));
+            var sourceRepair = await new FactoryMaintenance(game, journal, session.Directory).RunAsync(controller, catalog, token);
+            state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            await transports.RepairControlsAsync(state, snapshot, catalog, controller, token);
+            snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            Require(sourceRepair.Rebuilt.Count == 1 && state.Transports!.Single().ActorReserve == 5
+                && FactoryTransportHealth.Healthy(state, snapshot, state.Transports!.Single()), "Source reconstruction lost its persisted actor reserve.");
+            evidence.Add(new { check = "native-reserved-source-reconstruction", sourceRepair, bus = state.Transports!.Single(),
+                snapshot.CollectedTick, preparation = sourceFault.RootElement.Clone() });
             passed = true;
             return path;
 

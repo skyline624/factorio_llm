@@ -86,8 +86,6 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         if (state.Transports is { Count: > 0 }) snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
         var connected = FactoryTransportHealth.Connected(state, snapshot);
-        var busSources = (state.Transports ?? []).Where(b => FactoryTransportHealth.Healthy(state, snapshot, b))
-            .Select(b => (Chest: state.Cells.Single(c => c.Id == b.SourceCellId).Entities["output-chest"], b.Item)).ToHashSet();
 
         // The bag carries what chests, labs and burners need plus two stacks; a full bag fails every later take.
         var needs = Refills(snapshot).GroupBy(r => r.Item).ToDictionary(g => g.Key, g => g.Sum(r => Math.Max(0, r.Target - r.Loaded)), StringComparer.Ordinal);
@@ -98,6 +96,18 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 .Sum(c => PowerFuelNeed(Items(snapshot, c.Entities["input-chest"]), Fuel, PowerChestStacks * StackSize(Fuel)));
         long Cap(string item) => CollectCap(needs.GetValueOrDefault(item), StackSize(item));
         var bag = Carried(snapshot);
+        var reserved = await transport.ApplyActorReservationsAsync(state, snapshot, needs, bag, catalog, token);
+        if (!ReferenceEquals(state, reserved))
+        {
+            state = reserved;
+            await transport.RepairControlsAsync(state, snapshot, catalog, controller, token);
+            snapshot = await snapshots.CaptureAsync(cancellationToken: token);
+            Require(snapshot.Scope, catalog);
+            connected = FactoryTransportHealth.Connected(state, snapshot);
+            bag = Carried(snapshot);
+        }
+        var busSources = (state.Transports ?? []).Where(b => FactoryTransportHealth.Healthy(state, snapshot, b))
+            .Select(b => (Chest: state.Cells.Single(c => c.Id == b.SourceCellId).Entities["output-chest"], b.Item)).ToHashSet();
         if (FreeSlots(snapshot) < MinimumFreeSlots)
             foreach (var (item, surplus) in Surplus(bag, Cap, StackSize))
             {

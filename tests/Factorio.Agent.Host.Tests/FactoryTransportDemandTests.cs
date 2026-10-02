@@ -7,6 +7,15 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class FactoryTransportDemandTests
 {
     [Theory]
+    [InlineData(100, 0, 100, 25)]
+    [InlineData(10, 4, 100, 6)]
+    [InlineData(10, 10, 100, 0)]
+    [InlineData(0, 0, 100, 0)]
+    [InlineData(100, 0, 1, 1)]
+    public void SourceReserveLeavesABoundedLotForConsumersStillServedByTheActor(long needed, long carried, int stackSize, int expected) =>
+        Assert.Equal(expected, FactoryTransportBuilder.ActorReserve(needed, carried, stackSize));
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task AStockedConsumerDoesNotStartTransportProcurementOrMovement(bool changedActor)

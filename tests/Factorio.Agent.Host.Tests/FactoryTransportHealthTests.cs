@@ -68,6 +68,28 @@ public sealed class FactoryTransportHealthTests
         Assert.True(FactoryTransportHealth.Healthy(state, snapshot, bus));
     }
 
+    [Theory]
+    [InlineData("healthy", true)]
+    [InlineData("wrong-comparison", false)]
+    [InlineData("wrong-reserve", false)]
+    [InlineData("foreign-source-wire", false)]
+    [InlineData("missing-source-wire", false)]
+    public void ActorReserveRequiresNativeSourceStockControl(string fault, bool healthy)
+    {
+        var (state, snapshot, bus) = Fixture();
+        bus = bus with { ActorReserve = 25 };
+        state = state.With(bus);
+        snapshot = snapshot with { Records = snapshot.Records.Select(r => r.EntityId == "source-chest"
+            ? Change(r, "transport.redNeighbours", fault == "foreign-source-wire" ? new[] { "extractor", "foreign" } : new[] { "extractor" },
+                "transport.redNeighbourCount", fault == "foreign-source-wire" ? 2 : 1)
+            : r.EntityId == "extractor" ? Change(r, "transport.inserterControl.circuitEnabled", true,
+                "transport.inserterControl.circuitItem", "gear", "transport.inserterControl.comparator", fault == "wrong-comparison" ? "<" : ">",
+                "transport.inserterControl.maximum", fault == "wrong-reserve" ? 0 : 25,
+                "transport.inserterControl.redNeighbours", fault == "missing-source-wire" ? Array.Empty<string>() : new[] { "source-chest" },
+                "transport.inserterControl.redNeighbourCount", fault == "missing-source-wire" ? 0 : 1) : r).ToArray() };
+        Assert.Equal(healthy, FactoryTransportHealth.Healthy(state, snapshot, bus));
+    }
+
     private static (FactoryState State, FactorySnapshot Snapshot, FactoryTransportBus Bus) Fixture()
     {
         var source = new FactoryCell("source", 1, new(0, 0, true), "assembler", "assembler", "gear",

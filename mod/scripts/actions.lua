@@ -303,10 +303,12 @@ starts.configure_inserter = function(r, c, args)
   U.check(prototypes.item[item] ~= nil, "unknown_item", "Unknown inserter filter item")
   local chest, connector, other
   local maximum
+  local comparator = args.comparator == nil and "<" or U.string(args.comparator, "comparator")
+  U.check(comparator == "<" or comparator == ">", "invalid_arguments", "Stock comparison must be < or >")
   if args.chestEntityId ~= nil then
     chest = target(c, {entityId = args.chestEntityId}, true)
     U.check(chest.type == "container" and chest.force == entity.force and chest.surface == entity.surface,
-      "unsupported_endpoint", "The controlled destination must be an own container")
+      "unsupported_endpoint", "The controlled stock must be in an own container")
     maximum = U.number(args.maximum, "maximum", 0, 10000, nil, true)
     connector = entity.get_wire_connector(defines.wire_connector_id.circuit_red, true)
     other = chest.get_wire_connector(defines.wire_connector_id.circuit_red, true)
@@ -314,8 +316,14 @@ starts.configure_inserter = function(r, c, args)
     for _, connection in pairs(connector.connections) do
       U.check(connection.target == other, "foreign_circuit", "Inserter already reads another circuit endpoint")
     end
+    if comparator == ">" then
+      for _, connection in pairs(other.connections) do
+        U.check(connection.target == connector, "foreign_circuit", "A reserved source chest cannot read another circuit endpoint")
+      end
+    end
   else
     U.check(args.maximum == nil, "invalid_arguments", "A stock limit requires its destination chest")
+    U.check(comparator == "<", "invalid_arguments", "A source reserve requires its stock chest")
     local existing = entity.get_wire_connector(defines.wire_connector_id.circuit_red, false)
     U.check(not existing or #existing.connections == 0, "foreign_circuit", "An extractor cannot retain a circuit connection")
   end
@@ -326,12 +334,13 @@ starts.configure_inserter = function(r, c, args)
       U.check(connector.connect_to(other, true, defines.wire_origin.player), "wire_connection_rejected", "Engine refused the native circuit wire")
     end
     chest.get_or_create_control_behavior()
-    control.circuit_condition = {first_signal = {type = "item", name = item, quality = "normal"}, comparator = "<", constant = maximum}
+    control.circuit_condition = {first_signal = {type = "item", name = item, quality = "normal"}, comparator = comparator, constant = maximum}
     control.circuit_enable_disable = true
   end
   entity.active = true -- Filter, destination wire and stock condition are already applied in this same native action.
   r.receipt.effects.targetId, r.receipt.effects.item = U.entity_id(entity), item
   r.receipt.effects.chestEntityId, r.receipt.effects.maximum = chest and U.entity_id(chest), maximum
+  r.receipt.effects.comparator = comparator
   return "completed"
 end
 

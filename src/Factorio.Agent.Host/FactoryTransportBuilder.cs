@@ -163,6 +163,27 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         return state;
     }
 
+    /// <summary>Keep one bounded actor lot in each healthy bus source when other, unconnected consumers lack its item.</summary>
+    public async Task<FactoryState> ApplyActorReservationsAsync(FactoryState state, FactorySnapshot snapshot,
+        IReadOnlyDictionary<string, long> needs, IReadOnlyDictionary<string, long> carried, ProductionCatalog catalog, CancellationToken token)
+    {
+        bool changed = false;
+        foreach (var bus in state.Transports ?? [])
+        {
+            if (!FactoryTransportHealth.Healthy(state, snapshot, bus)) continue;
+            int reserve = ActorReserve(needs.GetValueOrDefault(bus.Item), carried.GetValueOrDefault(bus.Item), catalog.Items[bus.Item].StackSize);
+            if (bus.ActorReserve == reserve || bus.ActorReserve is null && reserve == 0) continue;
+            state = state.With(bus with { ActorReserve = reserve });
+            changed = true;
+            await journal.AppendAsync("factory-transport-actor-reserve", new { bus.Id, bus.Item, reserve, snapshot.CollectedTick }, token);
+        }
+        if (changed) await new FactoryRegistry(directory).SaveAsync(state, token);
+        return state;
+    }
+
+    internal static int ActorReserve(long needed, long carried, int stackSize) =>
+        checked((int)Math.Min(Math.Max(0, needed - carried), Math.Clamp(stackSize / 4, 1, 10000)));
+
     private async Task FinishAsync(FactoryTransportBus bus, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -222,7 +243,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         }
         var sourceSnapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         await controller.ApproachEntityAsync(cell.Entities["source-inserter"], Position(sourceSnapshot, cell.Entities["source-inserter"])!, catalog, token);
-        await control.EnsureAsync(cell.Entities["source-inserter"], bus.Item, catalog, controller, token);
+        await control.EnsureAsync(cell.Entities["source-inserter"], bus.Item, catalog, controller, token,
+            bus.ActorReserve is null ? null : state.Cells.Single(c => c.Id == bus.SourceCellId).Entities["output-chest"],
+            bus.ActorReserve, bus.ActorReserve is null ? "<" : ">");
     }
 
     private async Task OrientAsync(string id, int direction, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
