@@ -43,6 +43,10 @@ La question `proposal_sound` est peu discriminante : 47 propositions sur 59 jug�
 
 **Conclusion provisoire** : utile comme second avis consigné, mais pas meilleur que GLM pour choisir. L'usage reste consultatif. Tout usage décisionnel exigerait de battre nettement une heuristique C# sur un jeu étiqueté par l'utilisateur, sans dégrader la survie.
 
+## Mesures pendant la campagne headless du 2 octobre 2026
+
+Sur la partie normale de graine 20261017, sept verdicts Nimble ont été journalisés, toujours en ombre : cinq concordent avec la proposition GPT, deux divergent. Les durées mesurées vont de 2,241 à 16,866 secondes pour Nimble et de 5,447 à 12,762 secondes pour GPT-6.1 Sol. Nimble n'est donc pas constamment plus rapide dans cet échantillon sur ce poste. Ces sept observations ne suffisent pas à établir la qualité relative des décisions, et aucun verdict Nimble n'a atteint l'exécuteur. Le [bilan du run](factory.md#campagne-normale-headless-du-2-octobre-2026) distingue les recherches acquises de l'usine encore inachevée ; les journaux restent privés.
+
 ## Commandes
 
 ```powershell

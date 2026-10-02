@@ -98,6 +98,16 @@ Sur Factorio 2.0.77, graine 20261016, cinq vérifications préparées ont réuss
 
 La préparation de recherche remet maintenant explicitement `electric-mining-drill` à l'état non recherché avant de la sélectionner comme recherche antérieure. La fixture de ressources peut déjà l'avoir débloquée : sans cette remise à l'état déclaré, la préparation échouait avant le contrôleur. Ce changement reste réservé à la fixture et ne modifie aucune campagne normale. Les deux échecs initiaux des fixtures, les rapports réussis et le récapitulatif `headless-suite-result.json` sont conservés dans `.runtime/fixture-20261002-143311-3e9d38b9/`, hors Git. Les 1 116 tests ordinaires réussissent également après ces corrections.
 
+### Campagne normale headless du 2 octobre 2026
+
+Sur la graine 20261017, Factorio 2.0.77 et le code `bff981f`, GPT-6.1 Sol a piloté une partie vierge pendant 45 minutes via `codex-chatgpt`. Aucun client n'était connecté ; pollution, évolution et expansion ennemies étaient actives. Les recherches `steam-power`, `electronics`, `automation-science-pack` et `automation` sont achevées. Une pompe, une chaudière et un moteur ont établi une production électrique mesurée avec un consommateur alimenté ; le laboratoire a achevé `automation` au tick 118506.
+
+Le kit groupé a ensuite été exécuté en partie normale : 17 plaques de fer et 5 pierres réunies, puis une foreuse thermique et un coffre en fer simultanément présents dans le sac au tick 132016. La cellule à charbon est enregistrée `ready` au tick 133952, avec ses deux entités encore présentes au contrôle final. Ce statut prouve ici la construction : aucun transfert de combustible vers cette nouvelle foreuse n'a été journalisé, son inventaire de combustible et son coffre sont vides au tick 157060. Sa production n'est donc pas établie. Aucune chaîne d'assembleuses productive ni recherche de la foreuse électrique achevée n'est constatée.
+
+L'amorçage reste coûteux : la première installation vapeur prépare encore les équipements successivement, et une demande de 50 charbons pour l'approvisionnement reste inachevée à l'échéance. Les soumissions de minage manuel portent sur 29 pierres, 9 minerais de fer et 6 charbons pour l'amorçage ; les lots de plaques et les extractions stockées utilisent ensuite les machines. Une foreuse à charbon épuisée est récupérée au tick 142545, après la construction d'une autre foreuse près du même coffre. Le délai de cette récupération et l'alimentation des nouvelles cellules restent à améliorer ; aucun gain global de durée n'est démontré.
+
+Un objectif a échoué parce que le lecteur de suivi ouvrait le journal sans autoriser l'écriture concurrente sous Windows. Le suivi a été corrigé avec un partage en lecture/écriture ; le contrôleur a poursuivi de lui-même. Cet incident est conservé dans le bilan et interdit de présenter l'essai comme entièrement sans perturbation. À l'arrêt : personnage vivant, santé 250, zéro mort et zéro intervention humaine selon le compteur natif, réconciliation réussie, aucune opération en attente, sauvegarde écrite et serveur arrêté. Les preuves privées sont dans `.runtime/campaign-20261002-150542-f89aec6e/`, notamment `headless-normal-result.json`. Cette campagne ne constitue pas une qualification jusqu'à la fusée.
+
 ## Modules intégrés depuis
 
 | Module | Document | Qualification réelle (fixture) |
