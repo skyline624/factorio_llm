@@ -12,6 +12,8 @@ Une photographie de toute l'usine propre connue fournit les connexions natives d
 
 `FactoryLogistics` laisse aux tapis les ingrédients dont la liaison est saine. Elle ne collecte pas l'intermédiaire dans le coffre source quand aucun consommateur encore desservi par l'avatar ne le demande. Les consommateurs sans liaison saine conservent les transferts par l'avatar. L'approvisionnement des autres ingrédients, du combustible et des laboratoires continue selon les priorités existantes.
 
+La construction utilise la même règle de pause que la logistique : un producteur dont le stock disponible a atteint son plafond ne reçoit pas de nouvelle liaison d'entrée. La photographie de demande doit appartenir au même acteur. Les stocks déjà engagés dans les laboratoires ou les entrées des machines ne sont pas comptés comme des sorties disponibles. Les chantiers enregistrés auparavant sont terminés avant cette sélection, pour conserver les plans encore valides.
+
 Cette vérification structurelle ne reprend pas le bilan d'un lot fini de la commande [`transport`](belt-transport.md). Le producteur et les consommateurs continuent à fabriquer. La preuve de production demande des sorties et des compteurs natifs constatés dans le jeu.
 
 ## Essai préparé headless

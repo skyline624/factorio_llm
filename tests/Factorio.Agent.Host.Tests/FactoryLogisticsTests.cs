@@ -76,6 +76,24 @@ public sealed class FactoryLogisticsTests
     }
 
     [Fact]
+    public void PermanentInputLinksShareProducerPausePolicyAndExcludeCommittedScience()
+    {
+        var catalog = Catalogs.Early();
+        FactoryCell[] cells = [Assembler("red", "automation-science-pack"), Assembler("gears", "iron-gear-wheel")];
+        var caps = new Dictionary<string, long> { ["automation-science-pack"] = 240, ["iron-gear-wheel"] = 120 };
+        var snapshot = new FactorySnapshot("s", Scope, 100, 200, Protocol.ToElement(new { }),
+            [new("lab", "inventory", "lab", "lab_input", Protocol.ToElement(new { items = new Dictionary<string, long> { ["automation-science-pack"] = 200 } })),
+             new("bag", "inventory", "actor", "character_main", Protocol.ToElement(new { items = new Dictionary<string, long>
+                { ["automation-science-pack"] = 54, ["iron-gear-wheel"] = 3 } }))]);
+        var available = FactoryLogistics.AvailableStock(snapshot);
+        Assert.Equal(54, available["automation-science-pack"]);
+        Assert.Empty(FactoryLogistics.PausedCells(cells, catalog, caps, available));
+        available["automation-science-pack"] = 240;
+        Assert.Equal("red", Assert.Single(FactoryLogistics.PausedCells(cells, catalog, caps, available)).Cell.Id);
+        Assert.Empty(FactoryLogistics.PausedCells(cells, catalog, null, available));
+    }
+
+    [Fact]
     public void ProducersPauseOnceTheirProductHoldsTwentyMinutesOfItsPlannedRate()
     {
         // Campaign 2026-09-30 (seed 20261002): unregulated cells piled up 1338 red packs, 509 magazines and 445 belts, about

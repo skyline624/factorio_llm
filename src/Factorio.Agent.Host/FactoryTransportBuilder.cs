@@ -25,8 +25,14 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         }
         state = await registry.LoadAsync(catalog.Scope.WorldId, token);
         var shares = FactoryLogistics.CellShares(catalog, state);
+        var stockSnapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        if (stockSnapshot.Scope != catalog.Scope) throw new InvalidDataException("Transport demand photograph belongs to another actor scope.");
+        var pausedCells = FactoryLogistics.PausedCells(state.Cells.Where(c => c.Status == "ready"), catalog,
+            FactoryLogistics.StockCaps(catalog, state), FactoryLogistics.AvailableStock(stockSnapshot))
+            .Select(p => p.Cell.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var target in state.Cells.Where(c => c.Status == "ready" && c.Recipe is not null && c.Entities.ContainsKey("input-chest")))
         {
+            if (pausedCells.Contains(target.Id)) continue;
             var recipe = catalog.Recipes.FirstOrDefault(r => r.Name == target.Recipe);
             if (recipe is null) continue;
             foreach (var ingredient in recipe.Ingredients.Where(i => i.DeterministicItem))

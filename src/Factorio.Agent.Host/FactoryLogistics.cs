@@ -74,10 +74,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         // Demand pulls production: a producer whose product already holds enough stock is not refilled and drains to a stop.
         var caps = StockCaps(catalog, state);
         var stocks = AvailableStock(snapshot);
-        var paused = cells.Where(c => c.Kind is "assembler" or FurnaceCellPlanner.Kind or FluidCellBuilder.MachineKind && c.Recipe is not null)
-            .Where(c => catalog.Recipes.Single(r => r.Name == c.Recipe).Products[0].DeterministicItem)
-            .Select(c => (Cell: c, Product: catalog.Recipes.Single(r => r.Name == c.Recipe).Products[0].Name))
-            .Where(p => Paused(caps, p.Product, stocks.GetValueOrDefault(p.Product))).ToArray();
+        var paused = PausedCells(cells, catalog, caps, stocks);
         if (paused.Length > 0)
             await journal.AppendAsync("factory-cells-paused", paused.Select(p => new { p.Cell.Id, p.Cell.Recipe, p.Product,
                 stock = stocks.GetValueOrDefault(p.Product), cap = caps!.GetValueOrDefault(p.Product, UnplannedStock) }), token);
@@ -410,6 +407,15 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// </summary>
     internal static bool Paused(IReadOnlyDictionary<string, long>? caps, string product, long stock) =>
         caps is not null && stock >= (caps.TryGetValue(product, out long cap) ? Math.Max(1, cap) : UnplannedStock);
+
+    /// <summary>Native stock demand used both by actor logistics and by construction of permanent input links.</summary>
+    internal static (FactoryCell Cell, string Product)[] PausedCells(IEnumerable<FactoryCell> cells, ProductionCatalog catalog,
+        IReadOnlyDictionary<string, long>? caps, IReadOnlyDictionary<string, long> stocks) => cells
+        .Where(c => c.Kind is "assembler" or FurnaceCellPlanner.Kind or FluidCellBuilder.MachineKind && c.Recipe is not null)
+        .Select(c => (Cell: c, Recipe: catalog.Recipes.Single(r => r.Name == c.Recipe)))
+        .Where(p => p.Recipe.Products[0].DeterministicItem)
+        .Select(p => (p.Cell, Product: p.Recipe.Products[0].Name))
+        .Where(p => Paused(caps, p.Product, stocks.GetValueOrDefault(p.Product))).ToArray();
 
     /// <summary>
     /// Crafts an input chest holds: ten minutes of the cell's planned share within [minimum, maximum], the minimum for a
