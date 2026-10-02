@@ -143,7 +143,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         foreach (var bus in state.Transports ?? [])
         {
             var cell = state.Cells.Single(c => c.Id == bus.CellId);
-            if (cell.Status != "ready" || cell.Entities.Values.Any(id => Position(snapshot, id) is null)
+            if (cell.Status != "ready" || state.Cells.SingleOrDefault(c => c.Id == bus.SourceCellId)?.Status != "ready"
+                || bus.Consumers.Any(p => state.Cells.SingleOrDefault(c => c.Id == p.TargetCellId)?.Status != "ready")
+                || cell.Entities.Values.Any(id => Position(snapshot, id) is null)
                 || FactoryTransportHealth.Healthy(state, snapshot, bus)) continue;
             await ConfigureAsync(bus, state, catalog, controller, token);
         }

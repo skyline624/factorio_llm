@@ -1,12 +1,44 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Factorio.Agent.Core;
+using Factorio.Agent.Infrastructure;
 using Xunit;
 
 namespace Factorio.Agent.Host.Tests;
 
 public sealed class FactoryTransportHealthTests
 {
+    [Theory]
+    [InlineData("source", "depleted")]
+    [InlineData("first", "building")]
+    public async Task InactiveEndpointsDoNotTriggerRepeatedControlRepairTrips(string endpoint, string status)
+    {
+        var (state, snapshot, bus) = Fixture();
+        state = state.With(state.Cells.Single(c => c.Id == endpoint) with { Status = status });
+        Assert.False(FactoryTransportHealth.Healthy(state, snapshot, bus));
+        var game = new NoCallsGame();
+        string directory = Directory.CreateTempSubdirectory("inactive-bus-").FullName;
+        try
+        {
+            var journal = new ControllerJournal(Path.Combine(directory, "journal.jsonl"));
+            await using var controller = new SpatialController(game, journal);
+            await new FactoryTransportBuilder(game, journal, directory).RepairControlsAsync(state, snapshot,
+                Catalogs.Early() with { Scope = snapshot.Scope }, controller, default);
+            Assert.Equal(0, game.Calls);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    private sealed class NoCallsGame : IGameClient
+    {
+        public int Calls { get; private set; }
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            throw new InvalidOperationException("An inactive bus must not initiate observation, travel or control mutations.");
+        }
+    }
+
     [Fact]
     public void KnownFactoryGraphFeedsTwoConsumersAndSurvivesEndpointIdentityReplacement()
     {

@@ -445,21 +445,41 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             ? BufferCrafts(shares, cell.Recipe!, bufferCrafts) : bufferCrafts;
 
     /// <summary>
-    /// Splits a carried item among input chests: every chest first reaches a quarter of its target, then chests are filled
-    /// in order. On 2026-09-30 (seed 20261002) registry-order refills gave every gear to the first consumers and left the
-    /// inserter cell empty for two hours.
+    /// Shares scarce ingredients by the fraction of each planned buffer already loaded, so supply follows the planned
+    /// consumption rates. Registry-order surplus after a quarter fill still biased gears toward belts over inserters.
     /// </summary>
     internal static long[] PlanShares(IReadOnlyList<(long Loaded, long Target)> chests, long available)
     {
         var plan = new long[chests.Count];
-        foreach (bool quarter in new[] { true, false })
-            for (int index = 0; index < chests.Count && available > 0; index++)
-            {
-                long goal = quarter ? chests[index].Target / 4 : chests[index].Target;
-                long give = Math.Min(available, Math.Max(0, goal - chests[index].Loaded - plan[index]));
-                plan[index] += give;
-                available -= give;
-            }
+        if (available <= 0) return plan;
+        var wanting = Enumerable.Range(0, chests.Count).Where(i => chests[i].Target > chests[i].Loaded)
+            .OrderBy(i => (decimal)chests[i].Loaded / chests[i].Target).ToArray();
+        if (wanting.Length == 0) return plan;
+        decimal weight = 0, loaded = 0, level = 0;
+        // Raise the least full buffers together until the next buffer joins, or the available stock runs out.
+        for (int index = 0; index < wanting.Length; index++)
+        {
+            var chest = chests[wanting[index]];
+            weight += chest.Target;
+            loaded += chest.Loaded;
+            level = Math.Min(1, (available + loaded) / weight);
+            if (index + 1 == wanting.Length || level <= (decimal)chests[wanting[index + 1]].Loaded / chests[wanting[index + 1]].Target) break;
+        }
+        foreach (int index in wanting)
+        {
+            long give = Math.Min(available, Math.Max(0, (long)decimal.Floor(chests[index].Target * level) - chests[index].Loaded));
+            plan[index] = give;
+            available -= give;
+        }
+        // Integer rounding leaves fewer than one item per buffer; choose the lowest resulting fill fraction.
+        while (available > 0)
+        {
+            int index = wanting.Where(i => plan[i] < chests[i].Target - chests[i].Loaded)
+                .OrderBy(i => (chests[i].Loaded + (decimal)plan[i] + 1) / chests[i].Target).FirstOrDefault(-1);
+            if (index < 0) break;
+            plan[index]++;
+            available--;
+        }
         return plan;
     }
 

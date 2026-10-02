@@ -16,6 +16,10 @@ Quand des consommateurs sans liaison manquent du même article, C# réserve au c
 
 La construction utilise la même règle de pause que la logistique : un producteur dont le stock disponible a atteint son plafond ne reçoit pas de nouvelle liaison d'entrée. La photographie de demande doit appartenir au même acteur. Les stocks déjà engagés dans les laboratoires ou les entrées des machines ne sont pas comptés comme des sorties disponibles. Les chantiers enregistrés auparavant sont terminés avant cette sélection, pour conserver les plans encore valides.
 
+Pour les entrées encore desservies par l'avatar, un lot insuffisant remplit les tampons selon leur fraction déjà chargée et les consommations calculées par le plan. Les tampons les moins remplis montent ensemble ; les objets restants après arrondi vont au tampon dont la fraction après insertion est la plus faible. Le surplus ne remplit plus les premiers coffres selon l'ordre du registre. Pour quatre packs verts par minute, les tapis demandent vingt engrenages de tampon, les bras quarante : une fabrication de tapis en produit deux. Un lot de vingt-cinq engrenages se répartit en huit pour les tapis et dix-sept pour les bras, permettant seize packs verts si les autres ingrédients et l'alimentation sont disponibles.
+
+Une liaison dont la source est épuisée ou dont un destinataire est encore en construction reste invalide pour l'approvisionnement automatique. La remise en configuration ne déclenche pas de déplacement vers ces extrémités inactives. La collecte des sorties encore présentes et l'approvisionnement par l'avatar restent disponibles ; le remplacement de la source du bus n'est pas encore automatique.
+
 Cette vérification structurelle ne reprend pas le bilan d'un lot fini de la commande [`transport`](belt-transport.md). Le producteur et les consommateurs continuent à fabriquer. La preuve de production demande des sorties et des compteurs natifs constatés dans le jeu.
 
 ## Essai préparé headless
@@ -27,6 +31,18 @@ dotnet $hostDll stop --session $sessionFile
 ```
 
 Le scénario fournit explicitement énergie, recherches, équipements de construction et plaques de fer/cuivre. Aucun engrenage ni pack scientifique n'est fourni. C# construit un atelier d'engrenages et deux ateliers de science rouge, prolonge la première liaison vers le second consommateur, puis vérifie les sorties. Un passage de la logistique générale doit laisser le transport des engrenages aux tapis.
+
+Une qualification distincte vérifie la répartition d'un lot limité :
+
+```powershell
+dotnet $hostDll start --fixture --seed 20261043
+dotnet $hostDll verify-factory-logistics --session $sessionFile
+dotnet $hostDll stop --session $sessionFile
+```
+
+Ce scénario fournit explicitement les recherches, l'énergie, trois assembleuses et leurs équipements, vingt-cinq engrenages, vingt-cinq circuits et cinquante plaques de fer. Les six bras fournis sont tous placés dans les cellules ; aucun tapis ni pack vert n'est fourni. C# construit les ateliers de tapis, de bras et de science verte, puis utilise deux passages de la logistique habituelle. Le rapport demande les transferts de huit et dix-sept engrenages, les compteurs natifs de huit et dix-sept fabrications intermédiaires, seize tapis et dix-sept bras dans leurs sorties, puis seize packs verts réellement fabriqués. Il vérifie aussi le même personnage, aucun pilote connecté et aucune fabrication ou extraction manuelle. Cette préparation ne prouve pas la fabrication autonome des engrenages ou des circuits.
+
+Le scénario de graine **20261043** réussit dans Factorio **2.0.77 headless** : les sorties de seize tapis et dix-sept bras sont constatées au tick **6218**, puis seize packs verts dans le coffre au tick **18304**. Le compteur de production de la force confirme les seize packs au tick **18306**. Le monde est sauvegardé et arrêté. Les **1 202 tests hors ligne** passent : 1 057 pour l'agent, 108 pour les transports de modèles et 37 pour l'infrastructure ; un test cloud facultatif est ignoré.
 
 Le scénario suspend ensuite explicitement les deux machines destinataires pour constater la limite de leurs coffres, détruit un tapis et un receveur pour qualifier la maintenance, puis vérifie la condition de pause sur demande. Ces manipulations sont des fautes préparées de fixture ; elles ne sont jamais exécutées dans une partie normale. Le rapport privé distingue ces preuves d'une campagne autonome.
 
@@ -41,6 +57,10 @@ Les essais préparés précédents ont corrigé un champ d'observation des coffr
 Les **1 186 tests hors ligne** passent : 1 041 pour l'agent, 108 pour les transports de modèles et 37 pour l'infrastructure ; un test cloud facultatif est ignoré. Le scénario préparé ne qualifie ni une campagne normale ni un lancement de fusée.
 
 Les graines **20261040 et 20261041** qualifient ensuite le partage de la source dans Factorio **2.0.77 headless**. Dans chaque scénario, la logistique transmet cinq engrenages produits par l'atelier existant au consommateur sans liaison ; son coffre reçoit dix tapis fabriqués. La réserve native vaut cinq puis revient à zéro. Dans la graine 20261041, le partage est constaté au tick **20848**, la libération au tick **21446**. Une connexion étrangère préparée est rejetée avec `foreign_circuit` au tick **21465**, sans modifier le contrôle précédent. La reconstruction de l'extracteur détruit conserve la réserve de cinq et le graphe valide au tick **22739**. Les deux mondes sont sauvegardés et arrêtés. Les **1 199 tests hors ligne** passent alors : 1 054 pour l'agent, 108 pour les transports de modèles et 37 pour l'infrastructure ; le test cloud facultatif reste ignoré.
+
+## Progression normale constatée
+
+Le 2 octobre 2026, le monde de développement de graine **20261019**, avec ennemis actifs et `gpt-6.1-sol` via `codex-chatgpt`, produit ses packs verts dans les cellules persistantes. Au tick **859372**, les compteurs natifs des assembleuses constatent **77 fabrications de tapis**, **99 fabrications de bras** et **60 packs verts**, depuis des compteurs initialement nuls. Au tick **863077**, `research_state` confirme **`automation-2` recherchée** et quarante packs verts consommés par les laboratoires. Aucun pack ni recherche n'est injecté dans ce monde ; aucun pilote n'est connecté. Le monde est conservé à travers les mises à jour de développement. Cette preuve de production et de recherche n'est pas une campagne finale sans assistance ni une preuve de fusée.
 
 ## Limites
 
