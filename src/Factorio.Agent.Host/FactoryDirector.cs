@@ -101,9 +101,14 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             ?? throw new InvalidOperationException($"{item} is neither mined nor smelted from a single ore.");
         var registry = new FactoryRegistry(directory);
         var builder = new ResourceCellBuilder(game, journal, directory);
+        await using var startupController = new SpatialController(game, journal);
         for (int built = 0; ; built++)
         {
-            var (cells, current) = RawCapacity(await registry.LoadAsync(catalog.Scope.WorldId, token), item);
+            var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            if (item == FactoryLogistics.Fuel)
+                foreach (var producer in state.Cells.Where(c => c.Kind == "miner" && c.Recipe == item && c.Status == "ready"))
+                    await new CoalProducerStartup(game, journal).StartAsync(producer, catalog, startupController, token);
+            var (cells, current) = RawCapacity(state, item);
             if (current >= perMinute - 1e-9 || built >= maximumNewCells)
             {
                 var capacity = new RawCellCapacity(item, supply.Kind, cells, current, built);

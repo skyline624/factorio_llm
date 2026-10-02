@@ -26,12 +26,14 @@ public sealed class SteamPowerController(IGameClient game, IControllerJournal jo
         if (resume is null && initial.Entities.Any(e => equipment.Items.Take(3).Any(i => catalog.Items[i].PlaceEntity == e.Name)))
             throw new InvalidOperationException("A power installation already exists. Reconcile its journal before installing another one.");
         await journal.AppendAsync("steam-power-start", new { initial, equipment }, token);
+        var needed = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (string item in equipment.Items)
         {
             PlannedMachine? planned = resume?.Machines.Single(m => m.Item == item);
             if (planned is null || !initial.Entities.Any(e => e.Name == catalog.Items[item].PlaceEntity
-                && e.Position.DistanceTo(planned.Placement.Position) < 0.01)) await executor.RunAsync(item, 1, token);
+                && e.Position.DistanceTo(planned.Placement.Position) < 0.01)) needed[item] = 1;
         }
+        await CarriedStock.EnsureAsync(game, journal, catalog, needed, token);
         SpatialSnapshot map = await spatial.CaptureAsync(equipment.Items, 48, token);
         RequireScope(map.Scope);
         EntityGeometry boiler = map.Prototypes[map.Items[equipment.Boiler].EntityName];

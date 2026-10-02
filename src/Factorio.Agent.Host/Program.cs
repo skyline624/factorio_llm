@@ -38,6 +38,7 @@ try
           factory-logistics --session FILE [--quantity CRAFTS]
           verify-factory-cells|verify-factory-research|verify-resource-cells|verify-power-expansion --session FILE
           verify-factory-cells --session FILE --from-materials
+          verify-resource-cells --session FILE [--burner]
           verify-furnace-bands --session FILE
           resource-cells --session FILE --item NAME --quantity PER_MINUTE
           power-expand --session FILE
@@ -153,7 +154,7 @@ try
         case "verify-resource-cells":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
-            Print(new { report = await new ResourceCellQualification(session).RunAsync(shutdown.Token) });
+            Print(new { report = await new ResourceCellQualification(session, options.ContainsKey("burner")).RunAsync(shutdown.Token) });
             break;
         }
         case "power-expand":

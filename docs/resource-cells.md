@@ -72,6 +72,21 @@ Essai Factorio 2.0.77 headless du 30 septembre 2026, graine 7341551, sans client
 
 Le rapport indique `passed: true` et `isAutonomousCampaign: false`. `verify-factory-cells` et `verify-factory-research` ont été relancés sur le même serveur.
 
+### Amorçage des foreuses thermiques
+
+Une cellule minière à charbon démarre maintenant avant de devenir `ready` : `CoalProducerStartup` vérifie le combustible chargé et l'énergie de combustion natifs, puis charge au plus un quart de pile depuis le sac. Si le sac est vide, l'approvisionnement est borné à un charbon d'amorçage, en privilégiant la collecte existante. Une foreuse électrique ou déjà alimentée ne reçoit aucun transfert. Le périmètre du personnage et la géométrie de la cellule sont revérifiés après l'approvisionnement. Le même contrôle précède le calcul de capacité des cellules à charbon déjà prêtes lors d'une reprise.
+
+Cela supprime la dépendance circulaire observée le 2 octobre : la nouvelle mine attendait son combustible tandis que l'extension vapeur attendait 50 charbons avant de laisser la logistique la visiter. L'extraction stockée revérifie aussi les équipements épuisés après son arrivée près d'un coffre connu, avant de fabriquer leur remplacement.
+
+La variante explicite `verify-resource-cells --session FILE --burner` fournit trois foreuses thermiques et laisse leur recherche électrique verrouillée ; elle garde les gisements, l'énergie et les autres équipements préparés. Le sac commence sans charbon. Sur Factorio 2.0.77 headless, graine 20261018, le 2 octobre 2026 :
+
+| Variante | Preuve native |
+| --- | --- |
+| Thermique | Un seul charbon miné pour l'amorçage, chargé au tick 5882 avant la cellule prête au tick 5884. Après des services logistiques bornés, 14 plaques de fer collectées et 16 charbons collectés puis distribués ; les deux fours sont alimentés. Réparation du poteau détruit et retrait de la mine épuisée réussis. |
+| Électrique | Deuxième service : 37 plaques de fer et 32 charbons collectés, 32 charbons distribués ; réparation et retrait réussis, aucun minage hors dégagement des arbres. |
+
+Les deux rapports indiquent `passed: true` et `isAutonomousCampaign: false`. Ils sont conservés hors Git dans `.runtime/fixture-20261002-162936-8468845c/` : `resource-cell-qualification-5ced5c8560e649f5960d6aa1504d30b0.json` (thermique) et `resource-cell-qualification-0acbdfa459994bdc8ff87fb3163475b3.json` (électrique). Le serveur a été sauvegardé et arrêté. Les 1 129 tests ordinaires passent, sans jeu ni appel cloud ; le test cloud optionnel reste ignoré. Ces essais ne démontrent pas encore un gain de durée en campagne normale.
+
 ## Limites
 
 - Seuls les produits minés directement ou issus d'une recette de fusion à un seul minerai sont pris en charge ; l'acier reste hors de ces cellules et passe par les [bandes de fours](furnace-bands.md).
@@ -83,4 +98,4 @@ Le rapport indique `passed: true` et `isAutonomousCampaign: false`. `verify-fact
 - La demande de combustible n'est pas mesurée : elle part de 15 par minute et ne croît que par paliers quand les cellules livrent déjà leur capacité.
 - Les entités des cellules `depleted` ou `abandoned` restent en place et leur emplacement reste pris ; aucune déconstruction n'est faite. Les pièces encore debout d'une cellule rouverte ne sont pas desservies avant sa réparation.
 - La détection d'une pièce détruite repose sur le registre des entités connues du mod : entités construites par le personnage ou observées près de lui.
-- Les variantes à foreuse à combustible et la reprise après interruption sont couvertes par tests unitaires, pas par un essai natif ; la réparation d'une pièce détruite et le retrait d'une mine épuisée le sont par l'essai préparé. Le client graphique connecté n'a pas été vérifié pour ce module.
+- La reprise après interruption est couverte par tests unitaires ; les variantes électrique et thermique, la réparation d'une pièce détruite et le retrait d'une mine épuisée sont couverts par les essais préparés. Le client graphique connecté n'a pas été vérifié pour ce module.

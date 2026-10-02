@@ -12,6 +12,14 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
     private static readonly AsyncLocal<bool> Preparing = new();
     internal static bool IsPreparing => Preparing.Value;
 
+    /// <summary>Only one cold-start fuel item; ordinary raw batches remain machine production.</summary>
+    internal static async Task BootstrapFuelAsync(IGameClient game, IControllerJournal journal, string fuel, CancellationToken token)
+    {
+        bool previous = Preparing.Value; Preparing.Value = true;
+        try { await new ProductionController(game, journal).ProduceAsync(fuel, 1, token); }
+        finally { Preparing.Value = previous; }
+    }
+
     public async Task<StoredResourceExtractionResult> RunAsync(string item, int targetStock, CancellationToken token)
     {
         if (targetStock is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(targetStock));
@@ -120,6 +128,9 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
                      .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).Take(8))
             {
                 await controller.TravelAsync(known.Position, 8, catalog, token);
+                // The initial recovery pass cannot see a distant depleted drill. Recheck here before buying its replacement.
+                await new ExtractionRecoveryController(game, journal).RecoverNearbyAsync(
+                    planner.Options(catalog, (await ObserveAsync()).Inventory, item).Select(p => p.DrillItem).ToArray(), catalog, controller, token);
                 map = await MapAsync(); state = await ObserveAsync();
                 selected = await PlanAsync(state);
                 if (selected is { NewChest: null }) break;

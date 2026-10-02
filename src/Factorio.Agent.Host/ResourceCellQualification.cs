@@ -9,7 +9,7 @@ namespace Factorio.Agent.Host;
 /// and a coal miner), link poles procured from carried stock, chest logistics that refuel the cell furnaces with mined
 /// coal, the in-place repair of a destroyed cell pole and the retirement of an exhausted miner; not a campaign.
 /// </summary>
-public sealed class ResourceCellQualification(RuntimeSession session)
+public sealed class ResourceCellQualification(RuntimeSession session, bool burner = false)
 {
     public async Task<string> RunAsync(CancellationToken token)
     {
@@ -27,9 +27,13 @@ public sealed class ResourceCellQualification(RuntimeSession session)
             { reason = "Injected ores, power, research, items, trees; destroyed pole and coal. Resource cell test, not a campaign." }), token);
             Require(mark.Ok, "Fixture marker rejected.");
             // Exactly one pole per cell: every link pole must be procured from the supplied wood and cables.
-            const string prepare = """
+            string prepare = """
                 /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; for _,e in pairs(s.find_entities_filtered{area={{-48,-48},{48,48}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-48,48 do for y=-48,48 do tiles[#tiles+1]={name='grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({0,0})); c.health=c.max_health; c.get_main_inventory().clear(); for _,t in pairs{'steam-power','electronics','electric-mining-drill'} do f.technologies[t].researched=true end; for name,count in pairs{['electric-mining-drill']=3,['stone-furnace']=2,inserter=2,['iron-chest']=3,['small-electric-pole']=3,wood=10,['copper-cable']=20} do assert(c.insert{name=name,count=count}==count) end; local source=s.create_entity{name='electric-energy-interface',position={-20,0},force=f}; assert(source); source.electric_buffer_size=1000000000; source.power_production=2000000; source.energy=1000000000; assert(s.create_entity{name='small-electric-pole',position={-18.5,0.5},force=f}); for x=4,15 do for y=-6,5 do assert(s.create_entity{name='iron-ore',position={x+0.5,y+0.5},amount=5000}) end end; for x=4,11 do for y=14,21 do assert(s.create_entity{name='coal',position={x+0.5,y+0.5},amount=5000}) end end; for _,p in pairs{{6.5,1.5},{0.5,1.5},{9.5,-4.5}} do assert(s.create_entity{name='tree-01',position=p}) end; rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,coal=c.get_item_count('coal'),plates=c.get_item_count('iron-plate')})
                 """;
+            if (burner)
+                prepare = prepare.Replace("['electric-mining-drill']=3", "['burner-mining-drill']=3", StringComparison.Ordinal)
+                    .Replace("for _,t in pairs{'steam-power','electronics','electric-mining-drill'} do f.technologies[t].researched=true end",
+                        "for _,t in pairs{'steam-power','electronics'} do f.technologies[t].researched=true end; f.technologies['electric-mining-drill'].researched=false", StringComparison.Ordinal);
             using var setup = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(prepare, token));
             File.Delete(new FactoryRegistry(session.Directory).Path); // The fixture area was just emptied.
             evidence.Add(new { check = "explicit-resource-preparation", native = setup.RootElement.Clone() });
@@ -37,7 +41,7 @@ public sealed class ResourceCellQualification(RuntimeSession session)
 
             var director = new FactoryDirector(game, journal, session.Directory);
             var iron = await director.EnsureRawAsync("iron-plate", 30, token, explorationBudget: 2);
-            var coal = await director.EnsureRawAsync("coal", 20, token, explorationBudget: 2);
+            var coal = await director.EnsureRawAsync("coal", burner ? 10 : 20, token, explorationBudget: 2);
             var state = await new FactoryRegistry(session.Directory).LoadAsync((await ScopeAsync()).WorldId, token);
             evidence.Add(new { check = "resource-cells-ready", iron, coal, rows = state.Rows, cells = state.Cells });
             var smelters = state.Cells.Where(c => c.Kind == "smelter" && c.Recipe == "iron-plate" && c.Status == "ready").ToArray();
@@ -52,6 +56,12 @@ public sealed class ResourceCellQualification(RuntimeSession session)
             var first = await logistics.ServiceAsync(40, token);
             await WaitAsync(3600);
             var second = await logistics.ServiceAsync(40, token);
+            for (int round = 2; burner && second.Collected.GetValueOrDefault("iron-plate") < 10 && round < 8; round++)
+            {
+                evidence.Add(new { check = "burner-startup-logistics-round", round, service = second });
+                await WaitAsync(3600);
+                second = await logistics.ServiceAsync(40, token);
+            }
             evidence.Add(new { check = "resource-logistics", first, second });
             Require(first.Collected.GetValueOrDefault("coal") > 0 && first.Supplied.GetValueOrDefault("coal") > 0,
                 "Mined coal was not collected and loaded into burners.");
@@ -107,7 +117,16 @@ public sealed class ResourceCellQualification(RuntimeSession session)
                 Require(fuelled.Length == furnaces.Count, "Not every smelter furnace was refuelled with the collected coal.");
                 Require(links > 0 && crafted.Length > 0 && crafted.All(r => r == "small-electric-pole"),
                     "Link poles were not procured from the supplied materials, or something else was crafted.");
-                Require(kinds.Count(k => k == "mine") == cleared, "Supplied construction triggered manual mining beyond clearing.");
+                int coldStarts = submissions.Count(s => s.GetProperty("kind").GetString() == "mine"
+                    && s.GetProperty("args").TryGetProperty("name", out var mined) && mined.GetString() == "coal"
+                    && s.GetProperty("args").GetProperty("count").GetInt32() == 1);
+                if (burner)
+                {
+                    Require(coldStarts <= 1 && rows.Any(r => r.RootElement.GetProperty("type").GetString() == "coal-producer-started"),
+                        "The cold burner miner did not start with at most one manual starter coal.");
+                    evidence.Add(new { check = "coal-producer-startup", coldStarts });
+                }
+                Require(kinds.Count(k => k == "mine") == cleared + (burner ? coldStarts : 0), "Supplied construction triggered manual mining beyond clearing or one cold-start fuel.");
             }
             finally { foreach (var row in rows) row.Dispose(); }
             passed = true;
@@ -115,7 +134,7 @@ public sealed class ResourceCellQualification(RuntimeSession session)
         }
         finally
         {
-            await LocalJson.WriteAsync(path, new { kind = "prepared-resource-cell-qualification", passed, isAutonomousCampaign = false, journalPath, evidence },
+            await LocalJson.WriteAsync(path, new { kind = "prepared-resource-cell-qualification", burner, passed, isAutonomousCampaign = false, journalPath, evidence },
                 CancellationToken.None);
         }
 
