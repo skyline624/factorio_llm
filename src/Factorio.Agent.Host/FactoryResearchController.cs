@@ -56,14 +56,13 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         for (int round = 1; round <= 2000; round++)
         {
             var state = ResearchSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("research_state", new { technology = technologyName }), token), technologyName);
-            if (state.Researched)
-            {
-                var result = new FactoryResearchResult(technologyName, labs, round - 1, startTick, state.CollectedTick, procured);
-                await journal.AppendAsync("factory-research-result", result, token);
-                return result;
-            }
+            if (state.Researched) return await FinishAsync(state.CollectedTick, round - 1);
             if (state.Selected != technologyName) await SelectAsync(controller, journal, state.Selected, technologyName, token);
             var service = await logistics.ServiceAsync(40, token);
+            // Labs keep researching while the actor makes the tour. Its remaining shortfall is no longer this goal's
+            // work after native completion; starting procurement or growing cells here could delay the next goal.
+            state = ResearchSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("research_state", new { technology = technologyName }), token), technologyName);
+            if (state.Researched) return await FinishAsync(state.CollectedTick, round);
             var shortfall = service.Shortfall.Where(p => p.Value > 0).OrderBy(p => p.Key, StringComparer.Ordinal).ToArray();
             var factory = await new FactoryRegistry(directory).LoadAsync(observation.Scope.WorldId, token);
             growth.Observe(service);
@@ -98,6 +97,13 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
             }
         }
         throw new TimeoutException("Factory research exhausted its round budget.");
+
+        async Task<FactoryResearchResult> FinishAsync(long tick, int rounds)
+        {
+            var result = new FactoryResearchResult(technologyName, labs, rounds, startTick, tick, procured);
+            await journal.AppendAsync("factory-research-result", result, token);
+            return result;
+        }
 
         // One bounded cell per round, in view first, then a few steps toward remembered deposits: once a small patch is
         // depleted, growing in view only would leave the raw item to hand-fed procurement for the rest of the research.
