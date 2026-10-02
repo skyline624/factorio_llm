@@ -48,7 +48,9 @@ Avant de construire les cellules d'une étape d'automatisation ou des laboratoir
 
 ## Qualification préparée, Factorio 2.0.77
 
-La fixture est marquée avant toute injection. Elle aplanit une zone, crée une rive au nord (y ≤ −9), fournit les objets de construction à vapeur, un assembleur, 400 charbons, et place une interface électrique inactive à distance. Ces apports excluent l'essai des campagnes normales.
+La fixture est marquée avant toute injection. Elle aplanit une zone, crée une rive au nord (y ≤ −9), fournit les objets de construction à vapeur, un assembleur, 1 000 charbons, et place une interface électrique inactive à distance. Ces apports excluent l'essai des campagnes normales.
+
+Le 2 octobre 2026, le test headless a révélé que ses anciens 400 charbons ne couvraient plus les trois coffres de quatre piles, le combustible des chaudières et la vérification de remplissage sous charge. La génération fonctionnait, mais le personnage avait épuisé le stock fourni : les coffres contenant encore 188, 86 et 29 charbons ne signalaient aucun manque, conformément au seuil d'un quart de pile. La réserve préparée du test est donc portée à 1 000, avec vérification native du stock initial ; la logique de production reste inchangée. Les chiffres des qualifications historiques ci-dessous conservent leur ancienne réserve.
 
 Le premier parcours complet a été exécuté sur un serveur neuf, graine 734304 :
 

@@ -29,14 +29,16 @@ public sealed class PowerExpansionQualification(RuntimeSession session)
         try
         {
             var mark = await game.ExecuteAsync(GameRequest.Create("mark_fixture", new
-            { reason = "Shore tiles, steam and cell construction items, 400 coal and a configured electric load. Power expansion test, not a campaign." }), token);
+            { reason = "Shore tiles, steam and cell items, 1000 coal for three feeder reserves and refills, electric load. Fixture, not a campaign." }), token);
             Require(mark.Ok, "Fixture marker rejected.");
             const string prepare = """
-                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; for _,e in pairs(s.find_entities_filtered{area={{-48,-48},{48,48}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-48,48 do for y=-48,48 do tiles[#tiles+1]={name=(y<=-9) and 'water' or 'grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({0,0})); c.health=c.max_health; c.get_main_inventory().clear(); for _,t in pairs{'steam-power','electronics','automation'} do f.technologies[t].researched=true end; for name,count in pairs{['offshore-pump']=1,boiler=3,['steam-engine']=6,['small-electric-pole']=40,inserter=6,['iron-chest']=6,['assembling-machine-1']=1,coal=400} do assert(c.insert{name=name,count=count}==count) end; local load=s.create_entity{name='electric-energy-interface',position={24,20},force=f}; assert(load); load.power_production=0; load.power_usage=0; load.electric_buffer_size=0; rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,load=load.unit_number,position=load.position})
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; for _,e in pairs(s.find_entities_filtered{area={{-48,-48},{48,48}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-48,48 do for y=-48,48 do tiles[#tiles+1]={name=(y<=-9) and 'water' or 'grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({0,0})); c.health=c.max_health; c.get_main_inventory().clear(); for _,t in pairs{'steam-power','electronics','automation'} do f.technologies[t].researched=true end; for name,count in pairs{['offshore-pump']=1,boiler=3,['steam-engine']=6,['small-electric-pole']=40,inserter=6,['iron-chest']=6,['assembling-machine-1']=1,coal=1000} do assert(c.insert{name=name,count=count}==count) end; local load=s.create_entity{name='electric-energy-interface',position={24,20},force=f}; assert(load); load.power_production=0; load.power_usage=0; load.electric_buffer_size=0; rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,coal=c.get_item_count('coal'),load=load.unit_number,position=load.position})
                 """;
             using var setup = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(prepare, token));
             File.Delete(new FactoryRegistry(session.Directory).Path); // The fixture area was just emptied.
             evidence.Add(new { check = "explicit-power-preparation", native = setup.RootElement.Clone() });
+            Require(setup.RootElement.GetProperty("coal").GetInt32() == 1000,
+                "The prepared fuel must cover three four-stack feeder reserves, boiler fuel and the refill check.");
             string loadId = setup.RootElement.GetProperty("load").GetInt64().ToString(System.Globalization.CultureInfo.InvariantCulture);
             var loadPosition = setup.RootElement.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
 

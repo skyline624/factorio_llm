@@ -84,6 +84,20 @@ Ces fixtures isolent le mécanisme. Elles ne remplacent ni une campagne normale 
 
 Pour la variante du 2 octobre, les rapports privés sont `factory-cell-qualification-fd55d6c4ca874986b105848180f2f5e4.json` (headless) et `factory-cell-qualification-26d553c9b8704b8ead6e5842c20b4e85.json` (client connecté), dans `.runtime/fixture-20261002-141855-f57601ca/`. Ils constatent respectivement 21 et 20 opérations de fabrication, zéro minage, et les trois objectifs de matériaux 46 fer / 9 cuivre / 1 bois. Les 1 116 tests ordinaires passent sans jeu ni inférence ; le test cloud optionnel reste ignoré. Aucun gain de durée en campagne normale n'est encore établi. La campagne précédente, arrêtée à la demande de l'utilisateur, n'a pas été relancée pour cette vérification.
 
+### Suite headless du 2 octobre 2026
+
+Sur Factorio 2.0.77, graine 20261016, cinq vérifications préparées ont réussi sans client connecté :
+
+| Vérification | Effet natif constaté |
+|---|---|
+| `verify-factory-cells --from-materials` | Assembleur et laboratoire construits depuis les matériaux stockés, 16 engrenages collectés, zéro minage. |
+| `verify-resource-cells` | Deux cellules de fonderie et une foreuse à charbon, 36 plaques collectées, combustible extrait par la foreuse, poteau réparé en place et foreuse épuisée retirée de la capacité. Les deux minages dégagent des arbres. |
+| `verify-power-expansion` | Trois chaudières et six moteurs sous charge ; coffres consommés puis réapprovisionnés avec 43 charbons. Voir la correction de la réserve de test dans [power-expansion.md](power-expansion.md). |
+| `verify-furnace-bands` | Quatre plaques d'acier collectées, combustible chargé par le coffre et l'inserteur, zéro fabrication ou minage manuel. |
+| `verify-factory-research` | `gun-turret` achevée par les cellules et le laboratoire, sans fabrication manuelle des packs ; une sélection de recherche antérieure est remplacée. |
+
+La préparation de recherche remet maintenant explicitement `electric-mining-drill` à l'état non recherché avant de la sélectionner comme recherche antérieure. La fixture de ressources peut déjà l'avoir débloquée : sans cette remise à l'état déclaré, la préparation échouait avant le contrôleur. Ce changement reste réservé à la fixture et ne modifie aucune campagne normale. Les deux échecs initiaux des fixtures, les rapports réussis et le récapitulatif `headless-suite-result.json` sont conservés dans `.runtime/fixture-20261002-143311-3e9d38b9/`, hors Git. Les 1 116 tests ordinaires réussissent également après ces corrections.
+
 ## Modules intégrés depuis
 
 | Module | Document | Qualification réelle (fixture) |
