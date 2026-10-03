@@ -66,10 +66,17 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
             else
             {
                 var loadout = observation.Loadout!;
-                string? armor = SurvivalKitPlanner.Armor(catalog, Carried(loadout), loadout.Armor);
+                var armors = SurvivalKitPlanner.Armors(catalog, Carried(loadout), loadout.Armor);
+                string? armor = armors.FirstOrDefault();
                 string? gun = SurvivalKitPlanner.Gun(catalog, Carried(loadout), loadout.Slots.Where(s => s.Gun is not null).Select(s => s.Gun!).ToArray());
                 await journal.AppendAsync("survival-kit-plan", new { reason, worn = loadout.Armor, armor, gun, observation.Tick }, deadline.Token);
-                if (armor is not null && !await ObtainAsync(armor, 1)) armor = null;
+                armor = null;
+                foreach (string candidate in armors)
+                {
+                    if (await ObtainAsync(candidate, 1)) { armor = candidate; break; }
+                    // Only a proven stock shortfall permits another armor attempt; a failed production is reconciled first.
+                    if (!missing.ContainsKey(candidate)) break;
+                }
                 if (gun is not null && !await ObtainAsync(gun, 1)) gun = null;
                 // Each operation is decided from a fresh observation and only with no enemy in sight.
                 for (int step = 0; step < 4 && status == "complete"; step++)

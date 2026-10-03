@@ -18,13 +18,18 @@ public static class SurvivalKitPlanner
         (armor.PhysicalPercent, armor.PhysicalDecrease, armor.InventoryBonus);
 
     /// <summary>The obtainable armor offering more native protection than the worn one, or null.</summary>
-    public static string? Armor(ProductionCatalog catalog, IReadOnlyDictionary<string, long> carried, string? worn)
+    public static string? Armor(ProductionCatalog catalog, IReadOnlyDictionary<string, long> carried, string? worn) =>
+        Armors(catalog, carried, worn).FirstOrDefault();
+
+    /// <summary>Obtainable upgrades, strongest first: unavailable stock for one armor must not hide a weaker upgrade.</summary>
+    public static IReadOnlyList<string> Armors(ProductionCatalog catalog, IReadOnlyDictionary<string, long> carried, string? worn)
     {
         var armors = catalog.Armors ?? new Dictionary<string, NativeArmor>();
-        var best = armors.Where(a => Obtainable(catalog, carried, a.Key)).OrderByDescending(a => Protection(a.Value))
-            .ThenBy(a => a.Key, StringComparer.Ordinal).Select(a => a.Key).FirstOrDefault();
-        if (best is null) return null;
-        return worn is null || !armors.TryGetValue(worn, out var current) || Protection(armors[best]).CompareTo(Protection(current)) > 0 ? best : null;
+        NativeArmor? current = worn is not null ? armors.GetValueOrDefault(worn) : null;
+        return armors.Where(a => Obtainable(catalog, carried, a.Key)
+                && (current is null || Protection(a.Value).CompareTo(Protection(current)) > 0))
+            .OrderByDescending(a => Protection(a.Value)).ThenBy(a => a.Key, StringComparer.Ordinal)
+            .Select(a => a.Key).ToArray();
     }
 
     /// <summary>

@@ -52,6 +52,17 @@ public sealed class SurvivalKitTests
     }
 
     [Fact]
+    public void ArmorFallbacksNeverIncludeEqualOrWeakerWornProtection()
+    {
+        var catalog = Catalog("light-armor", "heavy-armor", "modular-armor");
+        var carried = new Dictionary<string, long>();
+        Assert.Equal(new[] { "modular-armor", "heavy-armor", "light-armor" }, SurvivalKitPlanner.Armors(catalog, carried, null));
+        Assert.Equal(new[] { "modular-armor", "heavy-armor" }, SurvivalKitPlanner.Armors(catalog, carried, "light-armor"));
+        Assert.Equal(new[] { "modular-armor" }, SurvivalKitPlanner.Armors(catalog, carried, "heavy-armor"));
+        Assert.Empty(SurvivalKitPlanner.Armors(catalog, carried, "modular-armor"));
+    }
+
+    [Fact]
     public void TheSubmachineGunReplacesThePistolOnceObtainable()
     {
         var none = new Dictionary<string, long>();
@@ -177,6 +188,21 @@ public sealed class SurvivalKitTests
         var result = await new SurvivalKitController(game, new Journal()).EnsureAsync("travel", CancellationToken.None);
         Assert.Equal(("deferred", null), (result.Status, result.Armor));
         Assert.DoesNotContain("submit", game.Calls);
+    }
+
+    [Fact]
+    public async Task MissingSteelForHeavyArmorStillAllowsCarriedLightArmor()
+    {
+        var catalog = Catalog("light-armor", "heavy-armor");
+        catalog = catalog with { Recipes = catalog.Recipes.Select(r => r.Name == "heavy-armor"
+            ? r with { Ingredients = [new("steel-plate", "item", 50)] } : r).ToArray() };
+        var game = new KitGame(catalog);
+        var result = await new SurvivalKitController(game, new Journal()).EnsureAsync("resource-search", CancellationToken.None);
+        Assert.Equal(("complete", "light-armor"), (result.Status, result.Armor));
+        Assert.Equal(50, result.Missing["heavy-armor"]["steel-plate"]);
+        Assert.Equal(new[] { "armor:light-armor" }, result.Equipped);
+        Assert.Single(game.Calls, c => c == "submit");
+        Assert.Empty(result.Produced);
     }
 
     private sealed class Journal : IControllerJournal
