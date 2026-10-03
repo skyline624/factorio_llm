@@ -244,7 +244,27 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     {
         SpatialEntity? tree = new TreeClearancePlanner().Select(map, catalog, destination);
         if (tree is null) return false;
-        await journal.AppendAsync("navigation-clearance-plan", new { map.Scope, map.CollectedTick, tree, destination }, token);
+        await ClearObservedTreeAsync(map, tree, destination, "navigation", token);
+        return true;
+    }
+
+    internal async Task<bool> ClearPlacementTreeAsync(SpatialSnapshot map, ProductionCatalog catalog, string item,
+        PlacementCandidate placement, CancellationToken token)
+    {
+        SpatialEntity? tree = new TreeClearancePlanner().SelectPlacement(map, catalog, item, placement);
+        if (tree is null) return false;
+        await TravelAsync(tree.Position, Math.Min(2.5, ProductionController.MiningDistance(tree, map)), catalog, token);
+        var current = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
+        if (current.Scope != map.Scope || current.CollectedTick < map.CollectedTick
+            || !current.Entities.Any(e => e.Id == tree.Id && e.Name == tree.Name && e.Position == tree.Position && e.Force == "neutral"))
+            throw new InvalidDataException("The construction tree changed before clearance; reconcile the committed footprint.");
+        await ClearObservedTreeAsync(current, tree, placement.Position, "construction", token);
+        return true;
+    }
+
+    private async Task ClearObservedTreeAsync(SpatialSnapshot map, SpatialEntity tree, MapPosition? destination, string purpose, CancellationToken token)
+    {
+        await journal.AppendAsync($"{purpose}-clearance-plan", new { map.Scope, map.CollectedTick, tree, destination }, token);
         OperationReceipt receipt = await WorkAsync("mine", new { name = tree.Name, position = tree.Position, count = 1 }, 3600, token: token);
         if (receipt.Status != "completed" || receipt.Effects.GetProperty("targetId").GetString() != tree.Id
             || receipt.Effects.GetProperty("produced").GetDouble() <= 0)
@@ -252,8 +272,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         SpatialSnapshot after = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
         if (after.Scope != map.Scope || !after.Bounds.Contains(tree.Position) || after.Entities.Any(e => e.Id == tree.Id))
             throw new InvalidDataException("The mined tree's disappearance could not be verified in the current scope.");
-        await journal.AppendAsync("navigation-tree-cleared", new { tree.Id, beforeTick = map.CollectedTick, afterTick = after.CollectedTick, receipt }, token);
-        return true;
+        await journal.AppendAsync($"{purpose}-tree-cleared", new { tree.Id, beforeTick = map.CollectedTick, afterTick = after.CollectedTick, receipt }, token);
     }
 
     public static MapPosition SelectWaypoint(SpatialCollisionField field, RoutePlan route, int maximumMoveDistance = 24)

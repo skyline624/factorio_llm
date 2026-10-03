@@ -131,7 +131,7 @@ public sealed class SpatialCollisionField
                         || (rule.RequiredTiles.Layers.Count > 0 && !rule.RequiredTiles.CollidesWith(tile, true))) return false;
                 }
         }
-        return !Query(box).Any(o => geometry.Mask.CollidesWith(o.Mask, o.Tile) && o.Shape.Overlaps(box));
+        return !Query(box).Any(o => geometry.Mask.CollidesWith(o.Mask, o.Tile) && o.Shape.TouchesOrOverlaps(box));
     }
 
     public string? FluidAt(MapPosition position) => tiles.TryGetValue(((int)Math.Floor(position.X), (int)Math.Floor(position.Y)), out string? tile)

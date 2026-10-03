@@ -116,13 +116,26 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
             current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
             RequireScope(current.Scope, catalog);
         }
-        RequireScope(current.Scope, catalog);
-        MapPosition approach = new PlacementPlanner().FindApproach(new(current), item, candidate, remainingTargets)
-            ?? throw new PlacementRefusedException("No reachable approach outside the planned footprint.");
-        await controller.NavigateAsync(approach, .2, token);
-        var validation = await spatial.ValidateAsync(catalog.Scope, item, [candidate], token);
-        if (!validation.Candidates[0].Allowed || !validation.Candidates[0].InReach)
-            throw new PlacementRefusedException("The engine refused the calculated powered-machine placement.");
+        for (int cleared = 0; ; cleared++)
+        {
+            MapPosition approach = new PlacementPlanner().FindApproach(new(current), item, candidate, remainingTargets)
+                ?? throw new PlacementRefusedException("No reachable approach outside the planned footprint.");
+            await controller.NavigateAsync(approach, .2, token);
+            var validation = await spatial.ValidateAsync(catalog.Scope, item, [candidate], token);
+            await journal.AppendAsync("construction-placement-validation", new { validation.Scope, validation.CollectedTick, item,
+                candidate, cleared, native = validation.Candidates[0] }, token);
+            if (validation.Candidates[0].Allowed && validation.Candidates[0].InReach) break;
+            if (validation.Candidates[0].Allowed || !validation.Candidates[0].InReach || cleared == 16)
+                throw new PlacementRefusedException("The engine refused the calculated powered-machine placement.");
+            current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
+            RequireScope(current.Scope, catalog);
+            if (current.CollectedTick < validation.CollectedTick)
+                throw new InvalidDataException("Construction clearance requires an observation after the native refusal.");
+            if (!await controller.ClearPlacementTreeAsync(current, catalog, item, candidate, token))
+                throw new PlacementRefusedException("The native-refused footprint has no safely clearable tree.");
+            current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
+            RequireScope(current.Scope, catalog);
+        }
         if (stoppedInserterItem is not null && (current.Prototypes[current.Items[item].EntityName].FilterSlots is not > 0
             || !catalog.Items.ContainsKey(stoppedInserterItem))) throw new InvalidDataException("Stopped transport construction requires native filter geometry and item.");
         var receipt = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction, stoppedInserterItem }, 600, token: token);

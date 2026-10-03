@@ -26,6 +26,9 @@ public sealed class OrientedCollisionBox
     }
 
     public bool IntersectsSweep(MapPosition from, MapPosition to, WorldBox body, double clearance = 0)
+        => IntersectsSweep(from, to, body, clearance, includeContact: false);
+
+    private bool IntersectsSweep(MapPosition from, MapPosition to, WorldBox body, double clearance, bool includeContact)
     {
         double bodyX = (body.Min.X + body.Max.X) / 2, bodyY = (body.Min.Y + body.Max.Y) / 2;
         double bodyWidth = body.Width / 2 + clearance, bodyHeight = body.Height / 2 + clearance;
@@ -35,7 +38,7 @@ public sealed class OrientedCollisionBox
         {
             double radius = halfWidth * Math.Abs(axis.X * horizontal.X + axis.Y * horizontal.Y)
                 + halfHeight * Math.Abs(axis.X * vertical.X + axis.Y * vertical.Y)
-                + bodyWidth * Math.Abs(axis.X) + bodyHeight * Math.Abs(axis.Y) - 1e-7;
+                + bodyWidth * Math.Abs(axis.X) + bodyHeight * Math.Abs(axis.Y) + (includeContact ? 1e-7 : -1e-7);
             double start = (from.X + bodyX - center.X) * axis.X + (from.Y + bodyY - center.Y) * axis.Y;
             double speed = (to.X - from.X) * axis.X + (to.Y - from.Y) * axis.Y;
             if (Math.Abs(speed) < 1e-12)
@@ -53,4 +56,7 @@ public sealed class OrientedCollisionBox
     }
 
     public bool Overlaps(WorldBox body) => IntersectsSweep(new(0, 0), new(0, 0), body);
+
+    /// <summary>Native construction also refuses edge contact; navigation still permits escape from contact.</summary>
+    public bool TouchesOrOverlaps(WorldBox body) => IntersectsSweep(new(0, 0), new(0, 0), body, 0, includeContact: true);
 }
