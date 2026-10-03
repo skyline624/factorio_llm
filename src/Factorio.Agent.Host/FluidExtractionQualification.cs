@@ -6,7 +6,7 @@ namespace Factorio.Agent.Host;
 
 /// <summary>Prepared distant oil deposit; grid extension and research use native power and extraction.</summary>
 public sealed class FluidExtractionQualification(RuntimeSession session, bool reuse = false, bool stationaryThreat = false,
-    bool factoryAdoption = false)
+    bool factoryAdoption = false, bool expansion = false)
 {
     public async Task<string> RunAsync(CancellationToken token)
     {
@@ -99,14 +99,15 @@ public sealed class FluidExtractionQualification(RuntimeSession session, bool re
                 && (!reuse || before.GetProperty("pumpjack").GetString() == result.MachineId)
                 && after.GetProperty("character").GetUInt32() == before.GetProperty("character").GetUInt32(),
                 "The native extractor or controlled character changed unexpectedly.");
-            if (factoryAdoption) await VerifyFactoryAdoptionAsync(game, journal, result.MachineId, evidence, token);
+            if (factoryAdoption || expansion) await VerifyFactoryAdoptionAsync(game, journal, result.MachineId, evidence, token);
+            if (expansion) await VerifyExpansionAsync(game, journal, journalPath, result.MachineId, evidence, token);
             passed = true;
             return path;
         }
         finally
         {
             await LocalJson.WriteAsync(path, new { kind = "prepared-fluid-extraction-qualification", passed,
-                isAutonomousCampaign = false, reuse, stationaryThreat, factoryAdoption, journalPath, evidence }, CancellationToken.None);
+                isAutonomousCampaign = false, reuse, stationaryThreat, factoryAdoption, expansion, journalPath, evidence }, CancellationToken.None);
         }
     }
 
@@ -178,6 +179,76 @@ public sealed class FluidExtractionQualification(RuntimeSession session, bool re
             "Connected extractor identity or capacity was lost.");
         evidence.Add(new { check = "native-refinery-reuses-initial-extractor", drillId, refinery, extractors,
             petroleum = current.FluidStockAt(refinery.Entities["machine"], "petroleum-gas"), current.CollectedTick, connectedRates });
+    }
+
+    private async Task VerifyExpansionAsync(IGameClient game, ControllerJournal journal, string journalPath, string originalDrill,
+        List<object> evidence, CancellationToken token)
+    {
+        const string prepare = """
+            /silent-command local s=game.surfaces.nauvis;local f=game.forces.factorio_agent;local c=s.find_entities_filtered{type='character',force=f}[1];assert(c and #game.connected_players==0);for _,e in pairs(s.find_entities_filtered{area={{-64,-160},{448,160}}}) do if e~=c and e.force~=f and not(e.name=='crude-oil' and math.abs(e.position.x-70)<1 and math.abs(e.position.y)<1) then e.destroy() end end;local tiles={};for x=-64,448 do for y=-160,160 do tiles[#tiles+1]={name=x< -20 and 'water' or 'grass-1',position={x,y}} end end;s.set_tiles(tiles);assert(c.teleport({65,0}));local at;for x=192,384,32 do local chunk={math.floor(x/32),0};if not f.is_chunk_charted(s,chunk) and not f.is_chunk_requested_for_charting(s,chunk) then at={x=x+0.5,y=0.5};break end end;assert(at,'No unread prepared expansion chunk');assert(s.create_entity{name='crude-oil',position=at,amount=300000});for name,count in pairs{pumpjack=1,['oil-refinery']=1,pipe=150,['small-electric-pole']=40,coal=200,['iron-plate']=100,['copper-plate']=100,['steel-plate']=50,['submachine-gun']=1,['firearm-magazine']=40,['heavy-armor']=1} do assert(c.insert{name=name,count=count}==count) end;rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,players=#game.connected_players,health=c.health,preparedDeposit=at,providedPumpjacks=1,providedRefineries=1,providedPipes=150,providedPoles=40})
+            """;
+        using var prepared = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(prepare, token));
+        var deposit = prepared.RootElement.GetProperty("preparedDeposit");
+        var destination = new MapPosition(deposit.GetProperty("x").GetDouble(), deposit.GetProperty("y").GetDouble());
+        evidence.Add(new { check = "explicit-expansion-terrain-deposit-kit-and-actor-reset", native = prepared.RootElement.Clone(),
+            isAutonomousCampaign = false });
+        var map = await new SpatialClient(game).CaptureAsync(["pumpjack", "pipe", "small-electric-pole"], 48, token);
+        var charted = await new ChartedResourceClient(game).CaptureAsync(["crude-oil"], cancellationToken: token);
+        evidence.Add(new { check = "expansion-start-resource-visibility", map.Actor.Position, map.CollectedTick,
+            localOil = map.Entities.Where(e => e.Name == "crude-oil").ToArray(), charted.Deposits, charted.Coverage });
+        Require(map.Entities.Any(e => e.Id == originalDrill) && map.Entities.Where(e => e.Name == "crude-oil")
+            .All(e => e.Position.DistanceTo(destination) > 1)
+            && charted.Deposits.All(d => d.Sample.Position.DistanceTo(destination) > 1),
+            "The expansion must start with the occupied original deposit and no local or force-map destination for the new one.");
+        var builder = new FluidCellBuilder(game, journal, session.Directory);
+        var ratesBefore = await builder.ExtractorRatesAsync("crude-oil", token);
+        var before = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        var registry = new FactoryRegistry(session.Directory);
+        var state = await registry.LoadAsync(map.Scope.WorldId, token);
+        Require(state.Cells.Count(c => c.Kind == FluidCellBuilder.ExtractorKind) == 1
+            && before.Records.Count(r => r.Kind == "entity" && r.Name == "pumpjack") == 1,
+            "Expansion must begin with exactly one registered native extractor.");
+        var added = await builder.BuildExtractorAsync("crude-oil", "crude-oil", token);
+        var discovered = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        Require(added.Status == "ready" && added.Entities["drill"] != originalDrill && added.Plan!["drill"].Position.DistanceTo(destination) < 1
+            && discovered.Scope == map.Scope && FactoryPower.IsFed(discovered, added.Entities["drill"]) == true
+            && discovered.FluidStockAt(added.Entities["drill"], "crude-oil") > 0,
+            "The discovered deposit has no new powered native extractor with real crude oil.");
+        var ratesAfter = await builder.ExtractorRatesAsync("crude-oil", token);
+        Require(ratesAfter.Count == 2 && ratesAfter.Values.Sum() > ratesBefore.Values.Sum(), "Native extraction capacity did not increase.");
+        var refinery = await builder.BuildMachineAsync("oil-refinery", "basic-oil-processing", token);
+        await using var controller = new SpatialController(game, journal);
+        var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+        var recipe = catalog.Recipes.Single(r => r.Name == "basic-oil-processing");
+        var machine = catalog.Assemblers!["oil-refinery"];
+        double expectedEnergy = 10 * recipe.EnergySeconds * 60 * machine.EnergyPerTick / machine.CraftingSpeed;
+        await new PoweredMachineController(game, journal).MaintainFuelAsync(refinery.Entities["machine"], expectedEnergy,
+            catalog, controller, reserve: true, token: token);
+        var produced = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        for (int attempt = 0; produced.FluidStockAt(refinery.Entities["machine"], "petroleum-gas") <= 0 && attempt < 30; attempt++)
+        {
+            Require((await controller.WorkAsync("wait", new { ticks = 60 }, 180, token: token)).Status == "completed", "Expansion production wait failed.");
+            produced = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        }
+        var rows = (await File.ReadAllLinesAsync(journalPath, token)).Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
+        var searches = rows.Where(r => r.GetProperty("type").GetString() == "fluid-extractor-exploration")
+            .Select(r => r.GetProperty("data")).ToArray();
+        var builds = rows.Where(r => r.GetProperty("type").GetString() == "submission"
+            && r.GetProperty("data").GetProperty("kind").GetString() == "build"
+            && r.GetProperty("data").GetProperty("args").GetProperty("item").GetString() == "pumpjack").ToArray();
+        var refills = rows.Where(r => r.GetProperty("type").GetString() == "powered-machine-fuel"
+            && r.GetProperty("data").GetProperty("machineId").GetString() == added.Entities["drill"])
+            .Select(r => r.GetProperty("data")).ToArray();
+        Require(searches.Any(r => r.GetProperty("remembered").ValueKind == JsonValueKind.Null)
+            && searches.Length < FluidCellBuilder.MaximumExtractorSearchSteps && builds.Length == (reuse ? 1 : 2) && refills.Length > 0
+            && produced.Scope == map.Scope && produced.FluidStockAt(refinery.Entities["machine"], "petroleum-gas") > 0
+            && produced.Records.Count(r => r.Kind == "entity" && r.Name == "pumpjack") == 2
+            && produced.Records.Any(r => r.Kind == "entity" && r.EntityId == originalDrill)
+            && FactoryPower.IsFed(produced, refinery.Entities["machine"]) == true,
+            "Exploration, extractor fuel transfer, exact additional cost, original identity or native second-refinery production is not proven.");
+        evidence.Add(new { check = "native-fluid-expansion-after-occupied-known-site", map.Scope, startTick = map.CollectedTick,
+            charted.Coverage, originalDrill, added, refinery, searches, refills, pumpBuilds = builds.Length, ratesBefore, ratesAfter,
+            petroleum = produced.FluidStockAt(refinery.Entities["machine"], "petroleum-gas"), produced.CollectedTick });
     }
 
     private static void Require(bool condition, string message)

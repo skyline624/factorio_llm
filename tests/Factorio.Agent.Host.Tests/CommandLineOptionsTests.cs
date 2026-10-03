@@ -15,6 +15,7 @@ public sealed class CommandLineOptionsTests
         Assert.Equal("true", CommandLineOptions.Parse(["--session", "s.json", "--from-materials"])["from-materials"]);
         Assert.Equal("true", CommandLineOptions.Parse(["--session", "s.json", "--burner"])["burner"]);
         Assert.Equal("true", CommandLineOptions.Parse(["--session", "s.json", "--steam-water"])["steam-water"]);
+        Assert.Equal("true", CommandLineOptions.Parse(["--expansion", "--session", "s.json", "--reuse"])["expansion"]);
     }
 
     [Theory]

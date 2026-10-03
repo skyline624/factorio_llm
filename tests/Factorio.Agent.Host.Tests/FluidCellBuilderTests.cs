@@ -5,6 +5,37 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class FluidCellBuilderTests
 {
+    [Fact]
+    public void ExtractorSearchSkipsUnusableLocalSitesAndDangerButKeepsOtherChartedOilDestinations()
+    {
+        var map = SpatialPlannerTests.Map([]);
+        var expected = new ResourceSighting("other", "crude-oil", new(-70, 0), 90, ResourceSighting.Charted);
+        var memory = new ResourceMemorySnapshot(map.Scope.WorldId, map.SurfaceIndex, 100,
+            [new("occupied", "crude-oil", new(30, 0), 90), new("nearby", "crude-oil", new(1, 0), 90),
+                new("danger", "crude-oil", new(60, 0), 90), new("iron", "iron-ore", new(25, 0), 90), expected], []);
+        NativeDeathTransition[] deaths = [new(1, 60, 15, map.SurfaceIndex, new(80, 0))];
+        Assert.Equal(expected, FluidCellBuilder.ExtractorDestination(memory, map, "crude-oil", new HashSet<string> { "occupied" }, deaths));
+        Assert.Null(FluidCellBuilder.ExtractorDestination(memory, map, "crude-oil", new HashSet<string> { "occupied", "other" }, deaths));
+        Assert.Null(FluidCellBuilder.ExtractorDestination(null, map, "crude-oil", new HashSet<string>(), []));
+    }
+
+    [Theory]
+    [InlineData("world")]
+    [InlineData("surface")]
+    [InlineData("future")]
+    public void ExtractorSearchCannotNavigateUsingIncompatibleResourceHistory(string change)
+    {
+        var map = SpatialPlannerTests.Map([]);
+        var memory = ResourceMemorySnapshot.Empty(map) with
+        {
+            WorldId = change == "world" ? "other" : map.Scope.WorldId,
+            SurfaceIndex = change == "surface" ? map.SurfaceIndex + 1 : map.SurfaceIndex,
+            LastTick = change == "future" ? map.CollectedTick + 1 : map.CollectedTick,
+            Resources = [new("oil", "crude-oil", new(70, 0), 90)]
+        };
+        Assert.Throws<InvalidDataException>(() => FluidCellBuilder.ExtractorDestination(memory, map, "crude-oil", new HashSet<string>(), []));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

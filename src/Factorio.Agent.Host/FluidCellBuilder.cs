@@ -16,10 +16,11 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
 {
     public const string ExtractorKind = "extractor";
     public const string MachineKind = AutomationPlanner.FluidKind;
+    public const int MaximumExtractorSearchSteps = 64;
     // The machine is committed before the small parts whose approach must avoid its footprint.
     private static readonly string[] PartOrder = ["drill", "machine", "pole", "input-inserter", "input-chest", "output-inserter", "output-chest"];
 
-    /// <summary>Builds one extractor cell on the nearest free observed or remembered deposit, powered and proven to hold its fluid.</summary>
+    /// <summary>Builds a powered extractor on an observed usable deposit, searching remembered sites and bounded safe frontiers when needed.</summary>
     public async Task<FactoryCell> BuildExtractorAsync(string resource, string product, CancellationToken token = default)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -48,6 +49,10 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         var equipment = FactoryCellBuilder.Equipment(catalog, cell.MachineItem);
         cell = await PlaceAsync(cell, registry, catalog, controller, token);
         cell = await PowerAsync(cell, registry, catalog, equipment, ground, controller, token);
+        // Exploration and a long grid extension can exhaust steam fuel before this consumer starts.
+        // Reuse the normal native supply controller rather than waiting on an idle connected network.
+        await new PoweredMachineController(game, journal).MaintainFuelAsync(cell.Entities["drill"], 0,
+            catalog, controller, reserve: false, token: token);
         // Native stock at the extractor proves power, deposit and port before any machine is planned against it.
         await WaitForStockAsync(product, cell.Entities["drill"], controller, catalog, token);
         return await ReadyAsync(registry, catalog, cell, token);
@@ -307,30 +312,56 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         var carried = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var charting = new ChartedResourceSurvey(game, journal);
-        for (int attempt = 0; attempt < 5; attempt++)
+        var exploration = new ExplorationPlanner();
+        for (int attempt = 0; attempt < MaximumExtractorSearchSteps; attempt++)
         {
             // Deposits on the force's map join the remembered destinations below, before the local view is taken.
             await charting.BeforeExplorationAsync([resource], "fluid-extractor-search", token);
             var map = await CaptureAsync([.. items, .. ground.Items], catalog, token);
             // A deposit under a band, a resource row or steam growth stays free for them.
             var planning = FactoryGround.Reserve(map, ground.Boxes(map), pipeItem);
-            foreach (string item in items.Where(i => map.Items.TryGetValue(i, out var placeable)
+            var candidates = items.Where(i => map.Items.TryGetValue(i, out var placeable)
                 && map.Prototypes[placeable.EntityName] is { Type: "mining-drill", IsElectric: true } drill
                 && drill.FluidBoxes?.Any(b => b.ProductionType == "output") == true
-                && (carried.GetValueOrDefault(i) > 0 || FactoryDirector.Enabled(catalog, i))))
+                && (carried.GetValueOrDefault(i) > 0 || FactoryDirector.Enabled(catalog, i))).ToArray();
+            if (candidates.Length == 0) throw new InvalidOperationException("No obtainable electric drill can extract the requested native fluid.");
+            foreach (string item in candidates)
                 if (new FluidCellPlanner().FindExtractor(planning, template with { Machine = item }, resource, pipeItem) is { } site)
                     return (site, item, map.CollectedTick);
+            // All locally observed deposits were checked against current geometry and reserved ground. Their
+            // historical sightings must not send this search back to the same occupied or unsuitable patch.
+            string[] unsuitable = map.Entities.Where(e => e.Name == resource).Select(e => e.Id).ToArray();
+            foreach (string id in unsuitable) visited.Add(id);
             // Remembered deposits only guide travel; geometry and amounts are observed again on arrival.
-            var remembered = game is IResourceMemoryReader reader
-                ? (await reader.ReadResourceMemoryAsync(map, token)).Resources.Where(r => r.Name == resource && !visited.Contains(r.EntityId)
-                    && r.Position.DistanceTo(map.Actor.Position) > 24).OrderBy(r => r.Position.DistanceTo(map.Actor.Position)).FirstOrDefault()
-                : null;
+            var memory = game is IResourceMemoryReader reader ? await reader.ReadResourceMemoryAsync(map, token) : null;
+            IReadOnlyList<NativeDeathTransition> deaths = game is IDangerZoneReader danger
+                ? await danger.ReadActiveDeathsAsync(map.Scope, map.SurfaceIndex, map.CollectedTick, token) : [];
+            var remembered = ExtractorDestination(memory, map, resource, visited, deaths);
             await journal.AppendAsync("fluid-extractor-search", new { resource, attempt, remembered, map.CollectedTick }, token);
-            if (remembered is null) break;
-            visited.Add(remembered.EntityId);
-            await controller.TravelAsync(remembered.Position, 8, catalog, token);
+            if (attempt == MaximumExtractorSearchSteps - 1) break;
+            if (ResourceResearchController.BlindSearchTooDangerous(remembered, deaths))
+            {
+                await journal.AppendAsync("fluid-extractor-search-too-dangerous", new { resource, attempt, map.Scope,
+                    map.CollectedTick, deaths, failureCode = "exploration_too_dangerous" }, token);
+                throw new ExplorationTooDangerousException("No safe remembered fluid deposit is available, and recent own deaths refuse blind exploration.");
+            }
+            await new SurvivalKitController(game, journal).BeforeTripAsync("fluid-extractor-exploration", token);
+            // Empty wanted avoids selecting an occupied local deposit again; an actual historical destination
+            // guides successive local steps and is reobserved, while blind steps retain normal hazard exclusions.
+            var frontier = await controller.FindExplorationWaypointAsync(exploration, catalog, "", remembered?.Position, token);
+            await journal.AppendAsync("fluid-extractor-exploration", new { resource, attempt, remembered, frontier,
+                deferredObservedResources = unsuitable, limit = MaximumExtractorSearchSteps }, token);
+            await controller.NavigateAsync(frontier.Position, cancellationToken: token);
         }
-        throw new InvalidOperationException($"No observed or remembered {resource} deposit offers a free extractor site; explore first.");
+        throw new InvalidOperationException($"No usable {resource} extractor site was found within {MaximumExtractorSearchSteps} observed search steps.");
+    }
+
+    internal static ResourceSighting? ExtractorDestination(ResourceMemorySnapshot? memory, SpatialSnapshot map, string resource,
+        IReadOnlySet<string> deferred, IReadOnlyList<NativeDeathTransition> deaths)
+    {
+        memory?.ValidateFor(map);
+        return memory?.NearestOf(resource, map.Actor.Position, r => !deferred.Contains(r.EntityId)
+            && r.Position.DistanceTo(map.Actor.Position) > 24 && !deaths.Any(d => DangerZones.Covers(d, r.Position)));
     }
 
     /// <summary>A ready extractor of the fluid whose output port feeds nothing yet, nearest to the given point or the actor.</summary>
