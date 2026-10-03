@@ -72,8 +72,8 @@ Le 3 octobre 2026, `verify-factory-fuel --session FILE` passe dans Factorio **2.
   Le 30 septembre 2026 (graine 20261002), ces règles manquaient. Le plan de la science verte comptait la cellule d'engrenages de la science rouge comme la sienne : les engrenages manquaient de 80 à 120 par tour et la cellule de bras est restée vide jusqu'à l'échéance de la recherche. Les coffres remplis dans l'ordre du registre donnaient tous les engrenages aux premiers consommateurs. Enfin, une cellule de munitions hors plan immobilisait 160 plaques de fer dans son coffre.
 - **`FactoryResearchController`** traite une technologie de laboratoire :
   1. le nombre de laboratoires vise environ quinze minutes de recherche, dix au plus ;
-  2. il automatise les packs au débit correspondant ;
-  3. il sélectionne la recherche ;
+  2. après validation des prérequis natifs, il sélectionne la recherche pour que les laboratoires déjà chargés travaillent pendant la préparation ;
+  3. il prépare l'alimentation et automatise les packs au débit correspondant. Une lecture native après l'alimentation et après chaque filière de packs arrête les préparatifs si la recherche est déjà achevée ;
   4. il enchaîne les passages logistiques ;
   5. il n'utilise l'ancienne production que pour les matières qu'aucune cellule ne fabrique.
 - Les objectifs de recherche passent par cette voie dès que les recettes d'assembleur, d'inserteur, de poteau et de laboratoire sont débloquées. Le laboratoire historique reste le repli.
@@ -95,6 +95,8 @@ La même partie a ensuite validé l'extraction : après découverte du gisement,
 | Campagne du 30/09 (graine 20261001), premier passage | Partie normale, modèle cloud réel | En 30 minutes : recherche de `steam-power`, des packs rouges et d'`automation`. Première zone d'usine créée près du réseau, cellule d'engrenages construite. Arrêt par le coupe-circuit après cinq échecs, sur deux défauts corrigés depuis : poteau de liaison manquant, cellule réutilisée par l'ancienne production. |
 
 Ces fixtures isolent le mécanisme. Elles ne remplacent ni une campagne normale ni la qualification finale sur trois graines.
+
+La vérification de recherche comprend aussi une phase distincte avec laboratoire déjà chargé : `gun-turret` est explicitement remise à l'état non recherché dans la fixture, 100 packs rouges sont fournis, et les stocks précédents du laboratoire sont consignés puis retirés. La première photographie de préparation est retardée pendant le temps de recherche d'un laboratoire plus vingt secondes, avec une borne de trois minutes. Le moteur doit achever à nouveau la technologie pendant ce délai, avant toute tournée logistique de cet objectif. Cette phase vérifie la sélection anticipée et l'arrêt des préparatifs ; ses packs fournis ne constituent pas une production autonome.
 
 Pour la variante du 2 octobre, les rapports privés sont `factory-cell-qualification-fd55d6c4ca874986b105848180f2f5e4.json` (headless) et `factory-cell-qualification-26d553c9b8704b8ead6e5842c20b4e85.json` (client connecté), dans `.runtime/fixture-20261002-141855-f57601ca/`. Ils constatent respectivement 21 et 20 opérations de fabrication, zéro minage, et les trois objectifs de matériaux 46 fer / 9 cuivre / 1 bois. Les 1 116 tests ordinaires passent sans jeu ni inférence ; le test cloud optionnel reste ignoré. Aucun gain de durée en campagne normale n'est encore établi. La campagne précédente, arrêtée à la demande de l'utilisateur, n'a pas été relancée pour cette vérification.
 

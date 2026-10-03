@@ -27,15 +27,32 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         var next = new TechnologyPlanner().Next(technologyName, observation.Technologies);
         if (next.Kind != "research" || next.Technology != technologyName)
             throw new InvalidOperationException("Prepare this technology's prerequisites before factory research.");
-        await EnsurePowerAsync(token);
-
         double unitSeconds = technology.EnergyTicks / 60;
         int labs = (int)Math.Clamp(Math.Ceiling(technology.Count * unitSeconds / TargetResearchSeconds), 1, 10);
         double minutes = Math.Max(1, technology.Count * unitSeconds / labs / 60);
+        long startTick = observation.EndTick;
+        var procured = new Dictionary<string, long>(StringComparer.Ordinal);
+        var state = await ReadStateAsync();
+        if (state.Researched) return await FinishAsync(state.CollectedTick, 0);
+        // Loaded laboratories can work during factory preparation. In the normal chemical-science goal on
+        // 2026-10-03, selecting only after preparation left them idle for over two minutes.
+        if (state.Selected != technologyName)
+        {
+            await using var starter = new SpatialController(game, journal);
+            await SelectAsync(starter, journal, state.Selected, technologyName, token);
+        }
+        await journal.AppendAsync("factory-research-preparation", new { technologyName, technology.Count, unitSeconds, labs, minutes }, token);
+        await EnsurePowerAsync(token);
+        state = await ReadStateAsync();
+        if (state.Researched) return await FinishAsync(state.CollectedTick, 0);
         var director = new FactoryDirector(game, journal, directory);
         AutomationPlan? plan = null;
         foreach (var pack in technology.Ingredients)
+        {
             plan = await director.AutomateAsync(pack.Name, Math.Min(120, technology.Count * pack.Amount / minutes), token);
+            state = await ReadStateAsync();
+            if (state.Researched) return await FinishAsync(state.CollectedTick, 0);
+        }
         // Each plan covers every registered target, so the last one holds the whole factory's raw demand.
         var rawRates = new Dictionary<string, double>(plan?.RawPerMinute ?? new Dictionary<string, double>(), StringComparer.Ordinal);
         await director.EnsureLabsAsync(labs, token);
@@ -47,21 +64,19 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
 
         var logistics = new FactoryLogistics(game, journal, directory);
         var executor = new ProductionGoalExecutor(game, journal);
-        var procured = new Dictionary<string, long>(StringComparer.Ordinal);
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         var growth = new RawCapacityGrowth();
         var delivery = new CellDelivery();
         await using var controller = new SpatialController(game, journal);
-        long startTick = observation.EndTick;
         for (int round = 1; round <= 2000; round++)
         {
-            var state = ResearchSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("research_state", new { technology = technologyName }), token), technologyName);
+            state = await ReadStateAsync();
             if (state.Researched) return await FinishAsync(state.CollectedTick, round - 1);
             if (state.Selected != technologyName) await SelectAsync(controller, journal, state.Selected, technologyName, token);
             var service = await logistics.ServiceAsync(40, token, usePlannedBuffers: true);
             // Labs keep researching while the actor makes the tour. Its remaining shortfall is no longer this goal's
             // work after native completion; starting procurement or growing cells here could delay the next goal.
-            state = ResearchSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("research_state", new { technology = technologyName }), token), technologyName);
+            state = await ReadStateAsync();
             if (state.Researched) return await FinishAsync(state.CollectedTick, round);
             var shortfall = service.Shortfall.Where(p => p.Value > 0).OrderBy(p => p.Key, StringComparer.Ordinal).ToArray();
             var factory = await new FactoryRegistry(directory).LoadAsync(observation.Scope.WorldId, token);
@@ -97,6 +112,9 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
             }
         }
         throw new TimeoutException("Factory research exhausted its round budget.");
+
+        async Task<ResearchSnapshot> ReadStateAsync() => ResearchSnapshot.Parse(
+            await game.ExecuteAsync(GameRequest.Create("research_state", new { technology = technologyName }), token), technologyName);
 
         async Task<FactoryResearchResult> FinishAsync(long tick, int rounds)
         {

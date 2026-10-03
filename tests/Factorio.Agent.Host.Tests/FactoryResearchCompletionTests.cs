@@ -24,7 +24,7 @@ public sealed class FactoryResearchCompletionTests
             Assert.Equal(1, result.Rounds);
             Assert.Empty(result.Procured);
             Assert.Equal(1, game.Transfers);
-            Assert.Equal(2, game.ResearchReads);
+            Assert.True(game.ResearchReads >= 2);
             Assert.Equal(10, journal.Shortfall.GetValueOrDefault("prepared-substrate"));
             Assert.Contains("factory-research-result", journal.Types);
         }
@@ -32,6 +32,38 @@ public sealed class FactoryResearchCompletionTests
 
         static FactoryCell Cell(string id, string kind, string machine, string? recipe, Dictionary<string, string> entities) =>
             new(id, 1, new(0, 0, true), kind, machine, recipe, entities, "ready", 100, Plan: new Dictionary<string, PlannedEntity>());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task LoadedLabsStartBeforePreparationAndStopFurtherWorkAfterNativeCompletion(int photosBeforeCompletion)
+    {
+        string directory = Directory.CreateTempSubdirectory("research-overlap-").FullName;
+        try
+        {
+            var game = new FinishingGame(photosBeforeCompletion, "stale");
+            FactoryCell Cell(string id, string kind, string item, string? recipe, Dictionary<string, string> entities) =>
+                new(id, 1, new(0, 0, true), kind, item, recipe, entities, "ready", 100, Plan: new Dictionary<string, PlannedEntity>());
+            var producer = Cell("producer", "assembler", "assembling-machine-1", "automation-science-pack",
+                new() { ["machine"] = "machine", ["input-chest"] = "input" });
+            var lab = Cell("laboratory", "lab", "lab", null, new() { ["machine"] = "lab" });
+            await new FactoryRegistry(directory).SaveAsync(new(1, game.Scope.WorldId, [new(1, new(0, 0), 4, 6, 6)], [producer, lab]), default);
+            var journal = new Journal();
+
+            var result = await new FactoryResearchController(game, journal, directory).RunAsync("target");
+
+            Assert.Equal(1, game.Selections);
+            Assert.Equal(0, game.PhotosAtSelection);
+            Assert.Equal(0, game.Transfers);
+            Assert.Equal(0, result.Rounds);
+            Assert.Empty(result.Procured);
+            Assert.Contains("research-selection-replaced", journal.Types);
+            Assert.DoesNotContain("factory-logistics", journal.Types);
+            Assert.Equal(photosBeforeCompletion == 1 ? 0 : 1, journal.Types.Count(t => t == "factory-automation-plan"));
+            Assert.Equal("factory-research-result", journal.Types[^1]);
+        }
+        finally { Directory.Delete(directory, true); }
     }
 
     private sealed class Journal : IControllerJournal
@@ -47,16 +79,22 @@ public sealed class FactoryResearchCompletionTests
     }
 
     /// <summary>A final science transfer finishes research while an unprocurable synthetic ingredient is still short.</summary>
-    private sealed class FinishingGame : IGameClient
+    private sealed class FinishingGame(int photosBeforeCompletion = 0, string initialSelection = "target") : IGameClient
     {
         private readonly ProductionCatalog catalog = Catalog();
         private readonly SpatialSnapshot map = FactoryMaps.Grass(8,
             [new("lab", "lab", new(2.5, .5), new(new(1.3, -.7), new(3.7, 1.7)), 0, "own")]);
         private long tick = 100;
         private bool researched;
+        private string selected = initialSelection;
+        private int factoryPhotos;
+        private OperationSubmission? selection;
+        private long selectionTick;
         public ActorScope Scope => catalog.Scope;
         public int Transfers { get; private set; }
         public int ResearchReads { get; private set; }
+        public int Selections { get; private set; }
+        public int PhotosAtSelection { get; private set; }
 
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
@@ -82,11 +120,13 @@ public sealed class FactoryResearchCompletionTests
                 case "power_state": data = new PowerState(Scope, tick, 1, 1, true, [], []); break;
                 case "research_state":
                     ResearchReads++;
+                    if (photosBeforeCompletion > 0 && factoryPhotos >= photosBeforeCompletion && selected == "target") researched = true;
                     data = new ResearchSnapshot(Scope, tick, 1, "target", researched, researched ? 1 : 0,
                         new Dictionary<string, LaboratoryPrototype>(), [], new Dictionary<string, double>(), true, true,
-                        new Dictionary<string, long>(), new Dictionary<string, double>(), researched ? null : "target");
+                        new Dictionary<string, long>(), new Dictionary<string, double>(), researched ? null : selected);
                     break;
                 case "factory_snapshot":
+                    factoryPhotos++;
                     FactoryRecord[] records =
                     [
                         Record("actor", "entity", "actor", new { role = "actor", type = "character", position = map.Actor.Position, mainInventoryId = "bag" }),
@@ -101,6 +141,19 @@ public sealed class FactoryResearchCompletionTests
                     break;
                 case "submit":
                     var submission = request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!;
+                    if (submission.Kind == "research")
+                    {
+                        Assert.Equal("target", submission.Args.GetProperty("technology").GetString());
+                        Assert.True(submission.Args.GetProperty("replace").GetBoolean());
+                        Selections++;
+                        PhotosAtSelection = factoryPhotos;
+                        selected = "target";
+                        selection = submission;
+                        selectionTick = tick;
+                        data = new { submission.OperationId, submission.Kind, status = "completed", acceptedTick = tick, updatedTick = tick,
+                            effects = new { technology = "target" } };
+                        break;
+                    }
                     Assert.Equal("insert", submission.Kind);
                     Assert.Equal("lab", submission.Args.GetProperty("entityId").GetString());
                     Assert.Equal("automation-science-pack", submission.Args.GetProperty("item").GetString());
@@ -109,6 +162,11 @@ public sealed class FactoryResearchCompletionTests
                     researched = true;
                     data = new { submission.OperationId, submission.Kind, status = "completed", acceptedTick = tick, updatedTick = tick,
                         effects = new { requested = 1, transferred = 1 } };
+                    break;
+                case "operation" when selection is not null:
+                    Assert.Equal(selection.OperationId, request.Arguments.GetProperty("operationId").GetString());
+                    data = new { selection.OperationId, selection.Kind, status = "completed", acceptedTick = selectionTick, updatedTick = selectionTick,
+                        effects = new { technology = "target" } };
                     break;
                 default: throw new InvalidOperationException($"Unexpected work after the research finished: {request.Action}");
             }

@@ -7,6 +7,7 @@ namespace Factorio.Agent.Host;
 /// <summary>
 /// Prepared fixture: injected power source, construction items including four bus belts, and plates. Proves that a
 /// technology is completed by sized science cells, a laboratory and chest logistics, without hand-crafted packs.
+/// A separate warm-lab phase supplies packs explicitly and delays preparation to verify overlapping native research.
 /// </summary>
 public sealed class FactoryResearchQualification(RuntimeSession session)
 {
@@ -83,6 +84,28 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
                 if (!replaced.SequenceEqual(["electric-mining-drill"])) throw new InvalidDataException("The stale research selection was not replaced exactly once.");
             }
             finally { foreach (var row in rows) row.Dispose(); }
+            // The normal chemical-science goal spent over two minutes preparing an already loaded factory before
+            // selecting research. Supply only this separate fixture phase's packs, then make preparation equally slow.
+            const string warmTarget = "gun-turret";
+            var warmTechnology = (await new TechnologyClient(game).ReadDependenciesAsync(warmTarget, token)).Technologies[warmTarget];
+            double delaySeconds = warmTechnology.Count * warmTechnology.EnergyTicks / 60 + 20;
+            evidence.Add(new { check = "loaded-lab-preparation-cost", technology = warmTechnology, delaySeconds });
+            if (delaySeconds is < 20 or > 180 || warmTechnology.Ingredients.Any(i => i.Name != "automation-science-pack")
+                || warmTechnology.Ingredients.Sum(i => i.Amount * warmTechnology.Count) > 100)
+                throw new InvalidDataException("Warm fixture requires a short red-science technology covered by its declared packs.");
+            string labId = repairedState.Cells.First(c => c.Kind == "lab" && c.Status == "ready").Entities["machine"];
+            if (!long.TryParse(labId, out _)) throw new InvalidDataException("Expected a native laboratory unit number.");
+            string warmPreparation = $$"""
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local lab; for _,e in pairs(s.find_entities_filtered{type='lab',force=f}) do if tostring(e.unit_number)=='{{labId}}' then lab=e end end; assert(lab); f.cancel_current_research(); f.technologies['{{warmTarget}}'].researched=false; local inv=lab.get_inventory(defines.inventory.lab_input); local discarded=inv.get_contents(); inv.clear(); assert(inv.insert{name='automation-science-pack',count=100}==100); rcon.print(helpers.table_to_json{tick=game.tick,lab='{{labId}}',fixtureTechnology='{{warmTarget}}',fixtureReset=true,fixturePacks=100,discarded=discarded,researched=f.technologies['{{warmTarget}}'].researched})
+                """;
+            using var warmSetup = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(warmPreparation, token));
+            var delayed = new SlowPreparationGame(game, TimeSpan.FromSeconds(delaySeconds), warmTarget);
+            var warm = await new FactoryResearchController(delayed, journal, session.Directory).RunAsync(warmTarget, token);
+            var warmNative = ResearchSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("research_state", new { technology = warmTarget }), token), warmTarget);
+            evidence.Add(new { check = "loaded-lab-finishes-during-preparation", prepared = warmSetup.RootElement.Clone(), delaySeconds,
+                result = warm, delayedResearch = delayed.StateAfterDelay, native = warmNative });
+            if (!warmNative.Researched || delayed.StateAfterDelay?.Researched != true || warm.Rounds != 0 || warm.Procured.Count != 0)
+                throw new InvalidDataException("Loaded laboratory did not finish research before factory preparation returned.");
             passed = true;
             return path;
         }
@@ -96,6 +119,24 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
         {
             var observed = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 1, limit = 1 }), token);
             return observed.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
+        }
+    }
+
+    private sealed class SlowPreparationGame(IGameClient game, TimeSpan delay, string technology) : IGameClient
+    {
+        private bool waited;
+        public ResearchSnapshot? StateAfterDelay { get; private set; }
+
+        public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            if (!waited && request.Action == "factory_snapshot")
+            {
+                waited = true;
+                await Task.Delay(delay, cancellationToken);
+                StateAfterDelay = ResearchSnapshot.Parse(await game.ExecuteAsync(
+                    GameRequest.Create("research_state", new { technology }), cancellationToken), technology);
+            }
+            return await game.ExecuteAsync(request, cancellationToken);
         }
     }
 }
