@@ -6,6 +6,30 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class FactoryTransportDemandTests
 {
+    [Fact]
+    public async Task APartialStartupDoesNotBuildAnUnrelatedConsumersMissingBus()
+    {
+        string directory = Directory.CreateTempSubdirectory("stage-transport-").FullName;
+        try
+        {
+            var catalog = Catalogs.Early();
+            catalog = catalog with { Recipes = [.. catalog.Recipes,
+                new("transport-belt", true, "crafting", 1, [new("iron-plate", "item", 1)], [new("transport-belt", "item", 1)], false),
+                new("small-electric-pole", true, "crafting", 1, [new("copper-cable", "item", 1)], [new("small-electric-pole", "item", 1)], false)] };
+            var consumer = new FactoryCell("red", 1, new(0, 0, true), "assembler", "assembling-machine-1", "automation-science-pack",
+                new Dictionary<string, string> { ["input-chest"] = "red-in", ["output-chest"] = "red-out" }, "ready", 1);
+            var producer = consumer with { Id = "gears", Recipe = "iron-gear-wheel", Entities = new Dictionary<string, string> { ["output-chest"] = "gears-out" } };
+            await new FactoryRegistry(directory).SaveAsync(new FactoryState(1, catalog.Scope.WorldId, [], [consumer, producer])
+                .WithTarget("automation-science-pack", 8), default);
+            var game = new StockedGame(catalog.Scope, redStock: 0);
+            var builder = new FactoryTransportBuilder(game, new ControllerJournal(Path.Combine(directory, "journal.jsonl")), directory);
+            Assert.Equal(0, await builder.ConnectAsync(catalog, targetCellIds: new HashSet<string> { "new-stage" }));
+            Assert.Equal(1, game.SnapshotCalls); // An unrelated route would request geometry and mutations, which this game refuses.
+            Assert.Null((await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, default)).Transports);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     [Theory]
     [InlineData(100, 0, 100, 25)]
     [InlineData(10, 4, 100, 6)]
@@ -42,7 +66,7 @@ public sealed class FactoryTransportDemandTests
         finally { Directory.Delete(directory, true); }
     }
 
-    private sealed class StockedGame(ActorScope scope) : IGameClient
+    private sealed class StockedGame(ActorScope scope, long redStock = 200) : IGameClient
     {
         public int SnapshotCalls { get; private set; }
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
@@ -52,7 +76,7 @@ public sealed class FactoryTransportDemandTests
             FactoryRecord[] records =
             [new("red-in", "entity", "red-in", "iron-chest", Protocol.ToElement(new { position = new MapPosition(8, 0) })),
              new("gears-out", "entity", "gears-out", "iron-chest", Protocol.ToElement(new { position = new MapPosition(0, 0) })),
-             new("red-stock", "inventory", "red-out", "chest", Protocol.ToElement(new { items = new Dictionary<string, long> { ["automation-science-pack"] = 200 } }))];
+             new("red-stock", "inventory", "red-out", "chest", Protocol.ToElement(new { items = new Dictionary<string, long> { ["automation-science-pack"] = redStock } }))];
             return Task.FromResult(new GameResponse(1, request.RequestId, true, 100, Protocol.ToElement(new
             {
                 snapshotId = "native-stock", scope, snapshotScope = scope, collectedTick = 100, expiresTick = 3700,

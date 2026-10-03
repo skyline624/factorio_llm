@@ -6,6 +6,46 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class GrowingOutputLogisticsTests
 {
+    [Fact]
+    public async Task ANewStageStartsWithoutVisitingOtherConsumersOrReplacingTheFullTourReceipt()
+    {
+        string directory = Directory.CreateTempSubdirectory("stage-startup-").FullName;
+        try
+        {
+            var game = new OutputGame(500, 0, false, recipeInput: true)
+            {
+                ExtraCarried = new Dictionary<string, long> { ["automation-science-pack"] = 30 },
+                ExtraRecords = [
+                    new("other-input", "entity", "other-input", "iron-chest", Protocol.ToElement(new { role = "factory", type = "container", position = new MapPosition(25, 25) })),
+                    new("other-input-stock", "inventory", "other-input", "chest", Protocol.ToElement(new { items = new { } })),
+                    new("other-output", "entity", "other-output", "iron-chest", Protocol.ToElement(new { role = "factory", type = "container", position = new MapPosition(25, 27) })),
+                    new("other-output-stock", "inventory", "other-output", "chest", Protocol.ToElement(new { items = new Dictionary<string, long> { ["automation-science-pack"] = 40 } })),
+                    new("other-lab", "entity", "other-lab", "lab", Protocol.ToElement(new { role = "factory", type = "lab", position = new MapPosition(25, 29) }))]
+            };
+            var selected = new FactoryCell("gear", 1, new(0, 0, true), "assembler", "assembling-machine-1", "iron-gear-wheel",
+                new Dictionary<string, string> { ["input-chest"] = "input" }, "ready", 100, Plan: new Dictionary<string, PlannedEntity>());
+            var other = selected with { Id = "other", Entities = new Dictionary<string, string> { ["input-chest"] = "other-input", ["output-chest"] = "other-output" } };
+            var lab = selected with { Id = "lab", Kind = "lab", Recipe = null, Entities = new Dictionary<string, string> { ["machine"] = "other-lab" } };
+            var state = new FactoryState(1, game.Scope.WorldId, [], [selected, other, lab]);
+            await new FactoryRegistry(directory).SaveAsync(state, default);
+            await new FactoryLogisticsCompletionStore(directory).RecordAsync(game.Scope, game.Tick, state, 5, false, default);
+            string receiptPath = Path.Combine(directory, "factory-logistics-completion.json");
+            string before = await File.ReadAllTextAsync(receiptPath);
+            var journal = new Journal();
+            var result = await new FactoryLogistics(game, journal, directory).ServiceAsync(5,
+                minimumIntervalTicks: FactoryLogistics.BetweenGoalsFreshnessTicks, targetCellIds: new HashSet<string> { selected.Id });
+            Assert.Equal(10, result.Supplied.GetValueOrDefault("iron-plate"));
+            Assert.Empty(result.Collected);
+            Assert.Single(result.Supplied);
+            Assert.Equal(1, game.Submissions);
+            Assert.Equal(30, game.ExtraCarried["automation-science-pack"]);
+            Assert.Contains("factory-stage-logistics", journal.Types);
+            Assert.DoesNotContain("factory-logistics-recent-tour", journal.Types);
+            Assert.Equal(before, await File.ReadAllTextAsync(receiptPath));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     [Theory]
     [InlineData(true, "iron-gear-wheel", 480)]
     [InlineData(false, "iron-gear-wheel", 80)]
@@ -195,6 +235,8 @@ public sealed class GrowingOutputLogisticsTests
         public int Carried { get; private set; } = carried;
         public int Submissions { get; private set; }
         public int Queries { get; private set; }
+        public IReadOnlyList<FactoryRecord> ExtraRecords { get; init; } = [];
+        public IReadOnlyDictionary<string, long> ExtraCarried { get; init; } = new Dictionary<string, long>();
 
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
@@ -218,7 +260,7 @@ public sealed class GrowingOutputLogisticsTests
                     var records = new List<FactoryRecord>
                     {
                         Record("actor", "entity", "actor", new { role = "actor", type = "character", position = map.Actor.Position, mainInventoryId = "bag" }),
-                        Record("bag", "inventory", "actor", new { items = new Dictionary<string, long> { [Item] = Carried } })
+                        Record("bag", "inventory", "actor", new { items = new Dictionary<string, long>(ExtraCarried) { [Item] = Carried } })
                     };
                     if (labScience)
                         foreach (var lab in map.Entities)
@@ -241,6 +283,7 @@ public sealed class GrowingOutputLogisticsTests
                         records.Add(Record("boiler", "entity", "boiler", new { role = "factory", type = "boiler", fuelInventoryId = "burner", position = new MapPosition(5, 5) }));
                         records.Add(Record("burner", "inventory", "boiler", new { items = new Dictionary<string, long> { ["coal"] = fuel } }));
                     }
+                    records.AddRange(ExtraRecords);
                     data = new { snapshotId = "stock", scope = Scope, snapshotScope = Scope, collectedTick = Tick, expiresTick = Tick + 1000,
                         totalRecords = records.Count, offset = 0, nextOffset = records.Count, complete = true,
                         coverage = new { atomic = true, knownInventoriesComplete = true, knownBeltAndInserterTransitComplete = true, fluidSegmentsDeduplicated = true }, records };

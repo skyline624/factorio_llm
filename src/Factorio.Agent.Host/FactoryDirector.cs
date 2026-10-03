@@ -67,21 +67,38 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         // Consumers after their suppliers keeps early cells useful even if a later build is interrupted.
         foreach (var stage in plan.Stages)
         {
+            var before = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            var existing = before.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready")
+                .Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
             if (stage.Kind == FluidCellBuilder.MachineKind)
             {
                 await fluids.EnsureStageAsync(stage, catalog, token);
+                await StartStageAsync(stage, existing);
                 continue;
             }
-            var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-            var ready = state.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready").Select(c => c.MachineItem).ToArray();
+            var ready = before.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready").Select(c => c.MachineItem).ToArray();
             int missing = AutomationPlanner.MissingMachines(catalog, stage, ready);
             // Power grows before the cells that will draw it, so new machines never brown out the running factory.
             await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync(stage.MachineItem, missing, true, token);
             for (int count = 0; count < missing; count++)
                 await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
+            await StartStageAsync(stage, existing);
         }
         await new FactoryTransportBuilder(game, journal, directory).ConnectAsync(catalog, token: token);
         return plan;
+
+        async Task StartStageAsync(AutomationStage stage, IReadOnlySet<string> existing)
+        {
+            var current = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            var added = current.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready"
+                && !existing.Contains(c.Id)).Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
+            if (added.Count == 0) return;
+            int links = await new FactoryTransportBuilder(game, journal, directory)
+                .ConnectAsync(catalog, token: token, targetCellIds: added);
+            var startup = await new FactoryLogistics(game, journal, directory)
+                .ServiceAsync(FactoryLogistics.MinimumBufferCrafts, token, targetCellIds: added);
+            await journal.AppendAsync("factory-stage-startup", new { stage.Recipe, added, links, startup }, token);
+        }
     }
 
     public async Task<int> EnsureLabsAsync(int count, CancellationToken token)

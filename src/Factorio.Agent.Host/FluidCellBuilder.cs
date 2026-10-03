@@ -365,13 +365,21 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         throw new InvalidOperationException($"No native {fluid} stock appeared {(holder is null ? "in the known factory" : $"at {holder}")}; its supplier is not producing.");
     }
 
-    /// <summary>Where the machine should stand: its paired extractor, else the nearest holder of a supplied fluid, else the actor.</summary>
+    /// <summary>Anchor on fluids that require factory supply; terrain fluids can be pumped beside that supply.</summary>
     private async Task<MapPosition> AnchorAsync(IReadOnlyList<string> fluids, IReadOnlyDictionary<string, string?> sources,
         ProductionCatalog catalog, CancellationToken token)
     {
         var snapshot = await SnapshotAsync(catalog, token);
+        return Anchor(snapshot, fluids, sources, catalog);
+    }
+
+    internal static MapPosition Anchor(FactorySnapshot snapshot, IReadOnlyList<string> fluids,
+        IReadOnlyDictionary<string, string?> sources, ProductionCatalog catalog)
+    {
         var actor = Position(snapshot, snapshot.Records.Single(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "actor").EntityId);
-        foreach (string fluid in fluids)
+        // Native recipe order puts water before gas in sulfur. A remote steam pump must not pull the cell away
+        // from its refinery: gas cannot be created at a new shore, whereas a new pump can provide water there.
+        foreach (string fluid in fluids.OrderBy(f => FluidChainPlanner.Terrain(catalog, f)))
         {
             if (sources.GetValueOrDefault(fluid) is { } source) return Position(snapshot, source);
             var holders = snapshot.Records.Where(r => r.Kind == "fluid" && r.Data.GetProperty("contents").TryGetProperty(fluid, out var amount) && amount.GetDouble() > 0

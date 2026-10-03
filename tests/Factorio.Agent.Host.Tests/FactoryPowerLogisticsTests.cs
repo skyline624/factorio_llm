@@ -59,6 +59,16 @@ public sealed class FactoryPowerLogisticsTests
         Assert.Contains("factory-cell-missing", world.Journal.Types);
     }
 
+    [Fact]
+    public void APartialStageTourStillReportsAnEmptyPowerFeeder()
+    {
+        using var world = new World(chest: 0, boiler: 0, carried: 0);
+        var result = world.Service(new HashSet<string> { "new-stage" });
+        Assert.Equal(212, result.Shortfall.GetValueOrDefault("coal")); // Feeder reserve plus the dry boiler's ignition fuel.
+        Assert.Contains("factory-stage-logistics", world.Journal.Types);
+        Assert.DoesNotContain("submit", world.Game.Calls);
+    }
+
     /// <summary>One registered power cell and the native photograph of its boiler, chest (absent when null) and inserter.</summary>
     private sealed class World : IDisposable
     {
@@ -89,7 +99,8 @@ public sealed class FactoryPowerLogisticsTests
             Game = new(records);
         }
 
-        public LogisticsResult Service() => new FactoryLogistics(Game, Journal, directory).ServiceAsync().GetAwaiter().GetResult();
+        public LogisticsResult Service(IReadOnlySet<string>? targetCellIds = null) => new FactoryLogistics(Game, Journal, directory)
+            .ServiceAsync(targetCellIds: targetCellIds).GetAwaiter().GetResult();
 
         public void Dispose() => Directory.Delete(directory, true);
 

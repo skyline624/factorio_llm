@@ -18,7 +18,7 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
         await using var game = session.CreateClient(lease);
         string path = Path.Combine(session.Directory, $"factory-research-qualification-{Guid.NewGuid():N}.json");
         string journalPath = Path.ChangeExtension(path, ".jsonl");
-        var journal = new ControllerJournal(journalPath);
+        var journal = new StartupJournal(new ControllerJournal(journalPath), game);
         var evidence = new List<object>();
         bool passed = false;
         try
@@ -39,6 +39,9 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
             var result = await new FactoryResearchController(game, journal, session.Directory).RunAsync("gun-turret", token);
             var state = await new FactoryRegistry(session.Directory).LoadAsync((await ScopeAsync()).WorldId, token);
             evidence.Add(new { check = "factory-research", result, cells = state.Cells });
+            evidence.Add(new { check = "supplier-produces-during-consumer-construction", journal.SupplierDuringConstruction });
+            if (journal.SupplierDuringConstruction is not { ProductsFinished: > 0 })
+                throw new InvalidDataException("The gear supplier did not produce before the science consumer's startup.");
             if (result.Technology != "gun-turret" || state.Cells.Count(c => c.Kind == "lab") < 1
                 || !state.Cells.Any(c => c.Recipe == "automation-science-pack") || !state.Cells.Any(c => c.Recipe == "iron-gear-wheel"))
                 throw new InvalidDataException("Research did not use the expected science cells and laboratory.");
@@ -119,6 +122,26 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
         {
             var observed = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 1, limit = 1 }), token);
             return observed.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
+        }
+    }
+
+    private sealed record SupplierObservation(long Tick, string EntityId, long ProductsFinished);
+
+    private sealed class StartupJournal(IControllerJournal inner, IGameClient game) : IControllerJournal
+    {
+        public SupplierObservation? SupplierDuringConstruction { get; private set; }
+
+        public async Task AppendAsync(string type, object data, CancellationToken token)
+        {
+            await inner.AppendAsync(type, data, token);
+            if (SupplierDuringConstruction is not null || type != "factory-cell-ready"
+                || data is not FactoryCell { Recipe: "automation-science-pack" }) return;
+            // This is before the consumer's startup tour. No prepared gears were supplied or hand-crafted.
+            var photo = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            var gear = photo.Records.FirstOrDefault(r => r.Kind == "work"
+                && r.Data.TryGetProperty("recipe", out var recipe) && recipe.GetString() == "iron-gear-wheel");
+            if (gear is not null)
+                SupplierDuringConstruction = new(photo.CollectedTick, gear.EntityId, gear.Data.GetProperty("productsFinished").GetInt64());
         }
     }
 

@@ -10,7 +10,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     private static readonly BeltTransportEquipment Equipment = new("transport-belt", "inserter", "small-electric-pole");
     private static readonly string[] Items = [Equipment.Belt, Equipment.Inserter, Equipment.Pole];
 
-    public async Task<int> ConnectAsync(ProductionCatalog catalog, int maximumLinks = 2, CancellationToken token = default)
+    public async Task<int> ConnectAsync(ProductionCatalog catalog, int maximumLinks = 2, CancellationToken token = default,
+        IReadOnlySet<string>? targetCellIds = null)
     {
         if (maximumLinks is < 1 or > 8) throw new ArgumentOutOfRangeException(nameof(maximumLinks));
         if (Items.Any(i => !FactoryDirector.Enabled(catalog, i))) return 0;
@@ -30,7 +31,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var pausedCells = FactoryLogistics.PausedCells(state.Cells.Where(c => c.Status == "ready"), catalog,
             FactoryLogistics.StockCaps(catalog, state), FactoryLogistics.AvailableStock(stockSnapshot))
             .Select(p => p.Cell.Id).ToHashSet(StringComparer.Ordinal);
-        foreach (var target in state.Cells.Where(c => c.Status == "ready" && c.Recipe is not null && c.Entities.ContainsKey("input-chest")))
+        foreach (var target in state.Cells.Where(c => c.Status == "ready" && c.Recipe is not null && c.Entities.ContainsKey("input-chest")
+            && (targetCellIds is null || targetCellIds.Contains(c.Id))))
         {
             if (pausedCells.Contains(target.Id)) continue;
             var recipe = catalog.Recipes.FirstOrDefault(r => r.Name == target.Recipe);

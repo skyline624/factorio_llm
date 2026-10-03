@@ -36,8 +36,9 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// <summary>Between strategic goals, a just-completed tour may be reused after fresh upkeep and fuel checks.</summary>
     public const long BetweenGoalsFreshnessTicks = 30 * 60;
 
+    /// <summary>A cell selection starts newly built suppliers without collecting unrelated products or visiting laboratories.</summary>
     public async Task<LogisticsResult> ServiceAsync(int bufferCrafts = 40, CancellationToken token = default,
-        long minimumIntervalTicks = 0, bool usePlannedBuffers = false)
+        long minimumIntervalTicks = 0, bool usePlannedBuffers = false, IReadOnlySet<string>? targetCellIds = null)
     {
         if (bufferCrafts is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(bufferCrafts));
         if (minimumIntervalTicks < 0) throw new ArgumentOutOfRangeException(nameof(minimumIntervalTicks));
@@ -82,7 +83,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
 
         // A research goal can finish during its last tour. Starting another full tour immediately delayed the next
         // model decision by several minutes. Repairs, rearming and current fuel faults still prevent this reuse.
-        if (minimumIntervalTicks > 0 && allCellsPresent && inspected.Count == 0 && upkeep.Actions == 0
+        if (targetCellIds is null && minimumIntervalTicks > 0 && allCellsPresent && inspected.Count == 0 && upkeep.Actions == 0
             && upkeep.Blocked.Count == 0 && upkeep.Shortfall.Count == 0 && upkeep.Unpowered.Count == 0
             && FuelReserve(snapshot, cells, catalog.Items[Fuel].StackSize) == 0
             && await new FactoryLogisticsCompletionStore(directory).IsFreshAsync(catalog.Scope, snapshot.CollectedTick,
@@ -113,14 +114,17 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
 
         // The bag carries what chests, labs and burners need plus two stacks; a full bag fails every later take.
         var needs = Refills(snapshot).GroupBy(r => r.Item).ToDictionary(g => g.Key, g => g.Sum(r => Math.Max(0, r.Target - r.Loaded)), StringComparer.Ordinal);
-        int labs = cells.Count(c => c.Kind == "lab");
+        int labs = cells.Count(c => c.Kind == "lab" && (targetCellIds is null || targetCellIds.Contains(c.Id)));
         foreach (string pack in catalog.Items.Keys.Where(IsSciencePack)) needs[pack] = needs.GetValueOrDefault(pack) + labs * StackSize(pack);
         // Collect existing output for the full refill, rather than only its ignition threshold. With ten furnaces,
         // the old allowance ran out while topping up the first burners despite abundant coal in the source chest.
         needs[Fuel] = needs.GetValueOrDefault(Fuel) + FuelRefillNeed(snapshot, cells, StackSize(Fuel));
-        long Cap(string item) => CollectCap(needs.GetValueOrDefault(item), StackSize(item));
+        long Cap(string item) => targetCellIds is not null && needs.GetValueOrDefault(item) == 0 ? 0
+            : CollectCap(needs.GetValueOrDefault(item), StackSize(item));
         var bag = Carried(snapshot);
-        var reserved = await transport.ApplyActorReservationsAsync(state, snapshot, needs, bag, catalog, token);
+        // A partial startup does not clear reservations established for the rest of the factory by its last full tour.
+        var reserved = targetCellIds is null
+            ? await transport.ApplyActorReservationsAsync(state, snapshot, needs, bag, catalog, token) : state;
         if (!ReferenceEquals(state, reserved))
         {
             state = reserved;
@@ -191,7 +195,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
         carried = Carried(snapshot);
-        var laboratoryIds = FactoryVisitOrder.Plan(snapshot, cells.Where(c => c.Kind == "lab").Select(c => c.Entities["machine"])).ToArray();
+        var laboratoryIds = FactoryVisitOrder.Plan(snapshot, cells.Where(c => c.Kind == "lab"
+            && (targetCellIds is null || targetCellIds.Contains(c.Id))).Select(c => c.Entities["machine"])).ToArray();
         var scienceAllotments = new Dictionary<(string Lab, string Pack), long>();
         foreach (string pack in carried.Keys.Where(IsSciencePack))
         {
@@ -281,6 +286,11 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         Require(snapshot.Scope, catalog);
         state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
         var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, powerStarved, upkeep, degraded);
+        if (targetCellIds is not null)
+        {
+            await journal.AppendAsync("factory-stage-logistics", new { targetCellIds, result }, token);
+            return result; // A partial tour cannot replace the full-factory completion receipt.
+        }
         await journal.AppendAsync("factory-logistics", result, token);
         try
         {
@@ -300,7 +310,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
 
         // Input chest targets of the cells refilled this round: planned buffers, paused producers left out.
         (string Chest, string Item, long Loaded, long Target)[] Refills(FactorySnapshot photograph) =>
-            cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest") && paused.All(p => p.Cell.Id != c.Id)).SelectMany(cell =>
+            cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest") && paused.All(p => p.Cell.Id != c.Id)
+                && (targetCellIds is null || targetCellIds.Contains(c.Id))).SelectMany(cell =>
             {
                 NativeRecipe recipe = catalog.Recipes.Single(r => r.Name == cell.Recipe);
                 string chest = cell.Entities["input-chest"];

@@ -5,6 +5,27 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class FluidCellBuilderTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SulfurStaysByItsGasSupplyWhenTheSteamPumpIsFarAway(bool waterFirst)
+    {
+        var catalog = OilCatalogs.Oil();
+        var gas = new MapPosition(100.5, -215.5);
+        var photo = new FactorySnapshot("photo", catalog.Scope, 100, 200, Protocol.ToElement(new { }), [
+            Entity("actor", "actor", new(0, 0)), Entity("pump", "factory", new(-60.5, -118.5)), Entity("refinery", "factory", gas),
+            Fluid("water", "pump"), Fluid("petroleum-gas", "refinery")]);
+        string[] fluids = waterFirst ? ["water", "petroleum-gas"] : ["petroleum-gas", "water"];
+        Assert.Equal(gas, FluidCellBuilder.Anchor(photo, fluids, new Dictionary<string, string?>(), catalog));
+        // A recipe using only water still reuses the existing source.
+        Assert.Equal(new MapPosition(-60.5, -118.5), FluidCellBuilder.Anchor(photo, ["water"], new Dictionary<string, string?>(), catalog));
+
+        static FactoryRecord Entity(string id, string role, MapPosition position) =>
+            new(id, "entity", id, id, Protocol.ToElement(new { role, position }));
+        static FactoryRecord Fluid(string name, string id) =>
+            new(name, "fluid", id, name, Protocol.ToElement(new { contents = new Dictionary<string, double> { [name] = 90 }, sourceBoxes = new[] { new { entityId = id } } }));
+    }
+
     [Fact]
     public void AnExtractorRateComesFromTheDepositUnderItsDrill()
     {

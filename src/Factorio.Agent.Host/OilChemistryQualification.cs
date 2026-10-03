@@ -44,6 +44,16 @@ public sealed class OilChemistryQualification(RuntimeSession session, string ite
             evidence.Add(new { check = "explicit-oil-preparation", item, band = Band.Box, native = before });
             Require(before.GetProperty("refineryCycles").GetInt64() == 0 && before.GetProperty("chemicalCycles").GetInt64() == 0,
                 "The fixture must start without refineries or chemical plants.");
+            if (item == "sulfur")
+            {
+                // Reproduce an already known water supply far from the oil. Sulfur must anchor at gas and pump
+                // fresh water nearby rather than selecting this water first because of native recipe order.
+                const string remoteWater = """
+                    /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local tank=s.create_entity{name='storage-tank',position={-76,10},force=f}; assert(tank); tank.fluidbox[1]={name='water',amount=1000}; rcon.print(helpers.table_to_json{tick=game.tick,entityId=tostring(tank.unit_number),position=tank.position,fixtureWater=1000})
+                    """;
+                using var water = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(remoteWater, token));
+                evidence.Add(new { check = "explicit-remote-water-supply", native = water.RootElement.Clone() });
+            }
             // Standing beside the injected source makes its network known, as building it would; then the actor walks to the oil.
             var source = CellPowerLinker.NearestFedPole(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token), Deposit);
             evidence.Add(new { check = "remote-power-source", source, deposit = Deposit, distance = source?.DistanceTo(Deposit), captureRadius = 48 });
@@ -139,7 +149,8 @@ public sealed class OilChemistryQualification(RuntimeSession session, string ite
                 Require(crafted.All(r => r != item), $"{item} was crafted by hand.");
                 Require(mines == 0, "The prepared chain triggered manual mining.");
                 if (item == "plastic-bar")
-                    Require(first.Supplied.GetValueOrDefault("coal") > 0 && delivered > 0 && growth["coalConsumed"] > 0,
+                    // Startup may already have filled the chest before the first full logistics tour.
+                    Require(delivered > 0 && growth["coalConsumed"] > 0,
                         "Logistics did not deliver the coal the chemical plant consumed.");
                 else
                     Require(growth["waterConsumed"] > 0 && chemical.Entities.ContainsKey("pump"),
