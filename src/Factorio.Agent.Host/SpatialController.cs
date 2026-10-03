@@ -37,7 +37,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         var entity = map.Entities.SingleOrDefault(e => e.Id == entityId) ?? throw new EntityMissingException(entityId, knownPosition);
         MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map), entity)
             ?? throw new InvalidOperationException("No reachable interaction position for the observed entity.");
-        // Interaction geometry is observed over 48 tiles; navigation uses smaller local snapshots.
+        // Navigation starts with a smaller local view and can expand it when a detour is clipped.
         await TravelAsync(approach, .2, catalog, token);
     }
 
@@ -71,10 +71,11 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         deadline.CancelAfter(TimeSpan.FromMinutes(2));
         var receipts = new List<OperationReceipt>();
         var remaining = new List<MapPosition>();
-        int plans = 0, clearedTrees = 0;
+        int plans = 0, clearedTrees = 0, observationRadius = 32;
         SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: deadline.Token);
         RequireAi(initial);
         ActorScope scope = initial.Scope;
+        long latestObservationTick = initial.CollectedTick;
         while (plans < 256)
         {
             deadline.Token.ThrowIfCancellationRequested();
@@ -85,13 +86,16 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 continue;
             }
             SpatialSnapshot map;
-            try { map = await spatial.CaptureAsync(cancellationToken: deadline.Token); }
+            try { map = await spatial.CaptureAsync(radius: observationRadius, cancellationToken: deadline.Token); }
             catch (GameRpcException error) when (error.Error.Code == "actor_dead")
             {
                 throw new InvalidDataException("The actor died during navigation; reconcile before choosing a new route.", error);
             }
             if (map.Scope != scope) throw new InvalidDataException("Actor scope changed during navigation; the previous route is no longer executable.");
             RequireAi(map);
+            if (map.CollectedTick < latestObservationTick)
+                throw new InvalidDataException("Navigation observation predates the previous view; reconcile before choosing a route.");
+            latestObservationTick = map.CollectedTick;
             if (map.Actor.Position.DistanceTo(destination) <= arrivalDistance)
                 return new(destination, map.Actor.Position, arrivalDistance, plans, receipts.AsReadOnly());
             var field = new SpatialCollisionField(map);
@@ -104,7 +108,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 route = route with { Waypoints = Subdivide(map.Actor.Position, route.Waypoints) };
             plans++;
             await journal.AppendAsync("route-plan", new { map.Scope, map.CollectedTick, destination, arrivalDistance,
-                map.StationaryThreats, reused = reusable, route }, deadline.Token);
+                map.StationaryThreats, radius = map.Coverage.Radius, reused = reusable, route }, deadline.Token);
             if (!reusable && route.Status == RouteStatus.BudgetExceeded)
             {
                 // A short search budget is not proof that a known destination is unreachable. Deepen once, with
@@ -116,6 +120,17 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                     remaining = Subdivide(map.Actor.Position, route.Waypoints).ToList();
                     continue;
                 }
+            }
+            if (route.Status == RouteStatus.NoRouteOnKnownGrid && observationRadius < 48)
+            {
+                // Exhausting the smaller photograph may only mean that the detour leaves its edge.
+                // Reenter defense arbitration and capture the same actor's bounded wider view before
+                // planning or clearing anything; retain that radius so later segments keep the detour.
+                await journal.AppendAsync("route-observation-expanded", new { map.Scope, map.CollectedTick,
+                    destination, arrivalDistance, previousRadius = observationRadius, radius = 48, route.Status }, deadline.Token);
+                observationRadius = 48;
+                remaining.Clear();
+                continue;
             }
             if (route.Status == RouteStatus.NoRouteOnKnownGrid && clearedTrees < 16)
             {
