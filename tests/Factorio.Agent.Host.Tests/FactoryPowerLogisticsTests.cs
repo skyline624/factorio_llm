@@ -27,6 +27,18 @@ public sealed class FactoryPowerLogisticsTests
     }
 
     [Theory]
+    [InlineData(70, 135, 59, 72, 0)]
+    [InlineData(70, 135, 100, 72, 28)]
+    [InlineData(200, 0, 59, 84, 12)]
+    [InlineData(200, 0, 5, 84, 5)]
+    [InlineData(70, 135, 59, 0, 59)]
+    [InlineData(0, 5, 59, 84, 0)]
+    public void BoilerReservesLeaveCoalToIgniteProductionBurners(long need, long supply, long available, long ignitionReserve, long allocated)
+    {
+        Assert.Equal(allocated, FactoryLogistics.PowerFuelAllocation(need, supply, available, ignitionReserve, 50));
+    }
+
+    [Theory]
     [InlineData(true, 3, false)]
     [InlineData(true, 0, true)]
     [InlineData(false, 11, true)]

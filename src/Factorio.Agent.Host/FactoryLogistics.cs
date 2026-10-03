@@ -222,6 +222,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
         carried = Carried(snapshot);
+        long ignitionReserve = FuelReserve(snapshot, cells, stack);
         // Power cells feed their boilers from a chest; keeping several stacks there lets boilers run between actor visits.
         foreach (var cell in cells.Where(c => c.Kind == "power" && c.Entities.ContainsKey("input-chest")))
         {
@@ -231,7 +232,9 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             long need = PowerFuelNeed(inChest, fuel, PowerChestStacks * stack);
             if (need == 0 && inChest.Keys.Any(k => k != fuel))
                 await journal.AppendAsync("factory-power-chest-mixed", new { cell.Id, chest, inChest }, token);
-            long give = Math.Min(need, carried.GetValueOrDefault(fuel));
+            long burning = cell.Entities.TryGetValue("boiler", out var boiler) ? Items(snapshot, boiler).GetValueOrDefault(fuel) : 0;
+            long give = PowerFuelAllocation(need, inChest.GetValueOrDefault(fuel) + burning,
+                carried.GetValueOrDefault(fuel), ignitionReserve, stack);
             if (give > 0)
             {
                 moved = await TransferAsync("insert", chest, fuel, give);
@@ -239,7 +242,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 supplied[fuel] = supplied.GetValueOrDefault(fuel) + moved;
                 need -= moved;
             }
-            long burning = cell.Entities.TryGetValue("boiler", out var boiler) ? Items(snapshot, boiler).GetValueOrDefault(fuel) : 0;
+            ignitionReserve = Math.Max(0, ignitionReserve - Math.Min(moved, Math.Max(0, stack / 4 - inChest.GetValueOrDefault(fuel) - burning)));
             long powerShort = PowerFuelShortfall(need, inChest.GetValueOrDefault(fuel) + moved + burning, stack);
             if (powerShort > 0) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + powerShort;
         }
@@ -587,6 +590,14 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// <summary>Fuel a feeder chest still needs to reach the target; a chest holding anything else is never topped up.</summary>
     internal static long PowerFuelNeed(IReadOnlyDictionary<string, long> chest, string fuel, long target) =>
         chest.Any(p => p.Key != fuel && p.Value > 0) ? 0 : Math.Max(0, target - chest.GetValueOrDefault(fuel));
+
+    /// <summary>Starts a low boiler supply, but leaves the other burners' ignition share before topping up its reserve.</summary>
+    internal static long PowerFuelAllocation(long need, long supply, long available, long ignitionReserve, long stack)
+    {
+        long minimum = Math.Min(need, Math.Max(0, stack / 4 - supply));
+        long otherIgnition = Math.Max(0, ignitionReserve - minimum);
+        return Math.Min(need, Math.Min(available, Math.Max(minimum, available - otherIgnition)));
+    }
 
     /// <summary>
     /// Coal worth a procurement trip for a feeder or band furnace chest. Chests are topped up to their target whenever coal is

@@ -91,6 +91,42 @@ public sealed class FactoryFuelQualification(RuntimeSession session)
             evidence.Add(new { check = "healthy-native-tour-reused", recent });
             Require(recent.Actions == 0 && (await File.ReadAllLinesAsync(journalPath, token))
                 .Any(line => line.Contains("\"type\":\"factory-logistics-recent-tour\"", StringComparison.Ordinal)), "Healthy fuel reserves did not permit recent-tour reuse.");
+
+            // Reproduce a normal-world bootstrap stall: a healthy feeder must not consume the ignition share of dry producers.
+            string feederKitReply = await session.CreateRcon().ExecuteAsync("""
+                /silent-command local c=game.surfaces.nauvis.find_entities_filtered{type='character',force=game.forces.factorio_agent}[1]; assert(c.insert{name='boiler',count=1}==1); assert(c.insert{name='iron-chest',count=1}==1); assert(c.insert{name='inserter',count=1}==1); rcon.print(helpers.table_to_json{tick=game.tick,boilers=1,chests=1,inserters=1})
+                """, token);
+            await journal.AppendAsync("prepared-feeder-kit-reply", new { reply = feederKitReply }, token);
+            using var feederKit = JsonDocument.Parse(feederKitReply);
+            string boiler = await builder.BuildAtAsync("boiler", new(new(32.5, 20), 0, 0), catalog, controller, token);
+            string feeder = await builder.BuildAtAsync("iron-chest", new(new(29.5, 20.5), 0, 0), catalog, controller, token);
+            string inserter = await builder.BuildAtAsync("inserter", new(new(30.5, 20.5), 12, 0), catalog, controller, token);
+            Require(long.TryParse(boiler, out _) && long.TryParse(feeder, out _), "Expected native feeder ids.");
+            current = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            await registry.SaveAsync(current.With(new FactoryCell("power-scarce-coal", 0, new(0, 0, true), "power", "boiler", null,
+                new Dictionary<string, string> { ["boiler"] = boiler, ["input-chest"] = feeder, ["input-inserter"] = inserter },
+                "ready", catalog.CollectedTick)), token);
+            string scarceReply = await session.CreateRcon().ExecuteAsync($$"""
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; c.get_main_inventory().clear(); assert(c.insert{name='coal',count=120}==120); local ids={}; for _,id in pairs{ {{ids}} } do ids[id]=true end; local dry=0; for _,e in pairs(s.find_entities_filtered{type='furnace',force=f}) do if ids[e.unit_number] then e.get_fuel_inventory().clear(); e.burner.remaining_burning_fuel=0; e.get_inventory(defines.inventory.furnace_source).clear(); assert(e.get_inventory(defines.inventory.furnace_source).insert{name='iron-ore',count=50}==50); dry=dry+1 end end; assert(dry==10); for _,e in pairs(s.find_entities_filtered{type='container',force=f}) do if e.unit_number=={{chest}} then e.get_inventory(defines.inventory.chest).clear() elseif e.unit_number=={{feeder}} then assert(e.insert{name='coal',count=130}==130) end end; for _,e in pairs(s.find_entities_filtered{type='boiler',force=f}) do if e.unit_number=={{boiler}} then assert(e.get_fuel_inventory().insert{name='coal',count=20}==20) end end; rcon.print(helpers.table_to_json{tick=game.tick,dryFurnaces=dry,orePerFurnace=50,carriedCoal=120,feederCoal=130,boilerCoal=20,sourceCoal=0})
+                """, token);
+            await journal.AppendAsync("prepared-scarce-fuel-inputs-reply", new { reply = scarceReply }, token);
+            using var scarceSetup = JsonDocument.Parse(scarceReply);
+            evidence.Add(new { check = "explicit-scarce-fuel-inputs", kit = feederKit.RootElement.Clone(), native = scarceSetup.RootElement.Clone() });
+            var scarceBefore = await snapshots.CaptureAsync(cancellationToken: token);
+            var scarceResult = await new FactoryLogistics(game, journal, session.Directory).ServiceAsync(token: token);
+            var productionWait = await controller.WorkAsync("wait", new { ticks = 600 }, 900, token: token);
+            Require(productionWait.Status == "completed", "The restarted producers could not be observed through native craft cycles.");
+            var scarceAfter = await snapshots.CaptureAsync(cancellationToken: token);
+            long Crafts(FactorySnapshot photo, string id) => photo.Records.Single(r => r.Kind == "work" && r.EntityId == id)
+                .Data.GetProperty("productsFinished").GetInt64();
+            var restarted = furnaces.Select(id => new { id, before = Coal(scarceBefore, id), after = Coal(scarceAfter, id),
+                craftsBefore = Crafts(scarceBefore, id), craftsAfter = Crafts(scarceAfter, id) }).ToArray();
+            evidence.Add(new { check = "native-scarce-fuel-restarts-producers", scarceResult, restarted,
+                feederBefore = Coal(scarceBefore, feeder), feederAfter = Coal(scarceAfter, feeder), scarceAfter.CollectedTick });
+            Require(restarted.All(b => b.before == 0 && b.after > 0 && b.craftsAfter > b.craftsBefore)
+                && Coal(scarceAfter, feeder) == Coal(scarceBefore, feeder) && scarceResult.Supplied.GetValueOrDefault("coal") == 120
+                && scarceResult.Shortfall.GetValueOrDefault("coal") == 0 && !scarceResult.PowerStarved,
+                "A healthy feeder consumed scarce ignition coal while native producers stayed dry.");
             using var final = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync("""
                 /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,players=#game.connected_players,craftingQueue=c.crafting_queue_size})
                 """, token));
