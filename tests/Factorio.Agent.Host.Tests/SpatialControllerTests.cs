@@ -131,10 +131,10 @@ public sealed class SpatialControllerTests
             Entities = [new("behind", "wall", new(3.5, .5), new(new(3.1, .1), new(3.9, .9)), 0, "agent")] };
         MapPosition[] path = [new(3.5, .5), new(3.5, 3.5)];
         Assert.False(new SpatialCollisionField(map).SteeringRegionClear(map.Actor.Position, path[0]));
-        Assert.True(SpatialController.MovementPathIsClear(map, map.Scope, "move", path, out int leg));
+        Assert.True(SpatialController.MovementPathIsClear(map, map.Scope, "move", new(0, .5), path, out int leg));
         Assert.Equal(1, leg);
         map = map with { Entities = [.. map.Entities, new("ahead", "wall", new(3.5, 3), new(new(3.1, 2.6), new(3.9, 3.4)), 0, "agent")] };
-        Assert.False(SpatialController.MovementPathIsClear(map, map.Scope, "move", path, out _));
+        Assert.False(SpatialController.MovementPathIsClear(map, map.Scope, "move", new(0, .5), path, out _));
     }
 
     [Theory]
@@ -146,7 +146,77 @@ public sealed class SpatialControllerTests
         var map = SpatialPlannerTests.Map([]);
         map = map with { Actor = map.Actor with { Movement = change == "missing" ? null : new(change == "different-operation" ? "other" : "move", 1, 2) } };
         var scope = change == "changed-scope" ? map.Scope with { Generation = map.Scope.Generation + 1 } : map.Scope;
-        Assert.False(SpatialController.MovementPathIsClear(map, scope, "move", [new(1, 0), new(2, 0)], out _));
+        Assert.False(SpatialController.MovementPathIsClear(map, scope, "move", new(0, 0), [new(1, 0), new(2, 0)], out _));
+    }
+
+    [Theory]
+    [InlineData(1, -.796875, -.06640625)]
+    [InlineData(2, .025, -.125)]
+    public void ContinuousRecheckRetainsShortSweptCornersSelectedBesideAnInserter(int index, double x, double y)
+    {
+        var map = TightBeltCornerMap();
+        MapPosition start = map.Actor.Position;
+        var points = SpatialController.Subdivide(start, [new(0, 0), new(.5, -2.5)]);
+        var path = SpatialController.SelectMovePath(new(map), new(RouteStatus.Found, points, 0, 9));
+        Assert.Equal(new MapPosition[] { new(0, 0), new(.125, -.625), new(.5, -2.5) }, path);
+        var field = new SpatialCollisionField(map);
+        Assert.False(field.SteeringRegionClear(path[0], path[1]));
+        Assert.True(field.SegmentClear(path[0], path[1]));
+        map = map with { Actor = map.Actor with { Position = new(x, y), Movement = new("move", index, path.Count) } };
+        Assert.True(SpatialController.MovementPathIsClear(map, map.Scope, "move", start, path, out int leg));
+        Assert.Equal(index - 1, leg);
+    }
+
+    private static SpatialSnapshot TightBeltCornerMap()
+    {
+        var map = BeltCornerMap();
+        return map with
+        {
+            Actor = map.Actor with { Position = new(-6.25, -.37109375) },
+            Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+                { ["inserter"] = new("inserter", "inserter", new(new(-.15, -.15), new(.15, .15)), map.Prototypes["chest"].Mask, 1, 1) },
+            Entities = [new("belt", "belt", new(-.5, 0), new(new(-.9, -.4), new(-.1, .4)), 12, "agent"),
+                new("inserter", "inserter", new(-.5, -1), new(new(-.65, -1.15), new(-.35, -.85)), 0, "agent")]
+        };
+    }
+
+    [Theory]
+    [InlineData("wall")]
+    [InlineData("water")]
+    [InlineData("threat")]
+    public void TightCornerRecheckStillRefusesANewPhysicalObstruction(string change)
+    {
+        var map = TightBeltCornerMap();
+        MapPosition start = map.Actor.Position;
+        MapPosition[] path = [new(0, 0), new(.125, -.625), new(.25, -1.25)];
+        map = map with { Actor = map.Actor with { Position = new(-.8, 0), Movement = new("move", 1, 3) } };
+        map = change switch
+        {
+            "wall" => map with { Entities = [.. map.Entities, new("new-wall", "wall", new(.125, -.625), new(new(.025, -.725), new(.225, -.525)), 0, "agent")] },
+            "water" => map with { Rows = map.Rows.Select(r => r.Y == -1 ? new TileRun(-12, -1, 25, "water") : r).ToArray() },
+            "threat" => map with { StationaryThreats = [new("worm", new(.125, -.625), 2, map.CollectedTick)] },
+            _ => throw new InvalidOperationException(change)
+        };
+        Assert.False(SpatialController.MovementPathIsClear(map, map.Scope, "move", start, path, out _));
+    }
+
+    [Fact]
+    public void ALongPlannedLegRetainsItsSteeringRectangleEvenNearItsDestination()
+    {
+        var map = TightBeltCornerMap();
+        map = map with { Actor = map.Actor with { Position = new(0, 0), Movement = new("move", 1, 2) } };
+        MapPosition[] path = [new(.125, -.625), new(.25, -1.25)];
+        Assert.True(new SpatialCollisionField(map).SegmentClear(map.Actor.Position, path[0]));
+        Assert.False(SpatialController.MovementPathIsClear(map, map.Scope, "move", new(0, 5), path, out _));
+    }
+
+    [Fact]
+    public void AShortCornerCannotAcceptBeltDriftBeyondItsArrivalAllowance()
+    {
+        var map = TightBeltCornerMap();
+        map = map with { Actor = map.Actor with { Position = new(-1, 0), Movement = new("move", 2, 3) } };
+        Assert.False(SpatialController.MovementPathIsClear(map, map.Scope, "move", new(-6.25, 0),
+            [new(0, 0), new(.125, -.625), new(.25, -1.25)], out _));
     }
 
     [Fact]

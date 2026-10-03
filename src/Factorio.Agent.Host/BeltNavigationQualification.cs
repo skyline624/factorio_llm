@@ -84,8 +84,46 @@ public sealed class BeltNavigationQualification(RuntimeSession session)
                         "The invalid native path was not rejected before movement.");
                 }
             }
+            // A longer factory corridor exercises the in-flight guard before a tight future corner.
+            // The row forces an eastern detour; its final inserter leaves the same swept, non-rectangular
+            // approach observed in normal logistics. All scene edits remain inside this declared fixture.
+            const string prepareCorridor = """
+                /silent-command local s=game.surfaces.nauvis;local f=game.forces.factorio_agent;local c=s.find_entities_filtered{type='character',force=f}[1];assert(c and #game.connected_players==0);for _,e in pairs(s.find_entities_filtered{area={{-60,-20},{-28,16}}}) do if e~=c then e.destroy() end end;local tiles={};for x=-60,-28 do for y=-20,16 do tiles[#tiles+1]={name='grass-1',position={x,y}} end end;s.set_tiles(tiles);for x=-56.5,-42.5 do assert(s.create_entity{name='iron-chest',position={x,-3.5},force=f}) end;for x=-48.5,-42.5 do assert(s.create_entity{name='transport-belt',position={x,-1.5},direction=defines.direction.west,force=f}) end;assert(s.create_entity{name='inserter',position={-42.5,-2.5},force=f});assert(s.create_entity{name='small-electric-pole',position={-43.5,-2.5},force=f});assert(c.teleport({-48.25,-1.87109375}));rcon.print('belt-corridor-ready')
+                """;
+            Require((await native.ExecuteAsync(prepareCorridor, token)).Trim() == "belt-corridor-ready", "The explicit long corridor preparation failed.");
+            var corridorMap = await new SpatialClient(game).CaptureAsync(cancellationToken: token);
+            var corridorField = new SpatialCollisionField(corridorMap);
+            MapPosition corridorDestination = new(-46.5, -6.5);
+            var corridorRoute = new RoutePlanner().Find(corridorField, corridorDestination, 0, timeBudget: TimeSpan.FromSeconds(2), token: token);
+            Require(corridorRoute.Status == RouteStatus.Found, "No C# route through the prepared long corridor.");
+            corridorRoute = corridorRoute with { Waypoints = SpatialController.Subdivide(corridorMap.Actor.Position, corridorRoute.Waypoints) };
+            var corridorPath = SpatialController.SelectMovePath(corridorField, corridorRoute);
+            bool tightCorner = corridorPath.Zip(corridorPath.Skip(1), (a, b) => a.DistanceTo(b) <= .75 + 1e-9
+                && !corridorField.SteeringRegionClear(a, b) && corridorField.SegmentClear(a, b)).Any(clear => clear);
+            evidence.Add(new { check = "native-tight-corridor-planned", corridorMap.CollectedTick, corridorMap.Actor, corridorRoute, corridorPath, tightCorner });
+            Require(corridorPath.Count > 1 && tightCorner, "The long corridor did not select a short swept corner outside its steering rectangle.");
+            await using (var controller = new SpatialController(game, journal))
+            {
+                var result = await controller.NavigateAsync(corridorDestination, .2, token);
+                var continuous = result.Receipts.Where(r => r.Status == "completed"
+                    && r.Effects.TryGetProperty("waypointCount", out var count) && count.GetInt32() > 1).ToArray();
+                var checks = (await File.ReadAllLinesAsync(journalPath, token)).Select(line => JsonSerializer.Deserialize<JsonElement>(line))
+                    .Where(row => row.GetProperty("type").GetString() == "movement-terrain-check")
+                    .Select(row => row.GetProperty("data"))
+                    .Where(data => continuous.Any(r => r.OperationId == data.GetProperty("operationId").GetString())).ToArray();
+                Require(result.Receipts.All(r => r.Status == "completed") && continuous.Length > 0
+                    && checks.Length > 0 && checks.All(data => data.GetProperty("valid").GetBoolean()),
+                    "The longer continuous corridor did not complete with successful in-flight geometry checks.");
+                var reached = await ReadAsync();
+                Require((await controller.WorkAsync("wait", new { ticks = 60 }, 360, token: token)).Status == "completed", "The long corridor stability wait failed.");
+                var stable = await ReadAsync();
+                evidence.Add(new { check = "native-continuous-tight-corridor", result, checks, reached, stable });
+                Require(stable.Position.DistanceTo(corridorDestination) <= .2 && !stable.Walking && reached.Position == stable.Position
+                    && stable.Character == initial.Character && stable.Inventory == initial.Inventory && stable.Health == initial.Health && stable.Players == 0,
+                    "The long corridor changed the character, stocks, health or final stability.");
+            }
             var current = await new SpatialClient(game).CaptureAsync(cancellationToken: token);
-            var cancellationRoute = new RoutePlanner().Find(new(current), new(Destination.X, Destination.Y - 8), 0, token: token);
+            var cancellationRoute = new RoutePlanner().Find(new(current), new(current.Actor.Position.X, current.Actor.Position.Y - 8), 0, token: token);
             Require(cancellationRoute.Status == RouteStatus.Found, "No observed cancellation-test route.");
             var corners = SpatialController.Subdivide(current.Actor.Position, cancellationRoute.Waypoints);
             var cancelPath = new[] { corners[0], corners[^1] };

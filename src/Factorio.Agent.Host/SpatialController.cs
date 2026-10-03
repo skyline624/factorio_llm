@@ -344,6 +344,9 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     private async Task<OperationReceipt> ExecuteAsync(OperationSubmission submission, CancellationToken token,
         IReadOnlyList<MapPosition>? watchedPath = null)
     {
+        MapPosition? movementStart = watchedPath is null ? null
+            : submission.Preconditions.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)
+                ?? throw new InvalidDataException("A watched movement requires its planned starting position.");
         await journal.AppendAsync("submission", submission, token);
         ownedOperation = submission.OperationId;
         OperationReceipt receipt;
@@ -372,7 +375,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 lastTerrainTick = current.CollectedTick;
                 // The active corner and position must come from one native frame; a receipt queried before this
                 // photograph can already refer to a corner that the continuously walking character has passed.
-                bool valid = MovementPathIsClear(current, submission.Scope, submission.OperationId, watchedPath, out int leg);
+                bool valid = MovementPathIsClear(current, submission.Scope, submission.OperationId, movementStart!, watchedPath, out int leg);
                 await journal.AppendAsync("movement-terrain-check", new { submission.OperationId, current.Scope,
                     current.CollectedTick, current.Actor.Position, destination = watchedPath[^1], waypointIndex = leg + 1, valid }, token);
                 if (!valid)
@@ -394,7 +397,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     }
 
     internal static bool MovementPathIsClear(SpatialSnapshot current, ActorScope scope, string operationId,
-        IReadOnlyList<MapPosition> path, out int leg)
+        MapPosition plannedStart, IReadOnlyList<MapPosition> path, out int leg)
     {
         leg = path.Count == 1 ? 0 : current.Actor.Movement is { } movement
             && movement.OperationId == operationId && movement.WaypointCount == path.Count ? movement.WaypointIndex - 1 : -1;
@@ -403,7 +406,15 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         MapPosition from = current.Actor.Position;
         for (int index = leg; index < path.Count; index++)
         {
-            if (!field.SteeringRegionClear(from, path[index])) return false;
+            // SelectWaypoint preserves the first subdivided step at a tight corner even when its larger
+            // steering rectangle is not clear. Recheck the short swept route with its normal clearance, rather than
+            // invalidating an unchanged future corner during the preceding long leg. Classification uses
+            // the submitted path: a long move approaching its end must not become a tight-step exception.
+            MapPosition plannedFrom = index == 0 ? plannedStart : path[index - 1];
+            bool tightStep = path.Count > 1 && plannedFrom.DistanceTo(path[index]) <= .75 + 1e-9;
+            if (!field.SteeringRegionClear(from, path[index])
+                && (!tightStep || from.DistanceTo(path[index]) > .75 + .15 + 1e-9
+                    || !field.SegmentClear(from, path[index]))) return false;
             from = path[index];
         }
         return true;
