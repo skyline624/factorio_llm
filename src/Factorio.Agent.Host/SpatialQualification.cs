@@ -24,6 +24,7 @@ public sealed class SpatialQualification(RuntimeSession session)
                 /silent-command local s=game.surfaces.nauvis; local c=s.find_entities_filtered{type="character",force="factorio_agent"}[1]; assert(c); c.teleport({0,0}); for _,e in ipairs(s.find_entities_filtered{area={{-24,-24},{40,24}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-24,40 do for y=-24,24 do tiles[#tiles+1]={name="grass-1",position={x,y}} end end; s.set_tiles(tiles); local water={}; for x=4,7 do for y=-3,3 do water[#water+1]={name="water",position={x,y}} end end; s.set_tiles(water); for y=-6,6 do assert(s.create_entity{name="stone-wall",position={9.5,y+0.5},force=c.force}) end; c.insert{name="stone-furnace",count=1}; c.insert{name="wooden-chest",count=1}; rcon.print("spatial-layout-fixture");
                 """;
             Require((await session.CreateRcon().ExecuteAsync(prepare, token)).Trim() == "spatial-layout-fixture", "Spatial fixture preparation failed.");
+            await VerifyOverlappingBodiesAsync(game, evidence, token);
             SpatialNativeState before = await ReadNativeAsync(token);
             SpatialSnapshot map = await new SpatialClient(game).CaptureAsync(["stone-furnace", "wooden-chest"], cancellationToken: token);
             RoutePlan planned = new RoutePlanner().Find(new(map), new(20, 0), token: token);
@@ -106,6 +107,39 @@ public sealed class SpatialQualification(RuntimeSession session)
         Task SaveAsync(bool passed, string? error, CancellationToken saveToken) => File.WriteAllTextAsync(reportPath,
             JsonSerializer.Serialize(new { kind = "synthetic-spatial-qualification", passed, error,
                 isAutonomousCampaign = false, evidence }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }), saveToken);
+    }
+
+    private async Task VerifyOverlappingBodiesAsync(IGameClient game, List<object> evidence, CancellationToken token)
+    {
+        const string setup = """
+            /silent-command local s=game.surfaces.nauvis; local bodies={}; for _,name in ipairs{"small-biter-corpse","character-corpse"} do for i=1,2 do local e=assert(s.create_entity{name=name,position={-20,12},force="neutral"}); if e.type=="corpse" then e.corpse_expires=false end; bodies[#bodies+1]=e end end; storage.spatialIdentityFixture=bodies; rcon.print("overlapping-body-fixture");
+            """;
+        Require((await session.CreateRcon().ExecuteAsync(setup, token)).Trim() == "overlapping-body-fixture",
+            "Overlapping body fixture preparation failed.");
+        var spatial = new SpatialClient(game);
+        SpatialSnapshot first = await spatial.CaptureAsync([], cancellationToken: token);
+        string[] names = ["small-biter-corpse", "character-corpse"];
+        SpatialEntity[] bodies = first.Entities.Where(e => names.Contains(e.Name)).ToArray();
+        Require(bodies.Length == 4 && bodies.Select(e => e.Position).Distinct().Count() == 1
+            && bodies.Select(e => e.Id).Distinct(StringComparer.Ordinal).Count() == 4
+            && bodies.All(e => e.Id.StartsWith("body:", StringComparison.Ordinal)),
+            "Overlapping native bodies did not retain four distinct stable identities.");
+        SpatialSnapshot second = await spatial.CaptureAsync([], cancellationToken: token);
+        string[] firstIds = bodies.Select(e => e.Id).Order(StringComparer.Ordinal).ToArray();
+        Require(firstIds.SequenceEqual(second.Entities.Where(e => names.Contains(e.Name)).Select(e => e.Id).Order(StringComparer.Ordinal)),
+            "A repeated observation changed a native body identity.");
+        const string destroy = """
+            /silent-command local b=storage.spatialIdentityFixture; local id="body:"..script.register_on_object_destroyed(b[1]); assert(b[1].destroy()); rcon.print(id);
+            """;
+        string removed = (await session.CreateRcon().ExecuteAsync(destroy, token)).Trim();
+        SpatialSnapshot after = await spatial.CaptureAsync([], cancellationToken: token);
+        string[] survivingIds = after.Entities.Where(e => names.Contains(e.Name)).Select(e => e.Id).Order(StringComparer.Ordinal).ToArray();
+        Require(firstIds.Contains(removed, StringComparer.Ordinal)
+            && firstIds.Where(id => id != removed).SequenceEqual(survivingIds),
+            "Removing one body changed the identities of the surviving bodies.");
+        evidence.Add(new { check = "native-overlapping-bodies-retain-identities", disqualifiedAsCampaign = true,
+            setup = "Created two enemy corpses and two character corpses at one position, disabled enemy-corpse expiry, then destroyed one body.",
+            first.CollectedTick, firstIds, removed, survivingIds, afterTick = after.CollectedTick });
     }
 
     private async Task<SpatialNativeState> ReadNativeAsync(CancellationToken token)

@@ -99,6 +99,11 @@ end
 
 function M.entity_id(entity)
   if entity.unit_number then return tostring(entity.unit_number) end
+  -- Overlapping bodies have no unit number: position cannot identify them.
+  -- Native registrations remain stable across observations and save/load.
+  if entity.type == "corpse" or entity.type == "character-corpse" then
+    return "body:" .. script.register_on_object_destroyed(entity)
+  end
   return entity.surface.index .. ":" .. entity.name .. ":" .. entity.position.x .. ":" .. entity.position.y
 end
 
