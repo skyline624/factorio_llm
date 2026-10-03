@@ -26,7 +26,19 @@ Les packs portés sont répartis entre les laboratoires enregistrés selon leurs
 
 Cette vérification structurelle ne reprend pas le bilan d'un lot fini de la commande [`transport`](belt-transport.md). Le producteur et les consommateurs continuent à fabriquer. La preuve de production demande des sorties et des compteurs natifs constatés dans le jeu.
 
+## Ordre des tournées du personnage
+
+La collecte des sorties, le ravitaillement des coffres et la visite des laboratoires choisissent leur ordre depuis les positions de la photographie d'usine et celle du personnage. Une recherche du prochain arrêt le plus proche propose une tournée ; C# conserve l'ordre précédent si sa longueur géométrique est inférieure ou égale. Les coffres d'entrée sont visités avec tous leurs ingrédients, après le calcul commun des parts : l'ordre de déplacement ne change pas ces parts. Une nouvelle photographie avant la répartition scientifique actualise les stocks consommés pendant le ravitaillement.
+
+Cette estimation concerne les distances entre centres, sans prouver un optimum ni la durée d'un trajet encombré. La navigation native, la défense et les vérifications de portée restent nécessaires à chaque approche. Les phases de combustible conservent leur priorité entre foreuses à charbon, production électrique et autres brûleurs. Un arrêt absent n'acquiert aucune position supposée. Les [stocks et réserves](factory.md) restent mesurés par les photographies et les reçus.
+
+La variante préparée `verify-factory-transfers --session FILE --visit-order` ajoute quatre coffres et quatre plaques de fer explicitement fournis. Les coffres sont construits et chargés par les opérations natives, puis enregistrés alternativement aux extrémités d'une rangée. Le rapport compare les distances géométriques, exige un gain d'au moins 25 %, vérifie chaque retrait dans l'ordre prévu, les quatre plaques collectées et les coffres vides. Il distingue les ticks de déplacement réellement exécutés de l'estimation géométrique. La préparation ne prouve pas une production autonome de ces quatre plaques.
+
+Le 3 octobre 2026, cette variante passe sur Factorio **2.0.77 headless**, graine **20261057**. La tournée estimée passe de **261,53 à 131,53 cases** ; le moteur confirme les cinq coffres visités dans l'ordre prévu, **quatre plaques** et **27 engrenages** retirés, sans fabrication ni minage manuel. Entre les ticks **6326 et 7962**, les déplacements acceptés totalisent **1104 ticks**, soit 18,4 secondes de simulation. Cette durée est une mesure de la tournée exécutée, sans comparaison chronométrée avec l'ancien ordre. Les preuves préalables restent vérifiées : trois engrenages observés, six collectés après le trajet ; quatre packs de chaque couleur dans chacun des deux laboratoires, puis consommation native et progression à 5,1 %. Les **1 241 tests hors ligne** passent. Un premier tracé préparé n'atteignait pas le seuil géométrique de 25 % ; cet échec est conservé et le tracé corrigé conserve ce seuil. Le serveur de fixture est sauvegardé et arrêté ; aucun gain de durée en campagne normale ni lancement de fusée n'est encore établi par cet essai.
+
 ## Essai préparé headless
+
+Le même binaire vérifie aussi le partage des ingrédients avec le nouvel ordre de visite, graine préparée **20261058** : les vingt-cinq engrenages fournis donnent huit fabrications de tapis et dix-sept fabrications de bras, puis **seize packs verts** constatés au tick **17458**. L'ordre géométrique conserve la répartition de huit et dix-sept engrenages. Le kit, les recherches, l'énergie, les plaques et les circuits de ce test sont artificiels et déclarés ; aucun pack vert n'est fourni. Cette fixture est sauvegardée et arrêtée.
 
 ```powershell
 dotnet $hostDll start --fixture --seed 20261039

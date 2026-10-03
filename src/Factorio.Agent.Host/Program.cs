@@ -43,7 +43,8 @@ try
           verify-oil-products --session FILE [--item rocket-fuel|electric-engine-unit]
           verify-factory-transport --session FILE
           verify-factory-logistics --session FILE
-          verify-factory-transfers|verify-factory-buffer --session FILE
+          verify-factory-transfers --session FILE [--visit-order]
+          verify-factory-buffer --session FILE
           verify-furnace-bands --session FILE
           resource-cells --session FILE --item NAME --quantity PER_MINUTE
           power-expand --session FILE
@@ -182,7 +183,7 @@ try
         case "verify-factory-transfers":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
-            Print(new { report = await new FactoryTransferQualification(session).RunAsync(shutdown.Token) });
+            Print(new { report = await new FactoryTransferQualification(session, options.ContainsKey("visit-order")).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-factory-buffer":

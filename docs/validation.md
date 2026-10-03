@@ -1,5 +1,7 @@
 # Qualification du socle — 12 septembre 2026
 
+Le 3 octobre 2026, l'[ordre géométrique des tournées](factory-transport.md#ordre-des-tournées-du-personnage) passe les fixtures headless 20261057 et 20261058 : cinq coffres collectés dans l'ordre prévu avec une distance estimée de 131,53 cases au lieu de 261,53, puis seize packs verts produits avec la répartition d'ingrédients conservée. Les 1 241 tests hors ligne passent. Les fixtures fournissent terrain, équipements, énergie et ingrédients déclarés ; le gain de durée en partie normale reste à mesurer.
+
 La qualification headless du 3 octobre 2026 du [réemploi du chevalet initial](fluid-production.md#réemploi-du-chevalet-initial-dans-lusine-persistante) conserve un seul chevalet, reconstruit un poteau détruit et produit 90 unités de gaz dans une raffinerie raccordée. La graine préparée 20261055 passe avec les 1 236 tests hors ligne. Le terrain, les équipements et les recherches de préparation sont déclarés ; cet essai ne constitue pas une campagne autonome.
 
 La qualification headless du 2 octobre 2026 des [liaisons persistantes entre cellules](factory-transport.md) vérifie deux consommateurs, les limites natives des coffres, l'absence de manutention de l'intermédiaire par l'avatar et la reconstruction de pièces détruites. La graine préparée 20261039 produit 73 engrenages et 15 packs rouges ; les 1 186 tests hors ligne passent, avec un cloud facultatif ignoré. Cette preuve de composant reste distincte des trois campagnes finales jusqu'à la fusée.

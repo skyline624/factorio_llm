@@ -133,6 +133,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         var busSources = (state.Transports ?? []).Where(b => FactoryTransportHealth.Healthy(state, snapshot, b))
             .Select(b => (Chest: state.Cells.Single(c => c.Id == b.SourceCellId).Entities["output-chest"], b.Item)).ToHashSet();
         if (FreeSlots(snapshot) < MinimumFreeSlots)
+        {
             foreach (var (item, surplus) in Surplus(bag, Cap, StackSize))
             {
                 if (NearestProducerChest(snapshot, cells, catalog, item) is not { } home) continue;
@@ -140,8 +141,14 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 bag[item] = bag.GetValueOrDefault(item) - moved;
                 if (moved > 0) await journal.AppendAsync("factory-surplus-deposited", new { item, moved, chest = home }, token);
             }
+            snapshot = await snapshots.CaptureAsync(cancellationToken: token);
+            Require(snapshot.Scope, catalog);
+            bag = Carried(snapshot);
+        }
         // Every registered output chest that still stands is stock, whatever its cell's status; absent chests hold nothing.
-        foreach (string chest in OutputChests(state.Cells))
+        var outputs = OutputChests(state.Cells).Where(chest => Items(snapshot, chest).Any(p => p.Value > 0
+            && Cap(p.Key) > bag.GetValueOrDefault(p.Key) && (!busSources.Contains((chest, p.Key)) || needs.GetValueOrDefault(p.Key) > 0)));
+        foreach (string chest in FactoryVisitOrder.Plan(snapshot, outputs))
         {
             foreach (var (item, count) in Items(snapshot, chest).Where(p => p.Value > 0))
             {
@@ -172,12 +179,18 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             var split = PlanShares(wanting.Select(r => (r.Loaded, r.Target)).ToArray(), available);
             for (int index = 0; index < wanting.Length; index++) allotted[(wanting[index].Chest, item.Key)] = split[index];
         }
-        foreach (var (chest, item, loaded, target) in refills.Where(r => r.Loaded < r.Target))
+        var inputVisits = FactoryVisitOrder.Plan(snapshot, refills.Where(r => allotted.GetValueOrDefault((r.Chest, r.Item)) > 0).Select(r => r.Chest));
+        // Preserve the scarce-item allotments; visit each chest once, including all its different ingredients.
+        foreach (var (chest, item, loaded, target) in inputVisits.SelectMany(chest => refills.Where(r => r.Chest == chest && r.Loaded < r.Target))
+            .Concat(refills.Where(r => r.Loaded < r.Target && !inputVisits.Contains(r.Chest))))
         {
             long moved = await RefillAsync(chest, item, allotted[(chest, item)], reportShort: false);
             if (target - loaded > moved) shortfall[item] = shortfall.GetValueOrDefault(item) + target - loaded - moved;
         }
-        var laboratoryIds = cells.Where(c => c.Kind == "lab").Select(c => c.Entities["machine"]).ToArray();
+        snapshot = await snapshots.CaptureAsync(cancellationToken: token);
+        Require(snapshot.Scope, catalog);
+        carried = Carried(snapshot);
+        var laboratoryIds = FactoryVisitOrder.Plan(snapshot, cells.Where(c => c.Kind == "lab").Select(c => c.Entities["machine"])).ToArray();
         var scienceAllotments = new Dictionary<(string Lab, string Pack), long>();
         foreach (string pack in carried.Keys.Where(IsSciencePack))
         {

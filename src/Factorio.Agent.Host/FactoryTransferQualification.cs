@@ -5,14 +5,14 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 /// <summary>Explicit kit/power/research/plates/science fixture: native gear output growth and scarce lab distribution.</summary>
-public sealed class FactoryTransferQualification(RuntimeSession session)
+public sealed class FactoryTransferQualification(RuntimeSession session, bool visitOrder = false)
 {
     public async Task<string> RunAsync(CancellationToken token)
     {
         if (!session.IsFixture || File.Exists(new FactoryRegistry(session.Directory).Path))
             throw new InvalidOperationException("Factory transfer qualification requires a fresh explicit fixture.");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromMinutes(8));
+        deadline.CancelAfter(TimeSpan.FromMinutes(visitOrder ? 12 : 8));
         token = deadline.Token;
         using var lease = ActorControlLease.Acquire(session.Directory);
         await using var game = session.CreateClient(lease);
@@ -49,6 +49,9 @@ public sealed class FactoryTransferQualification(RuntimeSession session)
             await Insert(remoteId, 1);
             await Insert(producer.Entities["input-chest"], 80);
             Require((await controller.WorkAsync("wait", new { ticks = 300 }, 600, token: token)).Status == "completed", "Initial gear wait failed.");
+            // Keep a real journey between the first source observation and its collection even when logistics
+            // chooses nearby outputs first. Creation order must not be the premise of the output-growth test.
+            await controller.ApproachEntityAsync(remoteId, remotePosition, catalog, token);
             var first = await snapshots.CaptureAsync(cancellationToken: token);
             Require(FactoryLogistics.Items(first, producer.Entities["output-chest"]).GetValueOrDefault("iron-gear-wheel") > 0,
                 "The source has no initial native gear output.");
@@ -86,6 +89,7 @@ public sealed class FactoryTransferQualification(RuntimeSession session)
                 && native.RootElement.GetProperty("players").GetInt32() == 0 && native.RootElement.GetProperty("craftingQueue").GetInt32() == 0
                 && native.RootElement.GetProperty("gears").GetDouble() >= service.Collected.GetValueOrDefault("iron-gear-wheel"), "Native production or actor identity changed.");
             evidence.Add(new { check = "native-parallel-research-consumption", researching.CollectedTick, researching.Progress, working, native = native.RootElement.Clone() });
+            if (visitOrder) await VerifyVisitsAsync(game, journal, Path.ChangeExtension(path, ".jsonl"), registry, catalog, controller, snapshots, evidence, token);
             passed = true;
             return path;
 
@@ -98,7 +102,63 @@ public sealed class FactoryTransferQualification(RuntimeSession session)
                 Require(receipt.Status == "completed" && receipt.Effects.GetProperty("transferred").GetInt32() == count, "Prepared plate transfer failed.");
             }
         }
-        finally { await LocalJson.WriteAsync(path, new { kind = "prepared-factory-transfer-qualification", passed, isAutonomousCampaign = false, evidence }, CancellationToken.None); }
+        finally { await LocalJson.WriteAsync(path, new { kind = "prepared-factory-transfer-qualification", passed, visitOrder, isAutonomousCampaign = false, evidence }, CancellationToken.None); }
+    }
+
+    private async Task VerifyVisitsAsync(IGameClient game, ControllerJournal journal, string journalPath, FactoryRegistry registry, ProductionCatalog catalog,
+        SpatialController controller, FactorySnapshotClient snapshots, List<object> evidence, CancellationToken token)
+    {
+        using var kit = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync("""
+            /silent-command local f=game.forces.factorio_agent;local c=game.surfaces.nauvis.find_entities_filtered{type='character',force=f}[1];assert(c and #game.connected_players==0);assert(c.insert{name='iron-chest',count=4}==4);assert(c.insert{name='iron-plate',count=4}==4);rcon.print(helpers.table_to_json{tick=game.tick,providedChests=4,providedIronPlates=4})
+            """, token));
+        evidence.Add(new { check = "explicit-scattered-visit-kit", native = kit.RootElement.Clone() });
+        // Alternate ends of one observed row: the old creation order crosses it three times.
+        var positions = new MapPosition[] { new(-32.5, -24.5), new(32.5, -24.5), new(-34.5, -24.5), new(34.5, -24.5) };
+        var ids = new List<string>();
+        foreach (var at in positions)
+        {
+            string id = await new PoweredMachineController(game, journal).BuildAtAsync("iron-chest", new(at, 0, 0), catalog, controller, token);
+            await controller.ApproachEntityAsync(id, at, catalog, token);
+            var receipt = await controller.WorkAsync("insert", new { entityId = id, inventory = "chest", item = "iron-plate", count = 1 }, 600, token: token);
+            Require(receipt.Status == "completed" && receipt.Effects.GetProperty("transferred").GetInt32() == 1, "Scattered fixture stock transfer failed.");
+            ids.Add(id);
+            var current = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            await registry.SaveAsync(current.With(new FactoryCell("visit-" + id, 0, new(0, 0, true), "buffer", "iron-chest", null,
+                new Dictionary<string, string> { ["output-chest"] = id }, "ready", receipt.UpdatedTick,
+                Plan: new Dictionary<string, PlannedEntity> { ["output-chest"] = new("output-chest", "iron-chest", at, 0) })), token);
+        }
+        await controller.TravelAsync(new(0, 0), .4, catalog, token);
+        var before = await snapshots.CaptureAsync(cancellationToken: token);
+        var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        var stops = FactoryLogistics.OutputChests(state.Cells).Where(id => FactoryLogistics.Items(before, id).Any(p => p.Value > 0)).ToArray();
+        var planned = FactoryVisitOrder.Plan(before, stops);
+        var locations = stops.ToDictionary(id => id, id => Position(before, id), StringComparer.Ordinal);
+        var start = Position(before, before.Records.Single(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "actor").EntityId);
+        double originalDistance = FactoryVisitOrder.Distance(start, stops, locations), plannedDistance = FactoryVisitOrder.Distance(start, planned, locations);
+        evidence.Add(new { check = "prepared-scattered-tour", before.CollectedTick, stops, planned, start, originalDistance, plannedDistance });
+        await journal.AppendAsync("prepared-visit-order-start", new { before.CollectedTick, stops, planned, start, originalDistance, plannedDistance }, token);
+        Require(plannedDistance < originalDistance * .75 && ids.All(planned.Contains), "The prepared tour did not reduce geometric travel while retaining every stocked chest.");
+        var result = await new FactoryLogistics(game, journal, session.Directory).ServiceAsync(5, token);
+        var collectedIds = new List<string>();
+        bool inTour = false;
+        long movementTicks = 0;
+        foreach (string line in await File.ReadAllLinesAsync(journalPath, token))
+        {
+            using var row = JsonDocument.Parse(line);
+            string? type = row.RootElement.GetProperty("type").GetString();
+            if (type == "prepared-visit-order-start") inTour = true;
+            if (!inTour || type != "receipt") continue;
+            var receipt = row.RootElement.GetProperty("data");
+            string? kind = receipt.GetProperty("kind").GetString();
+            if (kind == "move") movementTicks += receipt.GetProperty("updatedTick").GetInt64() - receipt.GetProperty("acceptedTick").GetInt64();
+            if (kind == "take") collectedIds.Add(receipt.GetProperty("effects").GetProperty("targetId").GetString()!);
+        }
+        var after = await snapshots.CaptureAsync(cancellationToken: token);
+        Require(result.Collected.GetValueOrDefault("iron-plate") == 4 && collectedIds.SequenceEqual(planned)
+            && ids.All(id => FactoryLogistics.Items(after, id).GetValueOrDefault("iron-plate") == 0)
+            && after.Scope == before.Scope, "Native collection order, quantities or actor scope did not match the planned visits.");
+        evidence.Add(new { check = "native-scattered-output-visits", before.CollectedTick, endTick = after.CollectedTick,
+            originalDistance, plannedDistance, collectedIds, movementTicks, result });
     }
 
     private static MapPosition Position(FactorySnapshot snapshot, string id) => snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == id)
