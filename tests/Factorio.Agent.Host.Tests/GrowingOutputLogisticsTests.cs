@@ -53,6 +53,26 @@ public sealed class GrowingOutputLogisticsTests
         finally { Directory.Delete(directory, true); }
     }
 
+    [Fact]
+    public async Task FuelPhaseReadsABoilerThatRanDryDuringLaboratoryTransfers()
+    {
+        string directory = Directory.CreateTempSubdirectory("fuel-after-science-").FullName;
+        try
+        {
+            var game = new OutputGame(30, 0, false, labScience: true)
+                { TransferTicks = 3600, BoilerFuel = 50, ExhaustBoilerAfterScience = true };
+            var labs = game.LabStocks.Keys.Select(id => new FactoryCell(id, 1, new(0, 0, true), "lab", "lab", null,
+                new Dictionary<string, string> { ["machine"] = id }, "ready", 100, Plan: new Dictionary<string, PlannedEntity>())).ToArray();
+            await new FactoryRegistry(directory).SaveAsync(new(1, game.Scope.WorldId, [], labs), default);
+            var result = await new FactoryLogistics(game, new Journal(), directory).ServiceAsync();
+            Assert.Equal(30, result.Supplied.GetValueOrDefault("automation-science-pack"));
+            Assert.True(result.PowerStarved);
+            Assert.Equal(12, result.Shortfall.GetValueOrDefault("coal"));
+            Assert.Equal(3, game.Submissions);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     [Theory]
     [InlineData("fresh", true)]
     [InlineData("expired", false)]
@@ -169,6 +189,7 @@ public sealed class GrowingOutputLogisticsTests
         public int CurrentStock { get; set; } = currentStock;
         public int InputStock { get; private set; }
         public int? BoilerFuel { get; set; }
+        public bool ExhaustBoilerAfterScience { get; set; }
         public bool ChestPresent { get; set; } = true;
         public int FactoryPhotographs { get; private set; }
         public int Carried { get; private set; } = carried;
@@ -241,6 +262,7 @@ public sealed class GrowingOutputLogisticsTests
                     else if (recipeInput) InputStock += moved;
                     else CurrentStock -= moved;
                     Tick += TransferTicks;
+                    if (labScience && ExhaustBoilerAfterScience && Submissions == LabStocks.Count) BoilerFuel = 0;
                     receipt = new { submission.OperationId, submission.Kind, status = moved == requested ? "completed" : "partial",
                         acceptedTick = Tick - TransferTicks, updatedTick = Tick, effects = new { requested, transferred = moved } };
                     if (lostReply) throw new IOException("The transfer occurred but its response was lost.");

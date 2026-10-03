@@ -38,6 +38,14 @@ public sealed class FactoryLogisticsTests
     }
 
     [Fact]
+    public void PreventiveRefillsWaitUntilEveryStarvedBurnerCanRestart()
+    {
+        Assert.Equal([0L, 12L], FactoryLogistics.PlanFuel([20, 0], available: 12, stack: 50));
+        Assert.Equal([3L, 12L], FactoryLogistics.PlanFuel([20, 0], available: 15, stack: 50));
+        Assert.Equal([30L, 50L, 0L], FactoryLogistics.PlanFuel([20, 0, 25], available: 200, stack: 50));
+    }
+
+    [Fact]
     public void ScarceIngredientsBalancePlannedBufferFractionsBeforeFillingAnyChest()
     {
         // Campaign 2026-09-30 (seed 20261002): chests were refilled in registry order, so the first gear consumers took every

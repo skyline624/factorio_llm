@@ -48,6 +48,32 @@ public sealed class RecipeFuelReserveTests
         Assert.Equal(10, FactoryLogistics.FuelReserve(snapshot, [smelter, Plastic], 50));
     }
 
+    [Fact]
+    public void CollectionAccountsForEveryBurnerWhileProcurementStillUsesOnlyIgnition()
+    {
+        var cells = Enumerable.Range(0, 10).Select(i => new FactoryCell("smelter-" + i, 0, new(1, 0, true),
+            "smelter", "electric-mining-drill", "iron-plate", new Dictionary<string, string> { ["furnace"] = "furnace-" + i }, "ready", 1)).ToArray();
+        var snapshot = Snapshot(Enumerable.Range(0, 10).SelectMany(i => new[]
+            { Entity("furnace-" + i, "furnace", fuel: "fuel-" + i), Inventory("fuel-" + i, "furnace-" + i, new { coal = 20 }) }).ToArray());
+        // Ten running furnaces have enough to ignite, but topping them up needs 300 coal, above the former bag cap150.
+        Assert.Equal(0, FactoryLogistics.FuelReserve(snapshot, cells, 50));
+        Assert.Equal(300, FactoryLogistics.FuelRefillNeed(snapshot, cells, 50));
+        Assert.Equal(400, FactoryLogistics.CollectCap(FactoryLogistics.FuelRefillNeed(snapshot, cells, 50), 50));
+    }
+
+    [Fact]
+    public void CollectionDoesNotCountFedBoilersTwiceOrMixTheirChest()
+    {
+        var power = new FactoryCell("power", 0, new(0, 0, true), "power", "boiler", null,
+            new Dictionary<string, string> { ["boiler"] = "boiler", ["input-chest"] = "feeder" }, "ready", 1);
+        var snapshot = Snapshot([Entity("boiler", "boiler", fuel: "boiler-fuel"), Inventory("boiler-fuel", "boiler", new { coal = 5 }),
+            Entity("feeder", "container"), Inventory("feeder-main", "feeder", new { coal = 20 })]);
+        Assert.Equal(180, FactoryLogistics.FuelRefillNeed(snapshot, [power], 50));
+        var mixed = Snapshot([Entity("boiler", "boiler", fuel: "boiler-fuel"), Inventory("boiler-fuel", "boiler", new { }),
+            Entity("feeder", "container"), Inventory("feeder-main", "feeder", new { wood = 1 })]);
+        Assert.Equal(50, FactoryLogistics.FuelRefillNeed(mixed, [power], 50));
+    }
+
     private static FactorySnapshot Snapshot(FactoryRecord[] records) => new("snapshot", Scope, 100, 200, Protocol.ToElement(new { }), records);
 
     private static FactoryRecord Entity(string id, string type, string? fuel = null) => new(id, "entity", id, type,

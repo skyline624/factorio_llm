@@ -115,9 +115,9 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         var needs = Refills(snapshot).GroupBy(r => r.Item).ToDictionary(g => g.Key, g => g.Sum(r => Math.Max(0, r.Target - r.Loaded)), StringComparer.Ordinal);
         int labs = cells.Count(c => c.Kind == "lab");
         foreach (string pack in catalog.Items.Keys.Where(IsSciencePack)) needs[pack] = needs.GetValueOrDefault(pack) + labs * StackSize(pack);
-        needs[Fuel] = needs.GetValueOrDefault(Fuel) + FuelReserve(snapshot, cells, StackSize(Fuel)) + StackSize(Fuel)
-            + cells.Where(c => c.Kind == "power" && c.Entities.ContainsKey("input-chest"))
-                .Sum(c => PowerFuelNeed(Items(snapshot, c.Entities["input-chest"]), Fuel, PowerChestStacks * StackSize(Fuel)));
+        // Collect existing output for the full refill, rather than only its ignition threshold. With ten furnaces,
+        // the old allowance ran out while topping up the first burners despite abundant coal in the source chest.
+        needs[Fuel] = needs.GetValueOrDefault(Fuel) + FuelRefillNeed(snapshot, cells, StackSize(Fuel));
         long Cap(string item) => CollectCap(needs.GetValueOrDefault(item), StackSize(item));
         var bag = Carried(snapshot);
         var reserved = await transport.ApplyActorReservationsAsync(state, snapshot, needs, bag, catalog, token);
@@ -167,8 +167,9 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
         var carried = Carried(snapshot);
-        // Power and burners come first: recipes burning fuel only take what their thresholds leave.
-        long fuelReserve = FuelReserve(snapshot, cells, catalog.Items[Fuel].StackSize);
+        // Power and burners keep their refill share before recipes consume coal. Procurement still uses the
+        // smaller ignition shortfall; this reservation only divides coal already carried or collected.
+        long fuelReserve = FuelRefillNeed(snapshot, cells, catalog.Items[Fuel].StackSize);
         var refills = Refills(snapshot);
         // Scarce items are shared before any chest is filled; transfers still go chest by chest to keep one visit each.
         var allotted = new Dictionary<(string Chest, string Item), long>();
@@ -212,6 +213,10 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         }
         const string fuel = Fuel;
         long stack = catalog.Items[fuel].StackSize;
+        // Laboratory transfers can take minutes. Read current feeder stocks and carried fuel before allocation.
+        snapshot = await snapshots.CaptureAsync(cancellationToken: token);
+        Require(snapshot.Scope, catalog);
+        carried = Carried(snapshot);
         // Power cells feed their boilers from a chest; keeping several stacks there lets boilers run between actor visits.
         foreach (var cell in cells.Where(c => c.Kind == "power" && c.Entities.ContainsKey("input-chest")))
         {
@@ -233,11 +238,16 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             long powerShort = PowerFuelShortfall(need, inChest.GetValueOrDefault(fuel) + moved + burning, stack);
             if (powerShort > 0) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + powerShort;
         }
-        // Steam supply, cell furnaces and burner drills stop without fuel. Keep each burner above a quarter stack of coal;
+        // Steam supply, cell furnaces and burner drills stop without fuel. Refill production burners below half a stack;
         // a boiler with a feeder cell burns from its chest and is only restarted by hand once completely dry.
         var fedBoilers = cells.Where(c => c.Kind == "power").Select(c => c.Entities.GetValueOrDefault("boiler")).OfType<string>()
             .ToHashSet(StringComparer.Ordinal);
-        var burners = FuelOrder(Burners(snapshot, cells).Where(b => NeedsDirectFuel(fedBoilers.Contains(b.EntityId), b.Loaded, stack)).ToArray(), cells);
+        // The walk to boilers consumes more fuel in the factory. Do not plan burner refills from the earlier photo.
+        snapshot = await snapshots.CaptureAsync(cancellationToken: token);
+        Require(snapshot.Scope, catalog);
+        carried = Carried(snapshot);
+        var burners = FuelOrder(Burners(snapshot, cells).Where(b => b.PowerSource
+            ? NeedsDirectFuel(fedBoilers.Contains(b.EntityId), b.Loaded, stack) : b.Loaded < stack / 2).ToArray(), cells);
         var plan = PlanFuel(burners.Select(b => b.Loaded).ToArray(), carried.GetValueOrDefault(fuel), stack);
         bool powerStarved = false;
         for (int index = 0; index < burners.Count; index++)
@@ -545,8 +555,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     }
 
     /// <summary>
-    /// Splits carried fuel among burners below a quarter stack: every starved burner first reaches a quarter stack,
-    /// so scarce coal from a young miner starts all furnaces instead of filling one.
+    /// Every starved burner first reaches a quarter stack; then burners below half a stack are topped up.
+    /// Scarce coal starts all furnaces before preventive refills, without waiting until the next tour for a low reserve.
     /// </summary>
     internal static long[] PlanFuel(IReadOnlyList<long> loaded, long available, long stack)
     {
@@ -555,7 +565,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         foreach (long target in new[] { threshold, stack })
             for (int index = 0; index < loaded.Count && available > 0; index++)
             {
-                if (loaded[index] >= threshold) continue;
+                if (loaded[index] >= stack / 2) continue;
                 long give = Math.Min(available, Math.Max(0, target - loaded[index] - plan[index]));
                 plan[index] += give;
                 available -= give;
@@ -573,6 +583,16 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// make the actor a coal miner.
     /// </summary>
     internal static long PowerFuelShortfall(long need, long supply, long stack) => supply < stack / 4 ? need : 0;
+
+    /// <summary>Coal collected and reserved for feeder targets and one stack per direct burner; no procurement demand.</summary>
+    internal static long FuelRefillNeed(FactorySnapshot snapshot, IReadOnlyList<FactoryCell> cells, long stack)
+    {
+        var feeders = cells.Where(c => c.Kind == "power" && c.Entities.ContainsKey("input-chest")).ToArray();
+        var fed = feeders.Select(c => c.Entities.GetValueOrDefault("boiler")).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        long need = feeders.Sum(c => PowerFuelNeed(Items(snapshot, c.Entities["input-chest"]), Fuel, PowerChestStacks * stack));
+        return need + Burners(snapshot, cells).Where(b => !fed.Contains(b.EntityId) || b.Loaded == 0)
+            .Sum(b => Math.Max(0, stack - b.Loaded));
+    }
 
     /// <summary>
     /// Fuel recipe chests leave to power and burners: what lifts every feeder supply, chest and boiler together, and every burner
