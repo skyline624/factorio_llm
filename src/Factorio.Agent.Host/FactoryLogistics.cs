@@ -10,7 +10,7 @@ public sealed record LogisticsResult(IReadOnlyDictionary<string, long> Collected
     IReadOnlyList<DegradedCell>? Degraded = null);
 
 /// <summary>
-/// Maintains native bus controls, then uses the actor for unconnected inputs, finished outputs, laboratories and fuel.
+/// Maintains native bus controls, then uses the actor for uncovered input demand, finished outputs, laboratories and fuel.
 /// Every quantity comes from native factory photographs and transfer receipts.
 /// </summary>
 public sealed class FactoryLogistics(IGameClient game, IControllerJournal journal, string directory)
@@ -110,7 +110,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         await transport.RepairControlsAsync(state, snapshot, catalog, controller, token);
         if (state.Transports is { Count: > 0 }) snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
-        var connected = FactoryTransportHealth.Connected(state, snapshot);
+        var connected = FactoryTransportCoverage.Connected(state, snapshot, catalog, shares);
 
         // The bag carries what chests, labs and burners need plus two stacks; a full bag fails every later take.
         var needs = Refills(snapshot).GroupBy(r => r.Item).ToDictionary(g => g.Key, g => g.Sum(r => Math.Max(0, r.Target - r.Loaded)), StringComparer.Ordinal);
@@ -131,7 +131,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             await transport.RepairControlsAsync(state, snapshot, catalog, controller, token);
             snapshot = await snapshots.CaptureAsync(cancellationToken: token);
             Require(snapshot.Scope, catalog);
-            connected = FactoryTransportHealth.Connected(state, snapshot);
+            connected = FactoryTransportCoverage.Connected(state, snapshot, catalog, shares);
             bag = Carried(snapshot);
         }
         var busSources = (state.Transports ?? []).Where(b => FactoryTransportHealth.Healthy(state, snapshot, b))

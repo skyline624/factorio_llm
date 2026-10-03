@@ -40,9 +40,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             foreach (var ingredient in recipe.Ingredients.Where(i => i.DeterministicItem))
             {
                 state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-                if ((state.Transports ?? []).Any(b => b.Item == ingredient.Name && b.Consumers.Any(c => c.TargetCellId == target.Id))) continue;
                 var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
                 if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Factory transport actor scope changed.");
+                if (FactoryTransportCoverage.Connected(state, snapshot, catalog, shares).Contains((target.Entities["input-chest"], ingredient.Name))) continue;
                 var destination = Position(snapshot, target.Entities["input-chest"]);
                 if (destination is null) continue;
                 var sources = state.Cells.Where(c => c.Id != target.Id && c.Status == "ready" && c.Entities.ContainsKey("output-chest")
@@ -50,6 +50,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                     .Where(p => p.Position is not null).OrderBy(p => p.Position!.DistanceTo(destination)).ToArray();
                 foreach (var candidate in sources)
                 {
+                    // Keep the existing graph, but do not mistake one supplier for enough supply or retry its old link.
+                    if ((state.Transports ?? []).Any(b => b.Item == ingredient.Name && b.SourceCellId == candidate.Cell.Id
+                        && b.Consumers.Any(c => c.TargetCellId == target.Id))) continue;
                     // A local proof cannot invent tiles between distant installations. Other links retain actor logistics.
                     if (candidate.Position!.DistanceTo(destination) > 64) continue;
                     if (++considered > 8) return connected;
@@ -57,7 +60,11 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                     if (await LinkAsync(candidate.Cell.Id, target.Id, ingredient.Name, limit, catalog, controller, token))
                     {
                         if (++connected == maximumLinks) return connected;
-                        break;
+                        state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+                        snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+                        if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Factory transport actor scope changed.");
+                        if (FactoryTransportCoverage.Connected(state, snapshot, catalog, shares)
+                            .Contains((target.Entities["input-chest"], ingredient.Name))) break;
                     }
                 }
             }
