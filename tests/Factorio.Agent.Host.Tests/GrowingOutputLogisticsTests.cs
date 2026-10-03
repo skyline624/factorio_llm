@@ -9,6 +9,50 @@ public sealed class GrowingOutputLogisticsTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task ANewStartupBufferIsProtectedFromNestedKitCollectionAfterTheStrategicReservationWasTaken(bool partial)
+    {
+        // Normal20261071: a trip during the inserter startup took 59 iron from the new circuit buffer and 97
+        // from the just-filled inserter buffer. The strategic scope preceded both cells; logistics must refresh it.
+        string directory = Directory.CreateTempSubdirectory("fresh-startup-reservations-").FullName;
+        try
+        {
+            var game = new OutputGame(1000, 80, false, recipeInput: true)
+            {
+                ExtraRecords = [
+                    new("finished", "entity", "finished", "iron-chest", Protocol.ToElement(new { role = "factory", type = "container", position = new MapPosition(4.5, .5) })),
+                    new("finished-stock", "inventory", "finished", "chest", Protocol.ToElement(new { items = new Dictionary<string, long> { ["iron-plate"] = 20 } }))]
+            };
+            var producer = new FactoryCell("producer", 0, new(0, 0, true), "smelter", "stone-furnace", "iron-plate",
+                new Dictionary<string, string> { ["output-chest"] = "finished" }, "ready", 100, Plan: new Dictionary<string, PlannedEntity>());
+            var old = new FactoryState(1, game.Scope.WorldId, [], [producer]);
+            using var strategic = ProductionReservations.EnterFactory(old);
+            var stage = new FactoryCell("new-stage", 1, new(0, 0, true), "assembler", "assembling-machine-1", "iron-gear-wheel",
+                new Dictionary<string, string> { ["input-chest"] = "input" }, "ready", 100, Plan: new Dictionary<string, PlannedEntity>());
+            await new FactoryRegistry(directory).SaveAsync(old.With(stage), default);
+            int nestedChecks = 0;
+            game.OnFactoryPhoto = () =>
+            {
+                if (game.FactoryPhotographs < 2) return; // Maintenance precedes the refreshed logistics state.
+                var stocks = new ProductionState(game.Scope, game.Tick, "ai", new Dictionary<string, long> { ["iron-plate"] = game.Carried },
+                    [new("input", "iron-chest", new(0, 0), null, Protocol.ToElement(new { output = new { items = new Dictionary<string, long> { ["iron-plate"] = game.InputStock } } })),
+                     new("finished", "iron-chest", new(4, 0), null, Protocol.ToElement(new { output = new { items = new Dictionary<string, long> { ["iron-plate"] = 20 } } }))], Position: new(0, 0));
+                Assert.Equal(game.Carried + 20, SurvivalKitController.Stock(stocks)["iron-plate"]);
+                Assert.Equal("finished", stocks.AvailableOutput("iron-plate")?.Id);
+                nestedChecks++;
+            };
+            await new FactoryLogistics(game, new Journal(), directory).ServiceAsync(40,
+                targetCellIds: partial ? new HashSet<string> { stage.Id } : null);
+            Assert.True(nestedChecks > 0);
+            Assert.Equal(80, game.InputStock);
+            Assert.DoesNotContain("input", ProductionReservations.Current); // The fresh scope ends with the tour.
+            Assert.True(ProductionReservations.Collects("finished"));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task PreparationFeedsThePlannedBufferEvenWhenThisStageAlreadyExists(bool existing)
     {
         string directory = Directory.CreateTempSubdirectory("preparation-input-buffer-").FullName;
@@ -281,11 +325,12 @@ public sealed class GrowingOutputLogisticsTests
         public long Tick { get; set; } = 100;
         public long TransferTicks { get; set; }
         public int CurrentStock { get; set; } = currentStock;
-        public int InputStock { get; private set; }
+        public int InputStock { get; private set; } = recipeInput ? currentStock : 0;
         public int? BoilerFuel { get; set; }
         public bool ExhaustBoilerAfterScience { get; set; }
         public bool ChestPresent { get; set; } = true;
         public int FactoryPhotographs { get; private set; }
+        public Action? OnFactoryPhoto { get; set; }
         public int Carried { get; private set; } = carried;
         public int Submissions { get; private set; }
         public int Queries { get; private set; }
@@ -311,6 +356,7 @@ public sealed class GrowingOutputLogisticsTests
                     break;
                 case "factory_snapshot":
                     FactoryPhotographs++;
+                    OnFactoryPhoto?.Invoke();
                     var records = new List<FactoryRecord>
                     {
                         Record("actor", "entity", "actor", new { role = "actor", type = "character", position = map.Actor.Position, mainInventoryId = "bag" }),
