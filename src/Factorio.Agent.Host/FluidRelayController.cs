@@ -42,6 +42,23 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
                     site = await ControllerPlanning.RunAsync(t => new FluidRelayPlanner().Find(
                         FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, t, boxes),
                         controller, TimeSpan.FromMinutes(2), token);
+                    if (site is null)
+                    {
+                        var clearance = await ControllerPlanning.RunAsync(t => new FluidRelayPlanner().FindClearance(
+                            FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, catalog, t, boxes),
+                            controller, TimeSpan.FromMinutes(2), token);
+                        if (clearance is not null)
+                        {
+                            await ClearSourceTreesAsync(clearance, source.Id, map);
+                            map = await MapAsync();
+                            boxes = WithdrawableBoxes(map, await StockAsync(), source.Id, fluid);
+                            if (boxes.Count == 0) throw new InvalidOperationException("The cleared relay source has no current withdrawable native box.");
+                            site = await ControllerPlanning.RunAsync(t => new FluidRelayPlanner().Find(
+                                FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, t, boxes),
+                                controller, TimeSpan.FromMinutes(2), token);
+                            if (site is null) throw new InvalidOperationException("The freshly observed cleared relay corridor still has no safe section.");
+                        }
+                    }
                     if (site is not null) break;
                 }
                 // A steam pump's only outlet can be occupied and the boiler's free water port reserved for expansion.
@@ -170,6 +187,38 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
         }
         if (Sources(await StockAsync(), fluid).Any(p => p.Position.DistanceTo(destination) <= FluidRelayPlanner.Step)) return;
         throw new InvalidOperationException($"The remote {fluid} supply exhausted its section budget; completed sections remain registered.");
+
+        async Task ClearSourceTreesAsync(FluidRelayClearancePlan plan, string sourceId, SpatialSnapshot before)
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            deadline.CancelAfter(TimeSpan.FromMinutes(4));
+            var clearanceToken = deadline.Token;
+            var selected = plan.Trees.ToDictionary(e => e.Id, StringComparer.Ordinal);
+            if (selected.Count is < 1 or > FluidRelayPlanner.MaximumClearanceTrees || plan.Site.Pump is not null
+                || plan.Footprints.Count is < 1 or > FluidRelayPlanner.MaximumPipes + 1)
+                throw new InvalidDataException("Relay clearance must be a bounded extension of an existing source.");
+            var footprints = plan.Footprints.OrderBy(p => p.DistanceTo(before.Actor.Position)).ToArray();
+            await journal.AppendAsync("fluid-relay-clearance-plan", new { sourceId, fluid, destination, before.Scope, before.CollectedTick,
+                plan.Site, plan.Trees, footprints }, clearanceToken);
+            int cleared = 0;
+            foreach (var at in footprints)
+                while (true)
+                {
+                    var current = await new SpatialClient(game).CaptureAsync([pipeItem], 48, clearanceToken);
+                    if (current.Scope != catalog.Scope || current.CollectedTick < before.CollectedTick)
+                        throw new InvalidDataException("Relay clearance lost its observed actor scope or date.");
+                    var placement = new PlacementCandidate(at, 0, 0);
+                    if (new SpatialCollisionField(current with { Entities = current.Entities.Where(e => e.Id != current.Actor.Id).ToArray() })
+                        .PlacementClear(current.Prototypes[current.Items[pipeItem].EntityName], at, 0)) break;
+                    var tree = new TreeClearancePlanner().SelectPlacement(current, catalog, pipeItem, placement);
+                    if (tree is null || !selected.TryGetValue(tree.Id, out var expected) || tree.Name != expected.Name || tree.Position != expected.Position)
+                        throw new InvalidOperationException("The relay corridor blocker changed or is not a selected mineable neutral tree.");
+                    if (cleared >= selected.Count || !await controller.ClearPlacementTreeAsync(current, catalog, pipeItem, placement, clearanceToken))
+                        throw new InvalidOperationException("The bounded relay tree clearance did not complete.");
+                    cleared++;
+                }
+            await journal.AppendAsync("fluid-relay-clearance-result", new { sourceId, fluid, cleared, plannedTrees = selected.Count }, clearanceToken);
+        }
 
         async Task<SpatialSnapshot> MapAsync()
         {

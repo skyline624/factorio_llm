@@ -6,6 +6,76 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class FluidRelayTests
 {
     [Fact]
+    public void AForestBlockedSourceCanBeExtendedByClearingOnlyItsProposedPipeFootprints()
+    {
+        var map = TreeBlockedSource();
+        var catalog = TreeCatalog(map);
+        var destination = new MapPosition(130.5, .5);
+        var planner = new FluidRelayPlanner();
+        Assert.Null(planner.Find(map, "pipe", "source", "water", destination));
+        var clearance = planner.FindClearance(map, "pipe", "source", "water", destination, catalog);
+        Assert.NotNull(clearance);
+        Assert.InRange(clearance.Trees.Count, 1, 2);
+        Assert.Null(clearance.Site.Pump);
+        Assert.Equal("source", clearance.Site.Route.Source!.EntityId);
+        Assert.All(clearance.Trees, tree => Assert.Contains(clearance.Footprints, position =>
+            tree.Bounds.Overlaps(map.Prototypes["pipe"].CollisionBox.Translate(position))));
+        var cleared = clearance.Trees.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+        var partial = map with { Entities = map.Entities.Where(e => !cleared.Contains(e.Id)).ToArray() };
+        Assert.NotNull(planner.Find(partial, "pipe", "source", "water", destination));
+        Assert.Contains(partial.Entities, e => e.Name == "tree");
+        Assert.Contains(partial.Entities, e => e.Id == "upstream");
+        Assert.Contains(partial.Entities, e => e.Id == "gas");
+        Assert.All(clearance.Site.Route.Pipes, p => Assert.DoesNotContain(map.Entities.Single(e => e.Id == "gas").FluidConnections!,
+            port => port.TargetPosition == p));
+    }
+
+    [Theory]
+    [InlineData("neutral", false)]
+    [InlineData("agent", true)]
+    [InlineData("enemy", true)]
+    public void RelayClearanceCannotRemoveNonMineableOrNonNeutralObstacles(string force, bool mineable)
+    {
+        var map = TreeBlockedSource(force);
+        var catalog = TreeCatalog(map);
+        if (!mineable) catalog = catalog with { Mining = new Dictionary<string, NativeMaterial[]>() };
+        Assert.Null(new FluidRelayPlanner().FindClearance(map, "pipe", "source", "water", new(130.5, .5), catalog));
+    }
+
+    [Fact]
+    public void RelayClearanceRejectsChangedActorScopeAndAlreadyCancelledWork()
+    {
+        var map = TreeBlockedSource();
+        var catalog = TreeCatalog(map);
+        Assert.Throws<InvalidDataException>(() => new FluidRelayPlanner().FindClearance(map, "pipe", "source", "water", new(130.5, .5),
+            catalog with { Scope = catalog.Scope with { Generation = catalog.Scope.Generation + 1 } }));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => new FluidRelayPlanner().FindClearance(map, "pipe", "source", "water", new(130.5, .5), catalog, cancelled.Token));
+    }
+
+    private static ProductionCatalog TreeCatalog(SpatialSnapshot map) => OilCatalogs.Oil() with
+    { Scope = map.Scope, Mining = new Dictionary<string, NativeMaterial[]> { ["tree"] = [new("wood", "item", 4)] } };
+
+    private static SpatialSnapshot TreeBlockedSource(string force = "neutral")
+    {
+        var map = Map();
+        var source = map.Entities.Single(e => e.Id == "source");
+        var left = source.FluidConnections!.Single(p => p.TargetPosition.X < p.Position.X);
+        source = source with { FluidConnections = source.FluidConnections!.Select(p => p == left
+            ? p with { TargetEntityId = "upstream", TargetBoxIndex = 1 } : p).ToArray() };
+        var treeGeometry = map.Prototypes["wall"] with { Name = "tree", Type = "tree" };
+        var trees = source.FluidConnections!.Where(p => p.TargetEntityId is null).Select((p, i) =>
+            new SpatialEntity($"tree-{i}", "tree", p.TargetPosition, treeGeometry.CollisionBox.Translate(p.TargetPosition), 0, force)).ToArray();
+        return map with
+        {
+            Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { ["tree"] = treeGeometry },
+            Entities = [.. map.Entities.Where(e => e.Id != source.Id), source, Pipe(map, "upstream", left.TargetPosition, "water"),
+                Pipe(map, "gas", new(1.5, 1.5), "petroleum-gas"), .. trees]
+        };
+    }
+
+    [Fact]
     public void ARelayKeepsItsCandidateBudgetForUsableOrientationsBeyondAnUnrelatedNetwork()
     {
         var map = Map();
