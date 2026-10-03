@@ -338,7 +338,8 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
                 ? await danger.ReadActiveDeathsAsync(map.Scope, map.SurfaceIndex, map.CollectedTick, token) : [];
             var remembered = ExtractorDestination(memory, map, resource, visited, deaths);
             await journal.AppendAsync("fluid-extractor-search", new { resource, attempt, remembered, map.CollectedTick }, token);
-            if (attempt == MaximumExtractorSearchSteps - 1) break;
+            if (attempt == MaximumExtractorSearchSteps - 1)
+                throw new FluidExtractorSearchExhaustedException(resource, map.Scope, map.CollectedTick, MaximumExtractorSearchSteps);
             if (ResourceResearchController.BlindSearchTooDangerous(remembered, deaths))
             {
                 await journal.AppendAsync("fluid-extractor-search-too-dangerous", new { resource, attempt, map.Scope,
@@ -353,7 +354,7 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
                 deferredObservedResources = unsuitable, limit = MaximumExtractorSearchSteps }, token);
             await controller.NavigateAsync(frontier.Position, cancellationToken: token);
         }
-        throw new InvalidOperationException($"No usable {resource} extractor site was found within {MaximumExtractorSearchSteps} observed search steps.");
+        throw new InvalidOperationException("The extractor search ended without an observed result.");
     }
 
     internal static ResourceSighting? ExtractorDestination(ResourceMemorySnapshot? memory, SpatialSnapshot map, string resource,

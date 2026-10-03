@@ -53,12 +53,57 @@ public sealed class FluidChainDirector(IGameClient game, IControllerJournal jour
                 await journal.AppendAsync("fluid-chain-stage-short", new { stage, machines, extraction = rates?.Values.Sum(), source }, token);
                 break;
             }
-            if (next.Extractor) await builder.BuildExtractorAsync(source!.Resource!, source.Fluid, token);
+            if (next.Extractor)
+            {
+                try { await builder.BuildExtractorAsync(source!.Resource!, source.Fluid, token); }
+                catch (FluidExtractorSearchExhaustedException error)
+                {
+                    if (!await TryDeferExtractorSearchAsync(stage, catalog, source!, rates!, error, token)) throw;
+                    break;
+                }
+            }
             await power.EnsureCapacityForCellsAsync(stage.MachineItem, 1, io, token);
             await builder.BuildMachineAsync(stage.MachineItem, stage.Recipe, token);
         }
         if (recipe.Products[0].DeterministicFluid && recipe.Ingredients.Any(i => i.DeterministicItem))
             await PrimeFluidAsync(recipe, catalog, token);
+    }
+
+    /// <summary>
+    /// A failed search for additional capacity may leave usable native supply. Keep the complete target, and let
+    /// downstream construction use it only after reobserving both a fed extractor and this stage's fed output stock.
+    /// Only the pre-construction search refusal reaches this path; uncertain operations and other failures propagate.
+    /// </summary>
+    internal async Task<bool> TryDeferExtractorSearchAsync(AutomationStage stage, ProductionCatalog catalog, FluidSource source,
+        IReadOnlyDictionary<string, double> rates, FluidExtractorSearchExhaustedException error, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (error.Scope != catalog.Scope || error.Resource != source.Resource)
+            throw new InvalidDataException("The extractor search refusal belongs to a different actor or resource.");
+        var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        if (snapshot.Scope != catalog.Scope || snapshot.CollectedTick < error.ObservedTick)
+            throw new InvalidDataException("Actor changed or observation predates the exhausted extractor search.");
+        var state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
+        var extractors = state.Cells.Where(c => c.Kind == FluidCellBuilder.ExtractorKind && c.Status == "ready" && c.Recipe == source.Fluid
+                && rates.GetValueOrDefault(c.Id) > 0 && c.Entities.ContainsKey("drill")
+                && NativeMachine(c.Entities["drill"], c.MachineItem) && FactoryPower.IsFed(snapshot, c.Entities["drill"]) == true
+                && snapshot.FluidStockAt(c.Entities["drill"], source.Fluid) > 0)
+            .Select(c => c.Entities["drill"]).ToArray();
+        var suppliers = state.Cells.Where(c => c.Kind == FluidCellBuilder.MachineKind && c.Status == "ready" && c.Recipe == stage.Recipe
+                && c.Entities.ContainsKey("machine") && NativeMachine(c.Entities["machine"], c.MachineItem)
+                && FactoryPower.IsFed(snapshot, c.Entities["machine"]) == true
+                && snapshot.Records.Any(r => r.Kind == "work" && r.EntityId == c.Entities["machine"]
+                    && r.Data.TryGetProperty("recipe", out var recipe) && recipe.GetString() == stage.Recipe)
+                && snapshot.FluidStockAt(c.Entities["machine"], stage.Item) > 0)
+            .Select(c => new { entityId = c.Entities["machine"], stock = snapshot.FluidStockAt(c.Entities["machine"], stage.Item) }).ToArray();
+        if (extractors.Length == 0 || suppliers.Length == 0) return false;
+        await journal.AppendAsync("fluid-chain-stage-short", new { stage, source, reason = "extractor-search-exhausted",
+            extractionBeforeSearch = rates.Values.Sum(), error.Observations, searchTick = error.ObservedTick,
+            snapshot.Scope, snapshot.CollectedTick, extractors, suppliers, targetRetained = true }, token);
+        return true;
+
+        bool NativeMachine(string id, string item) => snapshot.Records.Any(r => r.Kind == "entity" && r.EntityId == id && r.Name == item
+            && r.Data.TryGetProperty("role", out var role) && role.GetString() == "factory");
     }
 
     /// <summary>Solid-fed fluid stages must actually produce before the next builder waits for their fluid stock.</summary>
