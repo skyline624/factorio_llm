@@ -90,35 +90,44 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
             var anchor = await AnchorAsync(fluids, sources, catalog, token);
             await controller.TravelAsync(anchor, 6, catalog, token);
             var map = await CaptureAsync(items, catalog, token);
+            var stock = await SnapshotAsync(catalog, token);
             // A terrain fluid no observed pump draws yet gets a new pump beside the machine, so the machine moves to that shore.
-            string[] pumped = fluids.Where(f => FluidChainPlanner.Terrain(catalog, f) && !map.Entities.Any(e =>
-                map.Prototypes[e.Name].Type == "offshore-pump" && OffshoreSupplyPlanner.CanExtract(map, e.Id, f))).ToArray();
+            string[] pumped = MissingTerrainSupply(map, stock, fluids, catalog);
             if (pumped.Length > 0)
             {
-                var shore = Shore(map, pumped[0], anchor) ?? throw new InvalidOperationException($"No observed {pumped[0]} tile near the supply for a new pump.");
-                if (shore.DistanceTo(anchor) > 8)
+                var shore = Shore(map, pumped[0], anchor);
+                if (shore is null)
+                {
+                    await new FluidRelayController(game, journal, directory).ExtendAsync(pumped[0], anchor, catalog, controller, ground, token);
+                    await controller.TravelAsync(anchor, 6, catalog, token);
+                    map = await CaptureAsync(items, catalog, token);
+                    stock = await SnapshotAsync(catalog, token);
+                    pumped = MissingTerrainSupply(map, stock, fluids, catalog);
+                    if (pumped.Length > 0) throw new InvalidOperationException("The extended terrain supply is not observed near the fluid machine site.");
+                }
+                else if (shore.DistanceTo(anchor) > 8)
                 {
                     anchor = shore;
                     await controller.TravelAsync(anchor, 6, catalog, token);
                     map = await CaptureAsync(items, catalog, token);
                 }
             }
-            var stock = await SnapshotAsync(catalog, token);
+            stock = await SnapshotAsync(catalog, token);
             string force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
             // Bands, resource rows and steam growth stay free of the machine, its parts, its pipes and a new pump.
             var planning = FactoryGround.Reserve(map, ground.Boxes(map), pipeItem);
-            FluidSupplyRoute? Route(SpatialSnapshot current, string fluid)
+            FluidSupplyRoute? Route(SpatialSnapshot current, string fluid, CancellationToken routeToken)
             {
                 if (sources.GetValueOrDefault(fluid) is { } source)
-                    return new PipeRoutePlanner().Find(current, pipeItem, source, FluidCellPlanner.PlannedId, fluid) is { Status: PipeRouteStatus.Found } route
+                    return new PipeRoutePlanner().Find(current, pipeItem, source, FluidCellPlanner.PlannedId, fluid, cancellationToken: routeToken) is { Status: PipeRouteStatus.Found } route
                         ? new(source, route) : null;
                 if (pumped.Contains(fluid))
-                    return pumps.Select(pump => new OffshoreSupplyPlanner().Find(current, pump, pipeItem, FluidCellPlanner.PlannedId, fluid))
+                    return pumps.Select(pump => new OffshoreSupplyPlanner().Find(current, pump, pipeItem, FluidCellPlanner.PlannedId, fluid, routeToken))
                         .FirstOrDefault(p => p is not null) is { } offshore ? new("planned:offshore-supply", offshore.Route) : null;
-                return new FluidSupplyPlanner().Find(current, stock, pipeItem, FluidCellPlanner.PlannedId, fluid);
+                return new FluidSupplyPlanner().Find(current, stock, pipeItem, FluidCellPlanner.PlannedId, fluid, routeToken);
             }
             var site = await ControllerPlanning.RunAsync(t => new FluidCellPlanner().Find(planning, force, equipment, pipeItem, anchor, input, output,
-                    fluids, Route, cancellationToken: t), controller, TimeSpan.FromMinutes(5), token)
+                    fluids, (current, fluid) => Route(current, fluid, t), cancellationToken: t), controller, TimeSpan.FromMinutes(5), token)
                 ?? throw new InvalidOperationException($"No clear site near the {string.Join(", ", fluids)} supply routes every port assignment of {recipeName}.");
             await RequireFedPoleAsync(site.Layout, catalog, token);
             cell = new($"fluid-{Guid.NewGuid():N}", 0, new(0, 0, true), MachineKind, machineItem, recipeName, new Dictionary<string, string>(),
@@ -623,6 +632,12 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         .Where(r => map.TileFluids?.GetValueOrDefault(r.Name) == fluid)
         .SelectMany(r => Enumerable.Range(r.X, r.Length).Select(x => new MapPosition(x + .5, r.Y + .5)))
         .OrderBy(p => p.DistanceTo(near)).ThenBy(p => p.Y).ThenBy(p => p.X).FirstOrDefault();
+
+    internal static string[] MissingTerrainSupply(SpatialSnapshot map, FactorySnapshot stock, IReadOnlyList<string> fluids,
+        ProductionCatalog catalog) => fluids.Where(f => FluidChainPlanner.Terrain(catalog, f) && !map.Entities.Any(e =>
+            OffshoreSupplyPlanner.CanExtract(map, e.Id, f) || (e.FluidConnections ?? []).Any(p =>
+                p.Type == "normal" && (p.Filter is null || p.Filter == f) && p.FlowDirection is "output" or "input-output")
+                && stock.FluidStockAt(e.Id, f) > 0)).ToArray();
 
     private static FactoryCell WithRole(FactoryCell cell, string role, string id, PlannedEntity plan) => cell with
     {

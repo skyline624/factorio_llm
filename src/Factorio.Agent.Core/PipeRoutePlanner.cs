@@ -24,6 +24,11 @@ public sealed class PipeRoutePlanner
             .OrderBy(p => Manhattan(p.Source.TargetPosition, p.Target.TargetPosition)).ToArray();
         if (pairs.Length == 0) return new(PipeRouteStatus.InvalidEndpoints, null, null, [], 0);
         var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
+        // Ordinary pipes use half-tile centers. Index native port targets once instead of
+        // scanning the whole growing network for every A* neighbor.
+        var portTargets = map.Entities.SelectMany(e => (e.FluidConnections ?? []).Select(p => (Entity: e, Port: p)))
+            .ToLookup(p => Center(p.Port.TargetPosition));
+        var placement = new Dictionary<MapPosition, bool>();
         int expanded = 0;
         foreach (var pair in pairs)
         {
@@ -35,6 +40,7 @@ public sealed class PipeRoutePlanner
             if (pair.Output.TargetEntityId is not null || pair.Input.TargetEntityId is not null) continue;
             var start = pair.Source.TargetPosition;
             var goal = pair.Target.TargetPosition;
+            var safe = new Dictionary<MapPosition, bool>();
             if (!Safe(start) || !Safe(goal)) continue;
             var frontier = new PriorityQueue<MapPosition, (int Cost, int Sequence)>();
             var cost = new Dictionary<MapPosition, int> { [start] = 0 };
@@ -64,8 +70,19 @@ public sealed class PipeRoutePlanner
                     frontier.Enqueue(next, (candidate + Manhattan(next, goal), sequence++));
                 }
             }
-            bool Safe(MapPosition position) => Aligned(position.X) && Aligned(position.Y)
-                && field.PlacementClear(pipe, position, 0) && ConnectionsSafe(map, position, pair.Source, pair.Target, new HashSet<string>());
+            bool Safe(MapPosition position)
+            {
+                if (!Aligned(position.X) || !Aligned(position.Y)) return false;
+                if (safe.TryGetValue(position, out bool cached)) return cached;
+                if (!placement.TryGetValue(position, out bool clear))
+                    placement[position] = clear = field.PlacementClear(pipe, position, 0);
+                return safe[position] = clear && !portTargets[Center(position)].Any(p =>
+                    p.Port.TargetPosition.DistanceTo(position) < .01
+                    && !(Matches(p.Entity, p.Port, pair.Source) || Matches(p.Entity, p.Port, pair.Target)))
+                    && !(target.FluidConnections ?? []).Any(p => p.BoxIndex != pair.Target.BoxIndex
+                        && p.TargetEntityId is null && p.Type == "normal" && p.FlowDirection is "input" or "input-output"
+                        && Math.Abs(p.TargetPosition.X - position.X) + Math.Abs(p.TargetPosition.Y - position.Y) <= 1.01);
+            }
         }
         return new(PipeRouteStatus.NoRouteInSnapshot, null, null, [], expanded);
 
@@ -89,6 +106,7 @@ public sealed class PipeRoutePlanner
     private static FluidEndpoint Endpoint(SpatialEntity entity, ObservedFluidConnection port) =>
         new(entity.Id, port.BoxIndex, port.PortIndex, port.Position, port.TargetPosition);
     private static bool Aligned(double value) => double.IsFinite(value) && Math.Abs(value - .5 - Math.Round(value - .5)) < 1e-8;
+    private static MapPosition Center(MapPosition position) => new(Math.Round(position.X - .5) + .5, Math.Round(position.Y - .5) + .5);
     private static int Manhattan(MapPosition a, MapPosition b) => checked((int)Math.Ceiling(Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y)));
     private static IEnumerable<MapPosition> Neighbors(MapPosition p) => [new(p.X + 1, p.Y), new(p.X, p.Y + 1), new(p.X - 1, p.Y), new(p.X, p.Y - 1)];
 }

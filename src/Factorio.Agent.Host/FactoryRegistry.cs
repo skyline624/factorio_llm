@@ -16,7 +16,7 @@ public sealed record FactoryZone(int Id, MapPosition Origin, int Slots, int Pitc
 /// </summary>
 public sealed record FactoryCell(string Id, int Zone, CellSlot Slot, string Kind, string MachineItem, string? Recipe,
     IReadOnlyDictionary<string, string> Entities, string Status, long Tick, int Attempts = 0,
-    IReadOnlyDictionary<string, PlannedEntity>? Plan = null)
+    IReadOnlyDictionary<string, PlannedEntity>? Plan = null, PipeRoutePlan? FluidRoute = null)
 {
     /// <summary>Resource, power and defense cells all live outside bands (zone 0); only the kind tells them apart.</summary>
     [System.Text.Json.Serialization.JsonIgnore]

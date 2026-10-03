@@ -13,7 +13,7 @@ namespace Factorio.Agent.Host;
 /// collects the product, that maintenance rebuilds a destroyed pipe of the chain, and that a chemical cell reopened as
 /// interrupted resumes from afar with its lost pipe rebuilt at its plan; not a campaign.
 /// </summary>
-public sealed class OilChemistryQualification(RuntimeSession session, string item = "plastic-bar")
+public sealed class OilChemistryQualification(RuntimeSession session, string item = "plastic-bar", bool remoteWater = false)
 {
     // Beyond any 48-tile capture around the deposit, so only links grown from the network itself can reach the extractor.
     private static readonly MapPosition Deposit = new(12, 6), SourcePole = new(-82.5, .5);
@@ -24,6 +24,7 @@ public sealed class OilChemistryQualification(RuntimeSession session, string ite
     {
         if (!session.IsFixture) throw new InvalidOperationException("Oil chemistry qualification requires an explicit fixture session.");
         if (item is not ("plastic-bar" or "sulfur")) throw new ArgumentException("The oil chemistry qualification covers plastic-bar and sulfur.");
+        if (remoteWater && item != "sulfur") throw new ArgumentException("The remote water qualification requires sulfur.");
         using var lease = ActorControlLease.Acquire(session.Directory);
         await using var game = session.CreateClient(lease);
         string path = Path.Combine(session.Directory, $"oil-chemistry-qualification-{Guid.NewGuid():N}.json");
@@ -36,15 +37,21 @@ public sealed class OilChemistryQualification(RuntimeSession session, string ite
             var mark = await game.ExecuteAsync(GameRequest.Create("mark_fixture", new
             { reason = "Injected crude oil, shore, power, oil research, construction items and coal. Oil chemistry cell test, not a campaign." }), token);
             Require(mark.Ok, "Fixture marker rejected.");
-            using var setup = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(Prepare + Statistics, token));
+            string preparation = remoteWater ? Prepare.Replace("x>=30", "x<=-104", StringComparison.Ordinal)
+                .Replace("pipe=150", "pipe=300", StringComparison.Ordinal)
+                .Replace("area={{-112,-48},{48,48}}", "area={{-112,-96},{96,96}}", StringComparison.Ordinal)
+                .Replace("for x=-112,48", "for x=-112,96", StringComparison.Ordinal)
+                .Replace("for y=-48,48", "for y=-96,96", StringComparison.Ordinal) : Prepare;
+            using var setup = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(preparation + Statistics, token));
             var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
             // The fixture area was just emptied: the registry only keeps the planned band.
             await new FactoryRegistry(session.Directory).SaveAsync(new FactoryState(1, catalog.Scope.WorldId, [Band], []), token);
             var before = setup.RootElement.Clone();
-            evidence.Add(new { check = "explicit-oil-preparation", item, band = Band.Box, native = before });
+            MapPosition? remotePumpPosition = remoteWater ? new(-99.5, 12.5) : null;
+            evidence.Add(new { check = "explicit-oil-preparation", item, remoteWater, band = Band.Box, native = before });
             Require(before.GetProperty("refineryCycles").GetInt64() == 0 && before.GetProperty("chemicalCycles").GetInt64() == 0,
                 "The fixture must start without refineries or chemical plants.");
-            if (item == "sulfur")
+            if (item == "sulfur" && !remoteWater)
             {
                 // Reproduce an already known water supply far from the oil. Sulfur must anchor at gas and pump
                 // fresh water nearby rather than selecting this water first because of native recipe order.
@@ -59,7 +66,25 @@ public sealed class OilChemistryQualification(RuntimeSession session, string ite
             evidence.Add(new { check = "remote-power-source", source, deposit = Deposit, distance = source?.DistanceTo(Deposit), captureRadius = 48 });
             Require(source == SourcePole && source.DistanceTo(Deposit) > 60,
                 "The known fed network must be the injected pole, over 60 tiles from the deposit.");
-            await using (var walker = new SpatialController(game, journal)) await walker.TravelAsync(new(0, 0), 4, catalog, token);
+            await using (var walker = new SpatialController(game, journal))
+            {
+                if (remotePumpPosition is not null)
+                {
+                    // Construct the prepared source through the same native geometry/placement path used by the agent.
+                    // Script can_place_entity alone allowed a pump whose intake pointed at dry land in fixture75.
+                    await walker.TravelAsync(remotePumpPosition, 6, catalog, token);
+                    var waterMap = await new SpatialClient(game).CaptureAsync(["pipe"], 48, token);
+                    var endpoint = new PlacementPlanner().FindCandidates(new(waterMap), "pipe", remotePumpPosition, requireBuildReach: false).First();
+                    string endpointId = await new PoweredMachineController(game, journal).BuildAtAsync("pipe", endpoint, catalog, walker, token);
+                    await new OffshoreSupplyController(game, journal).ConnectAsync(endpointId, "water", catalog, walker, token);
+                    var known = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+                    evidence.Add(new { check = "distant-pump-built-and-observed-by-character", known.CollectedTick, endpointId,
+                        position = endpoint.Position, injectedWater = 0, amount = known.FluidStockAt(endpointId, "water"),
+                        sources = FluidRelayController.Sources(known, "water").ToArray() });
+                    Require(known.FluidStockAt(endpointId, "water") > 0, "The native prepared source has not supplied its observed outlet.");
+                }
+                await walker.TravelAsync(new(0, 0), 4, catalog, token);
+            }
 
             var plan = await new FactoryDirector(game, journal, session.Directory).AutomateAsync(item, 12, token);
             var state = await LoadAsync();
@@ -72,6 +97,14 @@ public sealed class OilChemistryQualification(RuntimeSession session, string ite
                 "A fluid cell role lacks the plan maintenance needs to rebuild it.");
             Require(refinery!.Entities.Keys.Any(r => r.StartsWith("pipe-", StringComparison.Ordinal))
                 && chemical!.Entities.Keys.Any(r => r.StartsWith("pipe-", StringComparison.Ordinal)), "The fluid routes were not registered with their cells.");
+            if (remoteWater)
+            {
+                var relays = state.Cells.Where(c => c.Kind == FluidRelayController.Kind && c.Status == "ready" && c.Recipe == "water").ToArray();
+                evidence.Add(new { check = "distant-water-relays", cells = relays, chemical = chemical!.Plan!["machine"].Position });
+                Require(relays.Length >= 3 && relays.All(c => c.FluidRoute is not null && c.Plan is not null && c.Entities.ContainsKey("outlet")),
+                    "The distant water source was not extended through persistent native pipe sections.");
+                Require(!chemical.Entities.ContainsKey("pump"), "The remote test built an unplanned local pump instead of extending the known source.");
+            }
             var linked = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
             string[] links = extractor!.Entities.Keys.Where(r => r.StartsWith("link-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToArray();
             var onBand = state.Cells.Where(c => c.Plan is not null).SelectMany(c => c.Plan!.Values.Where(p => Band.Box.Contains(p.Position))
@@ -100,6 +133,33 @@ public sealed class OilChemistryQualification(RuntimeSession session, string ite
             Require(repair.Maintenance?.Rebuilt.Count == 1 && !repaired.Entities.Values.Contains(lost)
                 && repaired.Entities.Values.Contains(repair.Maintenance.Rebuilt[0]), "Maintenance did not rebuild the destroyed pipe in place.");
             Require(third.Collected.GetValueOrDefault(item) > 0, $"The chain stopped delivering {item} after the pipe repair.");
+
+            if (remoteWater)
+            {
+                // Reopen one section as an interrupted build, omit an applied receipt and destroy a different registered pipe.
+                // Resumption must adopt the standing pipe and rebuild exactly the lost part without adding another section.
+                var relayState = await LoadAsync();
+                var relay = relayState.Cells.First(c => c.Kind == FluidRelayController.Kind && c.Status == "ready");
+                var pipeRoles = relay.Entities.Where(p => p.Key.StartsWith("pipe-", StringComparison.Ordinal)).ToArray();
+                var applied = pipeRoles.First();
+                var cutRelay = pipeRoles.Last();
+                using var relayCut = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(DestroyPipe.Replace("PIPE_ID", cutRelay.Value, StringComparison.Ordinal), token));
+                var open = relay with { Status = "building", Entities = relay.Entities.Where(p => p.Key != applied.Key).ToDictionary() };
+                await new FactoryRegistry(session.Directory).SaveAsync(relayState.With(open), token);
+                await using (var walker = new SpatialController(game, journal))
+                {
+                    await walker.TravelAsync(SourcePole, 6, catalog, token);
+                    await new FluidRelayController(game, journal, session.Directory).ExtendAsync("water", chemical.Plan!["machine"].Position,
+                        catalog, walker, new FactoryGround(relayState, null), token);
+                }
+                var resumedState = await LoadAsync();
+                var resumedRelay = resumedState.Cells.Single(c => c.Id == relay.Id);
+                evidence.Add(new { check = "interrupted-water-relay-resumes", relay.Id, applied, cutRelay,
+                    native = relayCut.RootElement.Clone(), resumed = resumedRelay, beforeCount = relayState.Cells.Count, afterCount = resumedState.Cells.Count });
+                Require(resumedRelay.Status == "ready" && resumedRelay.Entities[applied.Key] == applied.Value
+                    && resumedRelay.Entities[cutRelay.Key] != cutRelay.Value && resumedState.Cells.Count == relayState.Cells.Count,
+                    "The interrupted water relay did not adopt its applied receipt and restore its original missing pipe.");
+            }
 
             // An interrupted build resumes from afar: the fixture reopens the chemical cell as if its build had stopped, destroys
             // one of its pipes meanwhile, and walks the actor back to the source, beyond any capture around the cell.
@@ -153,8 +213,8 @@ public sealed class OilChemistryQualification(RuntimeSession session, string ite
                     Require(delivered > 0 && growth["coalConsumed"] > 0,
                         "Logistics did not deliver the coal the chemical plant consumed.");
                 else
-                    Require(growth["waterConsumed"] > 0 && chemical.Entities.ContainsKey("pump"),
-                        "The sulfur cell did not draw water from its own offshore pump.");
+                    Require(growth["waterConsumed"] > 0 && (remoteWater || chemical.Entities.ContainsKey("pump")),
+                        "The sulfur cell did not draw native water from its planned source.");
             }
             finally { foreach (var row in rows) row.Dispose(); }
             passed = true;
