@@ -6,6 +6,37 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class SpatialPlannerTests
 {
     [Fact]
+    public void CancellationDuringRemainingConstructionStopsTheAccessProof()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var field = new SpatialCollisionField(Map([]));
+        Assert.ThrowsAny<OperationCanceledException>(() => new PlacementPlanner().FindApproach(field, "chest",
+            new(new(4.5, .5), 0, 0), new CancellingTargets(cancellation), cancellationToken: cancellation.Token));
+        Assert.True(cancellation.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void AnAlreadyCancelledRouteCannotReturnItsDirectPath()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var field = new SpatialCollisionField(Map([]));
+        Assert.ThrowsAny<OperationCanceledException>(() => new RoutePlanner().Find(field, new(3, 0), token: cancellation.Token));
+    }
+
+    private sealed class CancellingTargets(CancellationTokenSource cancellation) : IReadOnlyList<MapPosition>
+    {
+        public int Count => 1;
+        public MapPosition this[int index] => index == 0 ? new(0, 0) : throw new ArgumentOutOfRangeException(nameof(index));
+        public IEnumerator<MapPosition> GetEnumerator()
+        {
+            cancellation.Cancel();
+            yield return this[0];
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    [Fact]
     public void ACancelledPlacementScanStopsInsideTheObservedGrid()
     {
         using var cancellation = new CancellationTokenSource();

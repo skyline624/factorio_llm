@@ -39,7 +39,7 @@ public sealed class FluidRelayPlanner
             var after = FluidCellPlanner.WithPipes(projected, pipeItem, route.Pipes, source.Force, "relay", reserveTiles: true);
             after = after with { Entities = after.Entities.Select(e => e.Id == PlannedId ? e with
                 { Bounds = new(new(outlet.Position.X - .5, outlet.Position.Y - .5), new(outlet.Position.X + .5, outlet.Position.Y + .5)) } : e).ToArray() };
-            if (new PlacementPlanner().FindApproach(field, pipeItem, outlet, route.Pipes, after) is null) continue;
+            if (new PlacementPlanner().FindApproach(field, pipeItem, outlet, route.Pipes, after, cancellationToken) is null) continue;
             return new(outlet, route);
         }
         return null;
@@ -81,8 +81,8 @@ public sealed class FluidRelayPlanner
                 pipeItem, supply.Route.Pipes, force, "relay", reserveTiles: true);
             after = after with { Entities = after.Entities.Select(e => e.Id == PlannedId ? e with
                 { Bounds = new(new(outlet.Position.X - .5, outlet.Position.Y - .5), new(outlet.Position.X + .5, outlet.Position.Y + .5)) } : e).ToArray() };
-            if (new PlacementPlanner().FindApproach(field, pumpItem, supply.Pump, supply.Route.Pipes.Append(outlet.Position).ToArray(), after) is null
-                || new PlacementPlanner().FindApproach(field, pipeItem, outlet, supply.Route.Pipes, after) is null) continue;
+            if (new PlacementPlanner().FindApproach(field, pumpItem, supply.Pump, supply.Route.Pipes.Append(outlet.Position).ToArray(), after, cancellationToken) is null
+                || new PlacementPlanner().FindApproach(field, pipeItem, outlet, supply.Route.Pipes, after, cancellationToken) is null) continue;
             return new(outlet, supply.Route, new("pump", pumpItem, supply.Pump));
         }
         return null;

@@ -73,7 +73,8 @@ public sealed class FluidReservoirPlanner
         var sites = new List<FluidReservoirSite>();
         var outlet = (machine.FluidConnections ?? []).First(p => p.Type == "normal" && p.Filter == fluid
             && p.FlowDirection is "output" or "input-output");
-        foreach (var placement in new PlacementPlanner().FindCandidates(field, tankItem, outlet.TargetPosition, requireBuildReach: false))
+        foreach (var placement in new PlacementPlanner().FindCandidates(field, tankItem, outlet.TargetPosition, requireBuildReach: false,
+            cancellationToken: cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var tank = new SpatialEntity(PlannedId, geometry.Name, placement.Position,
@@ -95,12 +96,13 @@ public sealed class FluidReservoirPlanner
                 var after = new SpatialCollisionField(projected with { Entities = [.. projected.Entities,
                     .. route.Pipes.Select((at, i) => new SpatialEntity($"{PlannedId}:pipe:{i}", pipe.Name, at,
                         new(new(at.X - .5, at.Y - .5), new(at.X + .5, at.Y + .5)), 0, machine.Force))] });
-                var approach = new PlacementPlanner().FindApproach(field, tankItem, placement, completedSite: after.Map);
+                var approach = new PlacementPlanner().FindApproach(field, tankItem, placement, completedSite: after.Map,
+                    cancellationToken: cancellationToken);
                 if (approach is null) continue;
                 after = new(after.Map with { Actor = after.Map.Actor with { Position = approach } });
-                if (!PlacementPlanner.CanEscape(after, tank.Bounds)
-                    || new PlacementPlanner().FindInteractionApproach(after, tank) is null
-                    || new PlacementPlanner().FindInteractionApproach(after, machine) is null) continue;
+                if (!PlacementPlanner.CanEscape(after, tank.Bounds, cancellationToken)
+                    || new PlacementPlanner().FindInteractionApproach(after, tank, cancellationToken) is null
+                    || new PlacementPlanner().FindInteractionApproach(after, machine, cancellationToken) is null) continue;
                 var candidate = new FluidReservoirSite(source, placement, route, approach);
                 var future = Project(map, tankItem, pipeItem, new(fluid, candidate));
                 if (!OtherOutletsRemainOpen(future, pipeItem, machineId)) continue;

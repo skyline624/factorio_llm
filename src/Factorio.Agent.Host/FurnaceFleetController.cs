@@ -62,10 +62,11 @@ internal sealed class FurnaceFleetController(IGameClient game, IControllerJourna
                     var placement = new PlacementPlanner();
                     MapPosition exit = FindEscape(field, planningToken);
                     var targets = access.Append(exit).ToArray();
-                    foreach (var candidate in placement.FindCandidates(field, furnaceItem, anchor))
+                    foreach (var candidate in placement.FindCandidates(field, furnaceItem, anchor, cancellationToken: planningToken))
                     {
                         planningToken.ThrowIfCancellationRequested();
-                        if (placement.FindApproach(field, furnaceItem, candidate, targets) is not null) return (Candidate: candidate, Escape: exit);
+                        if (placement.FindApproach(field, furnaceItem, candidate, targets, cancellationToken: planningToken) is not null)
+                            return (Candidate: candidate, Escape: exit);
                     }
                     throw new InvalidOperationException("No native furnace placement preserves service and escape access.");
                 }, controller, TimeSpan.FromMinutes(2), cancellation);

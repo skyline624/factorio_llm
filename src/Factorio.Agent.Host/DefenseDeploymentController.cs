@@ -59,7 +59,7 @@ public sealed class DefenseDeploymentController(IGameClient game, IControllerJou
                 var map = await new SpatialClient(game).CaptureAsync([item], radius: 48, cancellationToken: token);
                 if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed before turret placement.");
                 var candidate = DefenseDeploymentPlanner.Candidates(map, item, model, state, anchor)
-                    .FirstOrDefault(p => new PlacementPlanner().FindApproach(new(map), item, p) is not null)
+                    .FirstOrDefault(p => new PlacementPlanner().FindApproach(new(map), item, p, cancellationToken: token) is not null)
                     ?? throw new InvalidOperationException("No reachable turret placement covering observed industry was found in the local search.");
                 await journal.AppendAsync("defense-placement", new { anchor, candidate, map.CollectedTick }, token);
                 string id = await new PoweredMachineController(game, journal).BuildAtAsync(item, candidate, catalog, controller, token);

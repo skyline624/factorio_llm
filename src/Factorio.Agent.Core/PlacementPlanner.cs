@@ -5,8 +5,10 @@ public sealed record PlacementCandidate(MapPosition Position, int Direction, dou
 /// <summary>Enumerates native tile-aligned placements from geometry; no predefined layout coordinates.</summary>
 public sealed class PlacementPlanner
 {
-    public MapPosition? FindInteractionApproach(SpatialCollisionField field, SpatialEntity entity)
+    public MapPosition? FindInteractionApproach(SpatialCollisionField field, SpatialEntity entity,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         double reach = field.Map.Actor.ReachDistance - 1;
         if (reach <= 0) return null;
         MapPosition start = field.Map.Actor.Position;
@@ -15,16 +17,19 @@ public sealed class PlacementPlanner
         for (double x = Math.Ceiling((entity.Position.X - reach) * 2) / 2; x <= entity.Position.X + reach; x += 0.5)
             for (double y = Math.Ceiling((entity.Position.Y - reach) * 2) / 2; y <= entity.Position.Y + reach; y += 0.5)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var point = new MapPosition(x, y);
                 if (point.DistanceTo(entity.Position) <= reach && CanStop(field, point)) candidates.Add(point);
             }
         return candidates.OrderBy(p => p.DistanceTo(start)).ThenBy(p => p.DistanceTo(entity.Position))
-            .FirstOrDefault(p => new RoutePlanner().Find(field, p).Status == RouteStatus.Found);
+            .FirstOrDefault(p => new RoutePlanner().Find(field, p, token: cancellationToken).Status == RouteStatus.Found);
     }
 
     public MapPosition? FindApproach(SpatialCollisionField field, string item, PlacementCandidate placement,
-        IReadOnlyList<MapPosition>? remainingTargets = null, SpatialSnapshot? completedSite = null)
+        IReadOnlyList<MapPosition>? remainingTargets = null, SpatialSnapshot? completedSite = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         EntityGeometry building = field.Map.Prototypes[field.Map.Items[item].EntityName];
         WorldBox footprint = building.CollisionBox.Rotate(placement.Direction).Translate(placement.Position);
         var exclusion = new WorldBox(new(footprint.Min.X - 0.4, footprint.Min.Y - 0.4), new(footprint.Max.X + 0.4, footprint.Max.Y + 0.4));
@@ -40,43 +45,48 @@ public sealed class PlacementPlanner
         for (double x = Math.Ceiling((placement.Position.X - reach) * 2) / 2; x <= placement.Position.X + reach; x += 0.5)
             for (double y = Math.Ceiling((placement.Position.Y - reach) * 2) / 2; y <= placement.Position.Y + reach; y += 0.5)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var point = new MapPosition(x, y);
                 if (point.DistanceTo(placement.Position) > reach || exclusion.Overlaps(field.Character.CollisionBox.Translate(point))
                     || !CanStop(field, point)) continue;
                 candidates.Add(point);
             }
         return candidates.OrderBy(p => p.DistanceTo(field.Map.Actor.Position)).ThenBy(p => p.DistanceTo(placement.Position))
-            .FirstOrDefault(p => new RoutePlanner().Find(field, p).Status == RouteStatus.Found && PreservesAccess(p));
+            .FirstOrDefault(p => new RoutePlanner().Find(field, p, token: cancellationToken).Status == RouteStatus.Found && PreservesAccess(p));
 
         bool PreservesAccess(MapPosition approach)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var after = new SpatialCollisionField((completedSite ?? field.Map) with
             {
                 Actor = field.Map.Actor with { Position = approach },
                 Entities = completedSite?.Entities ?? futureEntities
             });
             if (!CanStop(after, approach)) return false;
-            if (!CanEscape(after, futureBounds)) return false;
+            if (!CanEscape(after, futureBounds, cancellationToken)) return false;
             if (remainingTargets is null || remainingTargets.Count == 0) return true;
             double radius = Math.Max(.2, reach);
-            return remainingTargets.All(target => new RoutePlanner().Find(after, target, radius).Status == RouteStatus.Found);
+            return remainingTargets.All(target => new RoutePlanner().Find(after, target, radius, token: cancellationToken).Status == RouteStatus.Found);
         }
     }
 
-    public bool PreservesExit(SpatialCollisionField field, string item, PlacementCandidate placement)
+    public bool PreservesExit(SpatialCollisionField field, string item, PlacementCandidate placement,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         EntityGeometry building = field.Map.Prototypes[field.Map.Items[item].EntityName];
         WorldBox footprint = building.Type == "pipe"
             ? new(new(placement.Position.X - .5, placement.Position.Y - .5), new(placement.Position.X + .5, placement.Position.Y + .5))
             : building.CollisionBox.Rotate(placement.Direction).Translate(placement.Position);
         return CanEscape(new(field.Map with { Entities = field.Map.Entities.Append(new SpatialEntity(
-            "planned-construction", building.Name, placement.Position, footprint, placement.Direction, "planned")).ToArray() }), footprint);
+            "planned-construction", building.Name, placement.Position, footprint, placement.Direction, "planned")).ToArray() }), footprint, cancellationToken);
     }
 
     // Prove a continuous, body-sized exit beyond the construction neighbourhood. Merely being
     // within interaction reach of another machine does not prove the actor can leave a pocket.
-    internal static bool CanEscape(SpatialCollisionField field, WorldBox footprint)
+    internal static bool CanEscape(SpatialCollisionField field, WorldBox footprint, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         MapPosition start = field.Map.Actor.Position;
         // A local opening is not an exit from a larger pocket formed by several cells and pipes. Keep the
         // actor inside the checked neighbourhood even when the last piece stands more than four tiles away.
@@ -88,11 +98,13 @@ public sealed class PlacementPlanner
         for (double x = Math.Floor(start.X * 2) / 2; x <= Math.Ceiling(start.X * 2) / 2; x += .5)
             for (double y = Math.Floor(start.Y * 2) / 2; y <= Math.Ceiling(start.Y * 2) / 2; y += .5)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var point = new MapPosition(x, y);
                 if (field.Walkable(point) && field.SegmentClear(start, point, 0) && seen.Add(point)) queue.Enqueue(point);
             }
         while (queue.TryDequeue(out var point) && seen.Count <= 4096)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // A small photograph can end before the neighbourhood does. Reaching its clear inner edge proves
             // access to the next local observation; no route is planned through unknown terrain.
             if (!neighbourhood.Contains(point) || point.X - field.Map.Bounds.Min.X <= 1 || field.Map.Bounds.Max.X - point.X <= 1

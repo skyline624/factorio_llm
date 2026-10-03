@@ -35,7 +35,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while approaching an entity.");
         }
         var entity = map.Entities.SingleOrDefault(e => e.Id == entityId) ?? throw new EntityMissingException(entityId, knownPosition);
-        MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map), entity)
+        MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map), entity, token)
             ?? throw new InvalidOperationException("No reachable interaction position for the observed entity.");
         // Navigation starts with a smaller local view and can expand it when a detour is clipped.
         await TravelAsync(approach, .2, catalog, token);
@@ -369,7 +369,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             ValidatedPlacement? selected = validation.Candidates.FirstOrDefault(c => c.Allowed && c.InReach);
             if (selected is null) throw new InvalidOperationException($"No native-valid placement among the {candidates.Count} candidates tested.");
             var placement = new PlacementCandidate(selected.Position, selected.Direction, 0);
-            var approach = new PlacementPlanner().FindApproach(new(map), item, placement)
+            var approach = new PlacementPlanner().FindApproach(new(map), item, placement, cancellationToken: deadline.Token)
                 ?? throw new InvalidOperationException("Construction would leave no reachable exit.");
             await NavigateAsync(approach, .2, deadline.Token);
             await journal.AppendAsync("placement-plan", new { map.Scope, map.CollectedTick, item, preferredPosition, selected }, deadline.Token);
@@ -484,7 +484,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 map = await spatial.CaptureAsync([item], cancellationToken: token);
                 if (map.Scope != scope) throw new InvalidDataException("Actor changed before construction.");
                 RequireAi(map);
-                if (!new PlacementPlanner().PreservesExit(new(map), item, new(position, direction, 0)))
+                if (!new PlacementPlanner().PreservesExit(new(map), item, new(position, direction, 0), token))
                     throw new PlacementRefusedException("Construction refused: no observed exit after placement.");
             }
             return await ExecuteAsync(OperationSubmission.Create(map.Scope, kind, arguments,

@@ -21,6 +21,7 @@ public sealed class RoutePlanner
     public RoutePlan Find(SpatialCollisionField field, MapPosition destination, double goalRadius = 0.2,
         int maximumNodes = 25000, TimeSpan? timeBudget = null, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         if (!double.IsFinite(destination.X) || !double.IsFinite(destination.Y) || goalRadius < 0
             || !double.IsFinite(goalRadius) || maximumNodes < 1) throw new ArgumentOutOfRangeException(nameof(destination));
         MapPosition start = field.Map.Actor.Position;
@@ -41,6 +42,7 @@ public sealed class RoutePlanner
         for (int x = (int)Math.Floor(start.X * 2) - escapeCells; x <= Math.Ceiling(start.X * 2) + escapeCells; x++)
             for (int y = (int)Math.Floor(start.Y * 2) - escapeCells; y <= Math.Ceiling(start.Y * 2) + escapeCells; y++)
             {
+                token.ThrowIfCancellationRequested();
                 var cell = new Cell(x, y);
                 if (!field.Walkable(cell.Position) || !field.SegmentClear(start, cell.Position, tightStart ? 0 : 0.18)) continue;
                 double cost = start.DistanceTo(cell.Position), h = Heuristic(cell.Position);
@@ -72,8 +74,13 @@ public sealed class RoutePlanner
                 if (tightStart && path.Count > 1) { smoothed.Add(path[1]); index = 1; }
                 while (index < path.Count - 1)
                 {
+                    token.ThrowIfCancellationRequested();
                     int next = path.Count - 1;
-                    while (next > index + 1 && !field.SegmentClear(path[index], path[next])) next--;
+                    while (next > index + 1 && !field.SegmentClear(path[index], path[next]))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        next--;
+                    }
                     smoothed.Add(path[next]);
                     index = next;
                 }

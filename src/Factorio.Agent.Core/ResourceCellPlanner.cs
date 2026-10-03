@@ -210,7 +210,7 @@ public sealed class ResourceCellPlanner
             var reserved = Reservation(map, candidate.Row);
             var clearance = map.Entities.Where(e => e.Id != map.Actor.Id && FactoryZonePlanner.Removable.Contains(map.Prototypes[e.Name].Type)
                 && reserved.Any(box => box.Overlaps(e.Bounds))).OrderBy(e => e.Id, StringComparer.Ordinal).ToArray();
-            if (Escapes(map, candidate.Row, candidate.Template, clearance)) return new(ResourceRowSearchStatus.Found, candidate.Row, clearance);
+            if (Escapes(map, candidate.Row, candidate.Template, clearance, token)) return new(ResourceRowSearchStatus.Found, candidate.Row, clearance);
         }
         return new(ResourceRowSearchStatus.NoSite);
     }
@@ -301,7 +301,8 @@ public sealed class ResourceCellPlanner
     private static Part Unit(Frame frame, string role, string item, int a, int b, int direction) =>
         new(new(role, item, Center(frame.Tiles(a, b, 1, 1)), direction), a, b, 1, 1);
 
-    private static bool Escapes(SpatialSnapshot map, ResourceRow row, Template template, IReadOnlyList<SpatialEntity> clearance)
+    private static bool Escapes(SpatialSnapshot map, ResourceRow row, Template template, IReadOnlyList<SpatialEntity> clearance,
+        CancellationToken token)
     {
         var cleared = clearance.Select(e => e.Id).Append(map.Actor.Id).ToHashSet(StringComparer.Ordinal);
         var planned = Enumerable.Range(0, row.Cells).SelectMany(i => template.Parts.Select(p =>
@@ -317,7 +318,7 @@ public sealed class ResourceCellPlanner
             Actor = map.Actor with { Position = start },
             Entities = [.. map.Entities.Where(e => !cleared.Contains(e.Id)), .. planned]
         };
-        return PlacementPlanner.CanEscape(new SpatialCollisionField(future), Area(template, row));
+        return PlacementPlanner.CanEscape(new SpatialCollisionField(future), Area(template, row), token);
     }
 
     private static WorldBox Area(Template template, ResourceRow row) => template.Frame.Tiles(template.SpanMin - 1, -template.Frame.Depth,

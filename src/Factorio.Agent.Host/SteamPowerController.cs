@@ -88,7 +88,7 @@ public sealed class SteamPowerController(IGameClient game, IControllerJournal jo
                 await journal.AppendAsync("power-machine-reused", new { machine, entityId = existing[0].Id }, token);
                 continue;
             }
-            MapPosition approach = new PlacementPlanner().FindApproach(new(map), machine.Item, machine.Placement)
+            MapPosition approach = new PlacementPlanner().FindApproach(new(map), machine.Item, machine.Placement, cancellationToken: token)
                 ?? throw new InvalidOperationException("No reachable construction approach outside the planned footprint.");
             await TravelAsync(approach, 0.2);
             map = await spatial.CaptureAsync(equipment.Items, 48, token);

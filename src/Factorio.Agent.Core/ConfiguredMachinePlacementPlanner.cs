@@ -28,7 +28,8 @@ public sealed class ConfiguredMachinePlacementPlanner
             var coverage = new WorldBox(new(pole.Position.X - radius, pole.Position.Y - radius),
                 new(pole.Position.X + radius, pole.Position.Y + radius));
             // This is a bounded search of observed terrain, not a proof that no other placement exists.
-            foreach (var candidate in placement.FindCandidates(field, machineItem, pole.Position, requireBuildReach: false)
+            foreach (var candidate in placement.FindCandidates(field, machineItem, pole.Position, requireBuildReach: false,
+                cancellationToken: cancellationToken)
                 .Where(p => coverage.Overlaps(geometry.CollisionBox.Rotate(p.Direction).Translate(p.Position))))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -36,7 +37,7 @@ public sealed class ConfiguredMachinePlacementPlanner
                 var supplies = new MultiFluidSupplyPlanner().Find(projected, stock, pipeItem, PlannedId, fluids, cancellationToken);
                 if (supplies is null) continue;
                 var remaining = supplies.SelectMany(s => s.Supply.Route.Pipes).ToArray();
-                var approach = placement.FindApproach(field, machineItem, candidate, remaining);
+                var approach = placement.FindApproach(field, machineItem, candidate, remaining, cancellationToken: cancellationToken);
                 if (approach is not null) return new(candidate, pole.Id, approach, supplies);
             }
         }

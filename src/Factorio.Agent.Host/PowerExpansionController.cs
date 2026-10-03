@@ -285,7 +285,7 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
             if (arm.PickupTargetId != chestId || arm.DropTargetId != boiler.Id || arm.Power?.NetworkId is null)
                 throw new InvalidDataException("The native feeder does not take from its chest into the boiler on a network.");
             var chest = map.Entities.Single(e => e.Id == chestId);
-            if (new PlacementPlanner().FindInteractionApproach(new(map), chest) is null)
+            if (new PlacementPlanner().FindInteractionApproach(new(map), chest, token) is null)
                 throw new InvalidOperationException("The feeder chest is not reachable for logistics.");
             await PrimeAsync(boiler.Id, boiler.Position, chestId, chest.Position, catalog, controller, token);
             var cell = new FactoryCell($"power-{boiler.Id}", PowerZone, new(0, 0, true), "power", items.Boiler, null,
