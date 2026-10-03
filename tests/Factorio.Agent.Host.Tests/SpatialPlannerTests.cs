@@ -6,6 +6,21 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class SpatialPlannerTests
 {
     [Fact]
+    public void ACancelledPlacementScanStopsInsideTheObservedGrid()
+    {
+        using var cancellation = new CancellationTokenSource();
+        int visited = 0;
+        var field = new SpatialCollisionField(Map([]));
+        Assert.ThrowsAny<OperationCanceledException>(() => new PlacementPlanner().FindCandidates(field, "chest", new(0, 0),
+            requireBuildReach: false, eligible: _ =>
+            {
+                if (++visited == 200) cancellation.Cancel();
+                return true;
+            }, cancellationToken: cancellation.Token));
+        Assert.Equal(200, visited);
+    }
+
+    [Fact]
     public void RotatedObstacleBlocksItsRealShapeButLeavesItsEmptyBoundingCornersWalkable()
     {
         var map = Map([]);

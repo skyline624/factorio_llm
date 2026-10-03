@@ -21,9 +21,9 @@ public sealed class FluidRelayPlanner
         var preferred = new MapPosition(source.Position.X + (destination.X - source.Position.X) * Step / distance,
             source.Position.Y + (destination.Y - source.Position.Y) * Step / distance);
         var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
-        foreach (var outlet in new PlacementPlanner().FindCandidates(field, pipeItem, preferred, requireBuildReach: false)
-            .Where(p => p.Direction == 0 && p.Position.DistanceTo(source.Position) <= 32
-                && p.Position.DistanceTo(destination) <= distance - 8))
+        foreach (var outlet in new PlacementPlanner().FindCandidates(field, pipeItem, preferred, requireBuildReach: false,
+            eligible: p => p.Direction == 0 && p.Position.DistanceTo(source.Position) <= 32
+                && p.Position.DistanceTo(destination) <= distance - 8, cancellationToken: cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var entity = new SpatialEntity(PlannedId, geometry.Name, outlet.Position,
@@ -61,8 +61,9 @@ public sealed class FluidRelayPlanner
             throw new InvalidDataException("Terrain relays require native ordinary pipes and an offshore pump.");
         var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
         string force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
-        foreach (var outlet in new PlacementPlanner().FindCandidates(field, pipeItem, preferred, requireBuildReach: false)
-            .Where(p => p.Direction == 0 && p.Position.DistanceTo(near) <= 32 && p.Position.DistanceTo(destination) <= distance - 8))
+        foreach (var outlet in new PlacementPlanner().FindCandidates(field, pipeItem, preferred, requireBuildReach: false,
+            eligible: p => p.Direction == 0 && p.Position.DistanceTo(near) <= 32
+                && p.Position.DistanceTo(destination) <= distance - 8, cancellationToken: cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var entity = new SpatialEntity(PlannedId, geometry.Name, outlet.Position, geometry.CollisionBox.Translate(outlet.Position),

@@ -117,7 +117,8 @@ public sealed class PlacementPlanner
     }
 
     public IReadOnlyList<PlacementCandidate> FindCandidates(SpatialCollisionField field, string item,
-        MapPosition preferredPosition, bool requireBuildReach = true, int limit = 100)
+        MapPosition preferredPosition, bool requireBuildReach = true, int limit = 100,
+        Func<PlacementCandidate, bool>? eligible = null, CancellationToken cancellationToken = default)
     {
         if (limit is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(limit));
         if (!field.Map.Items.TryGetValue(item, out PlaceableItem? placeable))
@@ -131,10 +132,15 @@ public sealed class PlacementPlanner
             for (double x = Math.Ceiling(field.Map.Bounds.Min.X) + width % 2 * 0.5; x < field.Map.Bounds.Max.X; x++)
                 for (double y = Math.Ceiling(field.Map.Bounds.Min.Y) + height % 2 * 0.5; y < field.Map.Bounds.Max.Y; y++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var position = new MapPosition(x, y);
                     if (requireBuildReach && position.DistanceTo(field.Map.Actor.Position) > field.Map.Actor.BuildDistance) continue;
+                    var candidate = new PlacementCandidate(position, direction, position.DistanceTo(preferredPosition));
+                    // The bound counts candidates the caller can use, rather than orientations or positions
+                    // it will immediately discard. Check cheap caller constraints before native geometry.
+                    if (eligible is not null && !eligible(candidate)) continue;
                     if (!field.PlacementClear(geometry, position, direction)) continue;
-                    candidates.Add(new(position, direction, position.DistanceTo(preferredPosition)));
+                    candidates.Add(candidate);
                 }
         }
         return candidates.OrderBy(c => c.Score).ThenBy(c => c.Position.Y).ThenBy(c => c.Position.X)

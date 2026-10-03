@@ -52,11 +52,14 @@ public sealed class OffshoreSupplyPlanner
         if (geometry.FluidSourceOffset is null) throw new InvalidDataException("Missing native offshore fluid-source offset.");
         var target = map.Entities.Single(e => e.Id == targetId);
         var field = new SpatialCollisionField(map);
-        foreach (var candidate in new PlacementPlanner().FindCandidates(field, pumpItem, target.Position, requireBuildReach: false))
+        foreach (var candidate in new PlacementPlanner().FindCandidates(field, pumpItem, target.Position, requireBuildReach: false,
+            eligible: p =>
+            {
+                var offset = ExtractionPlanner.Rotate(geometry.FluidSourceOffset, p.Direction);
+                return field.FluidAt(new(p.Position.X + offset.X, p.Position.Y + offset.Y)) == fluid;
+            }, cancellationToken: cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var offset = ExtractionPlanner.Rotate(geometry.FluidSourceOffset, candidate.Direction);
-            if (field.FluidAt(new(candidate.Position.X + offset.X, candidate.Position.Y + offset.Y)) != fluid) continue;
             var ports = new List<ObservedFluidConnection>();
             foreach (var box in geometry.FluidBoxes ?? [])
                 foreach (var port in box.Connections.Where(p => p.Type == "normal" && p.FlowDirection is "output" or "input-output"))

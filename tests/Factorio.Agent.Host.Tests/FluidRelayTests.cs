@@ -6,6 +6,23 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class FluidRelayTests
 {
     [Fact]
+    public void ARelayKeepsItsCandidateBudgetForUsableOrientationsBeyondAnUnrelatedNetwork()
+    {
+        var map = Map();
+        var blocked = new List<SpatialEntity>();
+        for (int x = -1; x <= 9; x++)
+            for (int y = -5; y <= 5; y++)
+                if ((x + y) % 2 == 0) blocked.Add(Pipe(map, $"gas:{x}:{y}", new(x + .5, y + .5), "petroleum-gas"));
+        map = map with { Actor = map.Actor with { Position = new(-20.5, 5.5) }, Entities = [.. map.Entities, .. blocked] };
+        var site = new FluidRelayPlanner().Find(map, "pipe", "source", "water", new(130.5, .5));
+        Assert.NotNull(site);
+        Assert.InRange(site.Route.Pipes.Count, 1, FluidRelayPlanner.MaximumPipes);
+        Assert.All(site.Route.Pipes.Append(site.Outlet.Position), p => Assert.DoesNotContain(blocked,
+            other => other.FluidConnections!.Any(port => port.TargetPosition == p)));
+        Assert.True(site.Outlet.Position.Y is < -4.5 or > 5.5 || site.Outlet.Position.X is < -.5 or > 9.5);
+    }
+
+    [Fact]
     public void ARelayAdvancesTowardADistantConsumerWithinObservedGroundAndItsPipeBudget()
     {
         var map = Map();
