@@ -91,10 +91,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         if (from is null || to is null || from.DistanceTo(to) > 64) return false;
         await controller.ApproachEntityAsync(source.Entities["output-chest"], from, catalog, token);
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
-        var ground = new FactoryGround(state, steam);
-        string[] geometryItems = [.. Items.Concat(ground.Items).Concat(state.Cells.SelectMany(c => c.Plan?.Values ?? []).Select(p => p.Item))
-            .Distinct(StringComparer.Ordinal)];
-        var map = await new SpatialClient(game).CaptureAsync(geometryItems, 48, token);
+        var map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Transport planning scope changed.");
         if (!map.Entities.Any(e => e.Id == target.Entities["input-chest"]) || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0)
             return false;
@@ -272,6 +269,15 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         throw new InvalidOperationException("Belt did not reach its planned cardinal direction.");
     }
 
+    // Built entities already export their geometry in the local photograph. Only unfinished non-transport plans need
+    // additional item prototypes; retaining every historical plan eventually exceeds the native 16-item request budget.
+    internal static string[] GeometryItems(FactoryState state, PowerExpansionController.SteamItems? steam = null) =>
+        [.. Items.Concat(new FactoryGround(state, steam).Items)
+            .Concat(UnfinishedParts(state).Select(p => p.Item)).Distinct(StringComparer.Ordinal)];
+
+    private static IEnumerable<PlannedEntity> UnfinishedParts(FactoryState state) =>
+        state.Cells.Where(c => c.Status == "building" && c.Kind != "transport").SelectMany(c => c.Plan?.Values ?? []);
+
     internal static SpatialSnapshot ProtectBands(SpatialSnapshot map, FactoryState state, PowerExpansionController.SteamItems? steam = null)
     {
         var boxes = new List<WorldBox>();
@@ -286,7 +292,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                     boxes.Add(new(new(zone.Origin.X + i * zone.Pitch, top), new(zone.Origin.X + (i + 1) * zone.Pitch, top + h + 2)));
                 }
         }
-        boxes.AddRange(state.Cells.Where(c => c.Status == "building" && c.Kind != "transport").SelectMany(c => c.Plan?.Values ?? [])
+        boxes.AddRange(UnfinishedParts(state)
             .Where(p => map.Items.ContainsKey(p.Item)).Select(p => map.Prototypes[map.Items[p.Item].EntityName].CollisionBox.Rotate(p.Direction).Translate(p.Position)));
         boxes.AddRange((state.Rows ?? []).SelectMany(r => ResourceCellPlanner.Reservation(map, r)));
         if (steam is not null)
