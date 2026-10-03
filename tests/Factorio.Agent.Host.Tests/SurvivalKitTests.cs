@@ -191,6 +191,18 @@ public sealed class SurvivalKitTests
     }
 
     [Fact]
+    public async Task ALoadedPistolDoesNotLeaveTheMountedSubmachineGunEmptyBeforeATrip()
+    {
+        var game = new KitGame(Catalog("light-armor")) { MountedSubmachineGun = true };
+        var result = await new SurvivalKitController(game, new Journal()).EnsureAsync("resource-search", CancellationToken.None);
+        Assert.Equal(("complete", "light-armor"), (result.Status, result.Armor));
+        Assert.Equal(new[] { "armor:light-armor", "ammo:firearm-magazine" }, result.Equipped);
+        Assert.Equal(20, result.CarriedMagazines);
+        Assert.Empty(result.Produced);
+        Assert.Equal(2, game.Calls.Count(c => c == "submit"));
+    }
+
+    [Fact]
     public async Task MissingSteelForHeavyArmorStillAllowsCarriedLightArmor()
     {
         var catalog = Catalog("light-armor", "heavy-armor");
@@ -215,7 +227,9 @@ public sealed class SurvivalKitTests
     {
         private readonly ActorScope scope = new(Guid.NewGuid().ToString("N"), "session", "actor", 1, 1);
         private string? worn;
+        private bool submachineLoaded;
         public bool Enemy { get; init; }
+        public bool MountedSubmachineGun { get; init; }
         public List<string> Calls { get; } = [];
 
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
@@ -231,7 +245,27 @@ public sealed class SurvivalKitTests
             return Task.FromResult(new GameResponse(1, request.RequestId, true, 100, Protocol.ToElement(data)));
         }
 
-        private object Observation() => new
+        private object Observation()
+        {
+            var inventory = new Dictionary<string, long>();
+            var carried = new List<object>();
+            if (worn is null)
+            {
+                inventory["light-armor"] = 1;
+                carried.Add(new { slot = 4, name = "light-armor", kind = "armor", count = 1, bullet = false, range = 0d, rounds = 0 });
+            }
+            if (MountedSubmachineGun)
+            {
+                int magazines = submachineLoaded ? 20 : 30;
+                inventory["firearm-magazine"] = magazines;
+                carried.Add(new { slot = 6, name = "firearm-magazine", kind = "ammo", count = magazines, bullet = true,
+                    range = 0d, rounds = magazines * 10, damage = 5d });
+            }
+            var slots = new List<object> { new { index = 1, gun = "pistol", bulletGun = true, range = 15d,
+                ammo = "firearm-magazine", rounds = 100, ready = true } };
+            if (MountedSubmachineGun) slots.Add(new { index = 2, gun = "submachine-gun", bulletGun = true, range = 18d,
+                ammo = submachineLoaded ? "firearm-magazine" : null, rounds = submachineLoaded ? 100 : 0, ready = submachineLoaded });
+            return new
         {
             scope, collectedTick = 100L, snapshotId = 1,
             coverage = new { atomic = true, collectionStartTick = 100L, collectionEndTick = 100L, knownInventoriesComplete = true,
@@ -239,22 +273,40 @@ public sealed class SurvivalKitTests
             agent = new
             {
                 alive = true, controlMode = "ai", stopUnconfirmed = false, position = new MapPosition(0, 0), health = 250d, maxHealth = 250d,
-                inventory = worn is null ? new Dictionary<string, long> { ["light-armor"] = 1 } : new Dictionary<string, long>(),
-                weapon = new { ready = true, rounds = 100, range = 15d },
+                inventory,
+                weapon = new { ready = true, rounds = 100, range = submachineLoaded ? 18d : 15d },
                 loadout = new
                 {
                     complete = true, armor = worn,
-                    slots = new[] { new { index = 1, gun = "pistol", bulletGun = true, range = 15d, ammo = "firearm-magazine", rounds = 100, ready = true } },
-                    carried = worn is null ? new object[] { new { slot = 4, name = "light-armor", kind = "armor", count = 1, bullet = false, range = 0d, rounds = 0 } } : []
+                    slots, carried
                 }
             },
             enemies = Enemy ? new object[] { new { id = "biter", position = new MapPosition(10, 0), collectedTick = 100L } } : [],
             entities = Array.Empty<object>(), defenses = Array.Empty<object>()
         };
+        }
 
         private object Equip(OperationSubmission submission)
         {
             var args = submission.Args;
+            if (args.GetProperty("compartment").GetString() == "ammo")
+            {
+                Assert.True(MountedSubmachineGun);
+                Assert.Equal((2, 6, 10), (args.GetProperty("slot").GetInt32(), args.GetProperty("sourceSlot").GetInt32(), args.GetProperty("count").GetInt32()));
+                submachineLoaded = true;
+                return new
+                {
+                    operationId = submission.OperationId, kind = "equip", status = "completed", acceptedTick = 100L, updatedTick = 100L,
+                    effects = new
+                    {
+                        compartment = "ammo", slot = 2, sourceSlot = 6, item = "firearm-magazine", requested = 10, transferred = 10,
+                        equipmentBefore = new { main = new Dictionary<string, long> { ["firearm-magazine"] = 30 },
+                            ammo = new Dictionary<string, long> { ["firearm-magazine"] = 10 }, mainRounds = 300, loadedRounds = 100, selectedSlot = 1 },
+                        equipmentAfter = new { main = new Dictionary<string, long> { ["firearm-magazine"] = 20 },
+                            ammo = new Dictionary<string, long> { ["firearm-magazine"] = 20 }, mainRounds = 200, loadedRounds = 200, selectedSlot = 2 }
+                    }
+                };
+            }
             Assert.Equal(("equip", "armor", 4), (submission.Kind, args.GetProperty("compartment").GetString(), args.GetProperty("sourceSlot").GetInt32()));
             worn = "light-armor";
             return new

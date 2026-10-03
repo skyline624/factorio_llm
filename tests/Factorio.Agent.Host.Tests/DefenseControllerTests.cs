@@ -152,14 +152,16 @@ public sealed class DefenseControllerTests
         Assert.Contains("cancel", fake.Calls);
     }
 
-    [Fact]
-    public void ReloadsTheLongestRangeGunAndPrefersTheStrongestCarriedAmmunition()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReloadsTheLongestRangeGunAndPrefersTheStrongestCarriedAmmunition(bool pistolReady)
     {
         // The submachine gun (range 18) outranges the pistol (15); piercing rounds deal 8 native damage against 5.
         var loadout = new EquipmentState([new(1, true, 15, 9, true, "pistol", "firearm-magazine"), new(2, true, 18, 0, false, "submachine-gun")],
             [new(3, "firearm-magazine", "ammo", 10, true, 0, 100, 5), new(5, "piercing-rounds-magazine", "ammo", 4, true, 0, 40, 8)]);
         var state = new SafetyObservation(100, new("world", "session", "actor", 1, 1), true, "ai", false, new(0, 0), 250,
-            WeaponState.Unavailable, [], null, loadout, 250);
+            pistolReady ? new(true, 9, 15) : WeaponState.Unavailable, [], null, loadout, 250);
         var reload = EquipmentPolicy.Select(state)!;
         Assert.Equal("equip", reload.Kind);
         var args = Protocol.ToElement(reload.Arguments);
@@ -168,6 +170,7 @@ public sealed class DefenseControllerTests
         var loaded = state with { Loadout = loadout with { Slots = [loadout.Slots[0], loadout.Slots[1] with { Ammo = "firearm-magazine", Rounds = 10, Ready = true }] } };
         var select = EquipmentPolicy.Select(loaded)!;
         Assert.Equal(("select_weapon", 2), (select.Kind, Protocol.ToElement(select.Arguments).GetProperty("slot").GetInt32()));
+        Assert.Null(EquipmentPolicy.Select(loaded with { Weapon = new(true, 10, 18) }));
     }
 
     [Fact]

@@ -78,23 +78,31 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
                     if (!missing.ContainsKey(candidate)) break;
                 }
                 if (gun is not null && !await ObtainAsync(gun, 1)) gun = null;
-                // Each operation is decided from a fresh observation and only with no enemy in sight.
-                for (int step = 0; step < 4 && status == "complete"; step++)
+                // Revisit equipment after reserving ammunition, so newly obtained rounds are loaded before the trip.
+                int equipmentSteps = 0;
+                for (int pass = 0; pass < 2 && status == "complete"; pass++)
                 {
-                    var current = await SafeAsync(deadline.Token);
-                    if (current is null) { status = "deferred"; break; }
-                    var next = SurvivalKitPlanner.NextEquipment(current.Loadout!, armor, gun);
-                    if (next is null) break;
-                    await SubmitAsync(current, next, deadline.Token);
-                    var args = Protocol.ToElement(next.Arguments);
-                    equipped.Add(args.GetProperty("compartment").GetString() + ":" + args.GetProperty("item").GetString());
+                    int before = equipmentSteps;
+                    while (equipmentSteps < 4 && status == "complete")
+                    {
+                        var current = await SafeAsync(deadline.Token);
+                        if (current is null) { status = "deferred"; break; }
+                        var next = SurvivalKitPlanner.NextEquipment(current.Loadout!, armor, gun) ?? EquipmentPolicy.Select(current);
+                        if (next is null) break;
+                        await SubmitAsync(current, next, deadline.Token);
+                        equipmentSteps++;
+                        var args = Protocol.ToElement(next.Arguments);
+                        equipped.Add(next.Kind == "select_weapon" ? "select-weapon:" + args.GetProperty("slot").GetInt32()
+                            : args.GetProperty("compartment").GetString() + ":" + args.GetProperty("item").GetString());
+                    }
+                    if (pass > 0 && equipmentSteps == before) break;
+                    // Replenish the carried reserve after loading; weaker obtainable rounds remain the fallback.
+                    var latest = await ObserveAsync(deadline.Token);
+                    if (status == "complete" && latest?.Loadout is { } after)
+                        foreach (string ammunition in SurvivalKitPlanner.Ammunition(catalog, Carried(after)))
+                            if (Carried(after).GetValueOrDefault(ammunition) >= SurvivalKitPlanner.MagazineReserve
+                                || await ObtainAsync(ammunition, SurvivalKitPlanner.MagazineReserve)) break;
                 }
-                // A reserve of the strongest rounds the stock can make; weaker obtainable rounds are the fallback.
-                var latest = await ObserveAsync(deadline.Token);
-                if (status == "complete" && latest?.Loadout is { } after)
-                    foreach (string ammunition in SurvivalKitPlanner.Ammunition(catalog, Carried(after)))
-                        if (Carried(after).GetValueOrDefault(ammunition) >= SurvivalKitPlanner.MagazineReserve
-                            || await ObtainAsync(ammunition, SurvivalKitPlanner.MagazineReserve)) break;
             }
         }
         catch (Exception error) when (FactoryResearchController.Recoverable(error, token))

@@ -39,12 +39,14 @@ public static class EquipmentPolicy
     public static EquipmentDecision? Select(SafetyObservation state)
     {
         if (!state.Alive || state.ControlMode != "ai" || state.StopUnconfirmed || state.Health <= 0
-            || state.Weapon.Ready || state.Loadout is not { } loadout) return null;
+            || state.Loadout is not { } loadout) return null;
         // The strongest carried rounds, then the longest-range gun that is loaded or can be: a pistol never displaces an
         // available submachine gun.
         var ammunition = loadout.Carried.Where(s => s.Kind == "ammo" && s.Bullet).OrderByDescending(s => s.Damage).ThenBy(s => s.Slot).FirstOrDefault();
         var best = loadout.Slots.Where(s => s.Ready || s.BulletGun && s.Ammo is null && ammunition is not null)
             .OrderByDescending(s => s.Range).ThenByDescending(s => s.Ready).ThenBy(s => s.Index).FirstOrDefault();
+        // A loaded pistol must not hide a mounted empty submachine gun and carried rounds. Keep an equally capable ready gun.
+        if (state.Weapon.Ready && (best is null || best.Range <= state.Weapon.Range)) return null;
         if (best is { Ready: true }) return new("select_weapon", new { slot = best.Index });
         if (best is not null)
             return new("equip", new { compartment = "ammo", slot = best.Index, sourceSlot = ammunition!.Slot,
