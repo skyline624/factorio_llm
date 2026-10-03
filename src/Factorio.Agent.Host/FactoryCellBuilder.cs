@@ -193,14 +193,15 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
         int repaired = 0;
         await using var controller = new SpatialController(game, journal);
-        foreach (var cell in state.Cells.Where(c => c.Entities.ContainsKey("pole") && c.Zone > 0))
+        foreach (var cell in state.Cells.Where(c => c.Entities.ContainsKey("pole") && (c.Zone > 0 || c.Kind == "lab")))
         {
             if (FactoryPower.IsFed(snapshot, cell.Entities["pole"]) != false) continue;
             var equipment = Equipment(catalog, cell.MachineItem);
+            equipment = equipment with { Pole = cell.Plan?.GetValueOrDefault("pole")?.Item ?? equipment.Pole };
             var position = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == cell.Entities["pole"])
                 .Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
             await controller.TravelAsync(position, 6, catalog, token);
-            var context = new BuildContext(catalog, equipment, state.Zones.Single(z => z.Id == cell.Zone), controller, registry,
+            var context = new BuildContext(catalog, equipment, state.Zones.SingleOrDefault(z => z.Id == cell.Zone), controller, registry,
                 [cell.MachineItem, equipment.Inserter, equipment.Chest, equipment.Pole, .. steam?.Machines ?? []],
                 map => steam is null ? map : PowerExpansionController.ReserveGrowth(map, steam, state.Zones,
                     map.Entities.Single(e => e.Id == map.Actor.Id).Force));

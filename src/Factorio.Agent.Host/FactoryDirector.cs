@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Factorio.Agent.Core;
 using Factorio.Agent.Infrastructure;
 
@@ -123,7 +124,32 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     {
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         var registry = new FactoryRegistry(directory);
-        int existing = (await registry.LoadAsync(catalog.Scope.WorldId, token)).Cells.Count(c => c.Kind == "lab" && c.Status == "ready");
+        var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        int existing = state.Cells.Count(c => c.Kind == "lab" && c.Status == "ready");
+        if (existing < count)
+        {
+            var stock = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            if (stock.Scope != catalog.Scope) throw new InvalidDataException("Actor scope changed while finding reusable laboratories.");
+            var claimed = state.Cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
+            var candidates = stock.Records.Where(r => r.Kind == "entity" && r.Name == (catalog.Items["lab"].PlaceEntity ?? "lab")
+                && r.Data.GetProperty("role").GetString() == "factory" && !claimed.Contains(r.EntityId)
+                && FactoryPower.IsFed(stock, r.EntityId) == true).OrderBy(r => r.EntityId, StringComparer.Ordinal).ToArray();
+            string[] poles = catalog.Items.Where(p => p.Value.PlaceEntityType == "electric-pole").Select(p => p.Key).ToArray();
+            await using var controller = new SpatialController(game, journal);
+            foreach (var candidate in candidates)
+            {
+                if (existing >= count) break;
+                await controller.TravelAsync(candidate.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!, 6, catalog, token);
+                var map = await new SpatialClient(game).CaptureAsync(["lab", .. poles], 32, token);
+                stock = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+                state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+                var adopted = FactoryLaboratoryAdoption.Plan(state, stock, map, catalog, candidate.EntityId);
+                if (adopted is null) continue;
+                await registry.SaveAsync(state.With(adopted), token);
+                existing++;
+                await journal.AppendAsync("factory-laboratory-adopted", adopted, token);
+            }
+        }
         await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync("lab", count - existing, false, token);
         for (int built = existing; built < count; built++)
             await new FactoryCellBuilder(game, journal, directory).BuildAsync("lab", "lab", null, token);

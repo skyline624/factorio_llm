@@ -36,6 +36,27 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
                 || setup.RootElement.GetProperty("stale").GetString() != "electric-mining-drill")
                 throw new InvalidDataException("The prepared stale selection must be unresearched, including after a resource cell fixture.");
 
+            // Reproduce a bootstrap lab built before the persistent factory exists, using one supplied kit item.
+            var bootstrapCatalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+            string bootstrapLab;
+            await using (var walker = new SpatialController(game, journal))
+                bootstrapLab = await new PoweredMachineController(game, journal).InstallAsync("lab", bootstrapCatalog, walker, token);
+            var beforeAdoption = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            int reusedLabs = await new FactoryDirector(game, journal, session.Directory).EnsureLabsAsync(1, token);
+            var afterAdoption = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            var adoptedState = await new FactoryRegistry(session.Directory).LoadAsync(bootstrapCatalog.Scope.WorldId, token);
+            var adoptedLab = adoptedState.Cells.Single(c => c.Kind == "lab" && c.Status == "ready");
+            long labItemsBefore = FactoryLogistics.Carried(beforeAdoption).GetValueOrDefault("lab");
+            long labItemsAfter = FactoryLogistics.Carried(afterAdoption).GetValueOrDefault("lab");
+            int NativeLabs(FactorySnapshot photo) => photo.Records.Count(r => r.Kind == "entity"
+                && r.Data.GetProperty("type").GetString() == "lab" && r.Data.GetProperty("role").GetString() == "factory");
+            evidence.Add(new { check = "bootstrap-laboratory-reused", bootstrapLab, reusedLabs, adoptedLab, labItemsBefore, labItemsAfter,
+                nativeBefore = NativeLabs(beforeAdoption), nativeAfter = NativeLabs(afterAdoption), afterAdoption.CollectedTick });
+            if (reusedLabs != 1 || adoptedLab.Entities["machine"] != bootstrapLab || adoptedLab.Zone != 0
+                || adoptedLab.Plan?.ContainsKey("machine") != true || labItemsBefore != labItemsAfter
+                || NativeLabs(beforeAdoption) != 1 || NativeLabs(afterAdoption) != 1)
+                throw new InvalidDataException("The known powered bootstrap laboratory was not reused without another build.");
+
             var result = await new FactoryResearchController(game, journal, session.Directory).RunAsync("gun-turret", token);
             var state = await new FactoryRegistry(session.Directory).LoadAsync((await ScopeAsync()).WorldId, token);
             evidence.Add(new { check = "factory-research", result, cells = state.Cells });
@@ -71,6 +92,24 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
             if (newPole == poleId || repaired.Maintenance?.Rebuilt.Contains(newPole) != true
                 || !photograph.Records.Any(r => r.Kind == "entity" && r.EntityId == newPole))
                 throw new InvalidDataException("The damaged native pole was not rebuilt during fresh maintenance.");
+
+            string cutLab = repairedState.Cells.Single(c => c.Id == adoptedLab.Id).Entities["machine"];
+            if (!long.TryParse(cutLab, out _)) throw new InvalidDataException("Expected a native reused laboratory id.");
+            string damageLab = $$"""
+                /silent-command local s=game.surfaces.nauvis; local lab; for _,e in pairs(s.find_entities_filtered{type='lab',force=game.forces.factorio_agent}) do if tostring(e.unit_number)=='{{cutLab}}' then lab=e end end; assert(lab); lab.destroy(); rcon.print(helpers.table_to_json{tick=game.tick,destroyed='{{cutLab}}',fixtureSpareLabsFromOriginalKit=1})
+                """;
+            using var labDamage = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(damageLab, token));
+            var labRepair = await new FactoryLogistics(game, journal, session.Directory)
+                .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks, usePlannedBuffers: true);
+            repairedState = await new FactoryRegistry(session.Directory).LoadAsync(state.WorldId, token);
+            var restoredLab = repairedState.Cells.Single(c => c.Id == adoptedLab.Id);
+            string newLab = restoredLab.Entities["machine"];
+            var restoredPhoto = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            evidence.Add(new { check = "adopted-laboratory-rebuilt", prepared = labDamage.RootElement.Clone(), cutLab, newLab, restoredLab,
+                result = labRepair, restoredPhoto.CollectedTick });
+            if (newLab == cutLab || labRepair.Maintenance?.Rebuilt.Contains(newLab) != true
+                || FactoryPower.IsFed(restoredPhoto, newLab) != true || NativeLabs(restoredPhoto) != 1)
+                throw new InvalidDataException("The reused native laboratory was not rebuilt from its recorded plan.");
 
             var rows = (await File.ReadAllLinesAsync(journalPath, token)).Select(l => JsonDocument.Parse(l)).ToArray();
             try
