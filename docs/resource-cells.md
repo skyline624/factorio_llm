@@ -74,7 +74,7 @@ Le rapport indique `passed: true` et `isAutonomousCampaign: false`. `verify-fact
 
 ### Amorçage des foreuses thermiques
 
-Une cellule minière à charbon démarre maintenant avant de devenir `ready` : `CoalProducerStartup` vérifie le combustible chargé et l'énergie de combustion natifs, puis charge au plus un quart de pile depuis le sac. Si le sac est vide, l'approvisionnement est borné à un charbon d'amorçage, en privilégiant la collecte existante. Une foreuse électrique ou déjà alimentée ne reçoit aucun transfert. Le périmètre du personnage et la géométrie de la cellule sont revérifiés après l'approvisionnement. Le même contrôle précède le calcul de capacité des cellules à charbon déjà prêtes lors d'une reprise.
+Une cellule minière à charbon démarre avant de devenir `ready` : `ResourceCellStartup` vérifie le combustible chargé et l'énergie de combustion natifs, puis charge au plus un quart de pile depuis le sac. Si le sac est vide, l'approvisionnement est borné à un charbon d'amorçage par brûleur, en privilégiant la collecte existante. Une foreuse électrique ou déjà alimentée ne reçoit aucun transfert. Le périmètre du personnage et la géométrie de la cellule sont revérifiés après l'approvisionnement. Le même contrôle précède le calcul de capacité des cellules déjà prêtes lors d'une reprise.
 
 Cela supprime la dépendance circulaire observée le 2 octobre : la nouvelle mine attendait son combustible tandis que l'extension vapeur attendait 50 charbons avant de laisser la logistique la visiter. L'extraction stockée revérifie aussi les équipements épuisés après son arrivée près d'un coffre connu, avant de fabriquer leur remplacement.
 
@@ -86,6 +86,18 @@ La variante explicite `verify-resource-cells --session FILE --burner` fournit tr
 | Électrique | Deuxième service : 37 plaques de fer et 32 charbons collectés, 32 charbons distribués ; réparation et retrait réussis, aucun minage hors dégagement des arbres. |
 
 Les deux rapports indiquent `passed: true` et `isAutonomousCampaign: false`. Ils sont conservés hors Git dans `.runtime/fixture-20261002-162936-8468845c/` : `resource-cell-qualification-5ced5c8560e649f5960d6aa1504d30b0.json` (thermique) et `resource-cell-qualification-0acbdfa459994bdc8ff87fb3163475b3.json` (électrique). Le serveur a été sauvegardé et arrêté. Les 1 129 tests ordinaires passent, sans jeu ni appel cloud ; le test cloud optionnel reste ignoré. Ces essais ne démontrent pas encore un gain de durée en campagne normale.
+
+### Démarrage des fournisseurs avant leurs consommateurs
+
+Le 3 octobre 2026, dans la partie normale de graine **20261071**, les nouvelles cellules de cuivre puis de fer sont prêtes mais leurs foreuses et fours restent sans combustible, avec zéro fabrication native, pendant la préparation de l'assembleuse d'engrenages et de son transport. Le personnage porte pourtant du charbon. Attendre le service de fin d'étape laisse ces fournisseurs inactifs pendant la construction suivante.
+
+Le démarrage couvre maintenant toutes les cellules de ressources : la foreuse précède son four, et leurs transferts terminés doivent laisser du combustible chargé ou en combustion dans une nouvelle observation native. `EnsureRawAsync` démarre les cellules prêtes avant de retourner une capacité déjà suffisante. `SeedRawAsync` démarre les fournisseurs conservés demandés par le plan, charbon en premier pour la fusion, même si leur capacité dispense d'en construire d'autres. Les cellules en construction, épuisées et les fournisseurs étrangers au plan restent exclus. Un transfert dont le résultat n'est pas terminé interrompt la préparation pour réconciliation.
+
+La fixture distincte **20261134**, sur Factorio **2.0.77 headless**, fournit explicitement le terrain, un gisement artificiel de 100 000 minerais de fer, 500 charbons, les équipements, certaines recherches et une interface électrique. Aucun objet minerai de fer, plaque ou engrenage n'est fourni. C# calcule et construit une cellule thermique ; ses deux brûleurs sont alimentés avant l'enregistrement `ready`. Elle produit **15 plaques** entre les ticks **3020 et 6661**. Après suppression préparée du combustible et de l'énergie restante, une demande de même capacité reconserve exactement ses entités, construit zéro cellule et relance la production jusqu'à **30 plaques au tick 10512**.
+
+Un second arrêt préparé reproduit le cas où le plan ne réclame aucune croissance brute : les deux brûleurs redémarrent avant la planification de l'assembleuse d'engrenages. Au tick **19329**, les compteurs natifs constatent **67 plaques et 3 engrenages**, sans minage ni fabrication manuelle, mort, pilote connecté ou intervention humaine. Les huit contrôles passent ; le serveur est sauvegardé et arrêté. Le rapport privé est `.runtime/fixture-20261003-180441-69e9e4c9/raw-startup-qualification.json`. Les **1 404 tests ordinaires** passent également ; le contrat cloud facultatif reste ignoré. L'audit NuGet n'a pas été exécuté lors de ces compilations locales, après un échec DNS de son service ; les dépendances n'ont pas changé.
+
+Cette preuve de composant vérifie le démarrage et le réemploi avant un consommateur. Le quart de pile est un amorçage fini : les tournées logistiques restent nécessaires pour maintenir la production. Elle ne qualifie ni un débit soutenu en campagne normale, ni la progression jusqu'à la fusée.
 
 ### Remplacement d'une capacité entièrement épuisée
 

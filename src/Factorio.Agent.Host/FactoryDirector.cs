@@ -184,9 +184,8 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 var existing = RawCapacity(state, item);
                 return new(item, supply.Kind, existing.Cells, existing.PerMinute, built);
             }
-            if (item == FactoryLogistics.Fuel)
-                foreach (var producer in state.Cells.Where(c => c.Kind == "miner" && c.Recipe == item && c.Status == "ready"))
-                    await new CoalProducerStartup(game, journal).StartAsync(producer, catalog, startupController, token);
+            foreach (var producer in state.Cells.Where(c => c.IsResource && c.Recipe == item && c.Status == "ready"))
+                await new ResourceCellStartup(game, journal).StartAsync(producer, catalog, startupController, token);
             var (cells, current) = RawCapacity(state, item);
             if (current >= perMinute - 1e-9 || built >= maximumNewCells)
             {
@@ -292,6 +291,14 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     private async Task SeedRawAsync(ProductionCatalog catalog, IReadOnlyDictionary<string, double> raw, CancellationToken token,
         Func<CancellationToken, Task<bool>>? isObjectiveComplete)
     {
+        // Capacity includes an idle ready cell: start retained suppliers before deciding that no raw growth is needed.
+        var registry = new FactoryRegistry(directory);
+        await using (var controller = new SpatialController(game, journal))
+            foreach (var producer in RawStartupCells(catalog, await registry.LoadAsync(catalog.Scope.WorldId, token), raw))
+            {
+                if (isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
+                await new ResourceCellStartup(game, journal).StartAsync(producer, catalog, controller, token);
+            }
         var carried = FactoryLogistics.Carried(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token));
         foreach (var (item, perMinute) in RawSeeds(catalog, await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token), raw, carried))
         {
@@ -307,6 +314,15 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 await journal.AppendAsync("factory-raw-seed-failed", new { item, perMinute, error = error.GetType().Name, error.Message }, token);
             }
         }
+    }
+
+    internal static IReadOnlyList<FactoryCell> RawStartupCells(ProductionCatalog catalog, FactoryState state,
+        IReadOnlyDictionary<string, double> raw)
+    {
+        var wanted = raw.Where(p => p.Value > 0).Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
+        if (wanted.Any(item => ResourceCellPlanner.Supply(catalog, item)?.Kind == "smelter")) wanted.Add(FactoryLogistics.Fuel);
+        return state.Cells.Where(c => c.IsResource && c.Status == "ready" && c.Recipe is not null && wanted.Contains(c.Recipe))
+            .OrderBy(c => c.Recipe == FactoryLogistics.Fuel ? 0 : 1).ThenBy(c => c.Id, StringComparer.Ordinal).ToArray();
     }
 
     /// <summary>Raw supply per item with resource rows, for the planner to see raw bottlenecks such as depleted patches.</summary>

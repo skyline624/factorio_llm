@@ -112,7 +112,7 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
             if (waited.Status != "completed") throw new InvalidOperationException($"Waiting for native targets ended with {waited.Status}.");
             built = await MapAsync(items, 32);
         }
-        await new CoalProducerStartup(game, journal).StartAsync(cell, catalog, controller, token);
+        await new ResourceCellStartup(game, journal).StartAsync(cell, catalog, controller, token);
         built = await MapAsync(items, 32);
         if (Problem(built, ids) is { } changed)
             throw new InvalidDataException($"The resource cell changed while obtaining startup fuel: {changed}");
