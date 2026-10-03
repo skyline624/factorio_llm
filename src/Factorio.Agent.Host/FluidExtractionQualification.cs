@@ -5,11 +5,15 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 /// <summary>Prepared distant oil deposit; grid extension and research use native power and extraction.</summary>
-public sealed class FluidExtractionQualification(RuntimeSession session, bool reuse = false, bool stationaryThreat = false)
+public sealed class FluidExtractionQualification(RuntimeSession session, bool reuse = false, bool stationaryThreat = false,
+    bool factoryAdoption = false)
 {
     public async Task<string> RunAsync(CancellationToken token)
     {
         if (!session.IsFixture) throw new InvalidOperationException("Fluid extraction qualification requires an explicit fixture session.");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromMinutes(15));
+        token = deadline.Token;
         using var lease = ActorControlLease.Acquire(session.Directory);
         await using var game = session.CreateClient(lease);
         string path = Path.Combine(session.Directory, $"fluid-extraction-qualification-{Guid.NewGuid():N}.json");
@@ -95,14 +99,85 @@ public sealed class FluidExtractionQualification(RuntimeSession session, bool re
                 && (!reuse || before.GetProperty("pumpjack").GetString() == result.MachineId)
                 && after.GetProperty("character").GetUInt32() == before.GetProperty("character").GetUInt32(),
                 "The native extractor or controlled character changed unexpectedly.");
+            if (factoryAdoption) await VerifyFactoryAdoptionAsync(game, journal, result.MachineId, evidence, token);
             passed = true;
             return path;
         }
         finally
         {
             await LocalJson.WriteAsync(path, new { kind = "prepared-fluid-extraction-qualification", passed,
-                isAutonomousCampaign = false, reuse, stationaryThreat, journalPath, evidence }, CancellationToken.None);
+                isAutonomousCampaign = false, reuse, stationaryThreat, factoryAdoption, journalPath, evidence }, CancellationToken.None);
         }
+    }
+
+    private async Task VerifyFactoryAdoptionAsync(IGameClient game, ControllerJournal journal, string drillId,
+        List<object> evidence, CancellationToken token)
+    {
+        var registry = new FactoryRegistry(session.Directory);
+        var before = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        var state = await registry.LoadAsync(before.Scope.WorldId, token);
+        Require(state.Cells.All(c => c.Kind != FluidCellBuilder.ExtractorKind), "The prepared pump was already registered.");
+        var builder = new FluidCellBuilder(game, journal, session.Directory);
+        var rates = await builder.ExtractorRatesAsync("crude-oil", token);
+        state = await registry.LoadAsync(before.Scope.WorldId, token);
+        var adopted = state.Cells.Single(c => c.Kind == FluidCellBuilder.ExtractorKind);
+        Require(adopted.Entities["drill"] == drillId && adopted.Plan?.ContainsKey("drill") == true
+            && adopted.Entities.Count > 1 && rates.GetValueOrDefault(adopted.Id) > 0,
+            "The native free extractor and grid plans were not adopted.");
+        // A second observation must preserve the registry and native identity, even after the actor leaves the drill.
+        var repeated = await builder.ExtractorRatesAsync("crude-oil", token);
+        Require((await registry.LoadAsync(before.Scope.WorldId, token)).Cells.Count(c => c.Kind == FluidCellBuilder.ExtractorKind) == 1
+            && repeated.GetValueOrDefault(adopted.Id) > 0, "Repeated observation duplicated the extractor cell.");
+        evidence.Add(new { check = "native-existing-extractor-adopted-once", drillId, adopted, rates, repeated });
+        const string kit = """
+            /silent-command local f=game.forces.factorio_agent;local s=game.surfaces.nauvis;local c=s.find_entities_filtered{type='character',force=f}[1];assert(c and #game.connected_players==0);f.technologies['electronics'].researched=true;f.technologies['fluid-handling'].researched=true;for name,count in pairs{['oil-refinery']=1,pipe=100,['small-electric-pole']=40} do assert(c.insert{name=name,count=count}==count) end;rcon.print(helpers.table_to_json{tick=game.tick,providedRefineries=1,providedPipes=100,providedPoles=40,providedPumpjacks=0})
+            """;
+        using var supplied = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(kit, token));
+        evidence.Add(new { check = "explicit-refinery-kit-electronics-and-fluid-handling-research", native = supplied.RootElement.Clone() });
+        var damagedLink = adopted.Entities.First(p => p.Key.StartsWith("link-", StringComparison.Ordinal));
+        string damage = "/silent-command local s=game.surfaces.nauvis;local f=game.forces.factorio_agent;local e;for _,p in pairs(s.find_entities_filtered{type='electric-pole',force=f}) do if tostring(p.unit_number)=='"
+            + damagedLink.Value + "' then e=p;break end end;assert(e);local at=e.position;e.destroy();rcon.print(helpers.table_to_json{tick=game.tick,destroyed='"
+            + damagedLink.Value + "',position=at})";
+        using var destroyed = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(damage, token));
+        await using var controller = new SpatialController(game, journal);
+        var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+        var repaired = await new FactoryMaintenance(game, journal, session.Directory).RunAsync(controller, catalog, token);
+        state = await registry.LoadAsync(before.Scope.WorldId, token);
+        var restored = state.Cells.Single(c => c.Id == adopted.Id);
+        string rebuiltLink = restored.Entities[damagedLink.Key];
+        var repairProof = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        Require(repaired.Rebuilt.Contains(rebuiltLink) && rebuiltLink != damagedLink.Value && FactoryPower.IsFed(repairProof, drillId) == true,
+            "The adopted native power link was not rebuilt at its stored plan.");
+        evidence.Add(new { check = "native-adopted-link-destroyed-and-rebuilt", native = destroyed.RootElement.Clone(), repaired,
+            restored.Id, role = damagedLink.Key, oldId = damagedLink.Value, rebuiltLink, repairProof.CollectedTick });
+        var refinery = await builder.BuildMachineAsync("oil-refinery", "basic-oil-processing", token);
+        // The resource trigger reserved fuel for a small extraction proof only. Like the production executor,
+        // reserve real carried coal for the new consumer before waiting for its output on this legacy steam supply.
+        var recipe = catalog.Recipes.Single(r => r.Name == "basic-oil-processing");
+        var machine = catalog.Assemblers!["oil-refinery"];
+        double expectedEnergy = 10 * recipe.EnergySeconds * 60 * machine.EnergyPerTick / machine.CraftingSpeed;
+        await new PoweredMachineController(game, journal).MaintainFuelAsync(refinery.Entities["machine"], expectedEnergy,
+            catalog, controller, reserve: true, token: token);
+        evidence.Add(new { check = "native-refinery-fuel-reserve", expectedEnergy, suppliedFrom = "original prepared actor coal through native transfers" });
+        var current = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        for (int attempt = 0; current.FluidStockAt(refinery.Entities["machine"], "petroleum-gas") <= 0 && attempt < 30; attempt++)
+        {
+            var waited = await controller.WorkAsync("wait", new { ticks = 60 }, 180, token: token);
+            Require(waited.Status == "completed", "The bounded native refinery observation wait did not complete.");
+            current = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        }
+        Require(current.Scope == before.Scope && current.FluidStockAt(refinery.Entities["machine"], "petroleum-gas") > 0,
+            "The refinery did not produce native petroleum from the adopted extractor.");
+        int extractors = current.Records.Count(r => r.Kind == "entity" && r.Name == "pumpjack");
+        Require(extractors == 1 && current.Records.Any(r => r.Kind == "entity" && r.EntityId == drillId && r.Name == "pumpjack"),
+            "The persistent refinery duplicated or replaced the initial extractor.");
+        // Once connected, the adoption path must not claim this producer again or change its established pipe link.
+        var connectedRates = await builder.ExtractorRatesAsync("crude-oil", token);
+        state = await registry.LoadAsync(before.Scope.WorldId, token);
+        Require(state.Cells.Count(c => c.Kind == FluidCellBuilder.ExtractorKind) == 1 && connectedRates.GetValueOrDefault(adopted.Id) > 0,
+            "Connected extractor identity or capacity was lost.");
+        evidence.Add(new { check = "native-refinery-reuses-initial-extractor", drillId, refinery, extractors,
+            petroleum = current.FluidStockAt(refinery.Entities["machine"], "petroleum-gas"), current.CollectedTick, connectedRates });
     }
 
     private static void Require(bool condition, string message)

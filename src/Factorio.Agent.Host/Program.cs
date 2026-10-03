@@ -58,7 +58,7 @@ try
           verify-smelting-collection --session FILE
           verify-assembly-batches --session FILE
           verify-campaign-journals --session FILE
-          verify-fluid-extraction --session FILE [--reuse] [--stationary-threat]
+          verify-fluid-extraction --session FILE [--reuse] [--stationary-threat] [--factory-adoption]
           verify-charted-resources --session FILE [--radar] [--danger-zone]
           verify-furnace-fleet --session FILE [--item steel-plate|stone-brick]
           verify-electric-extraction --session FILE [--item iron-ore|iron-plate]
@@ -392,7 +392,7 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new FluidExtractionQualification(session, options.ContainsKey("reuse"),
-                options.ContainsKey("stationary-threat")).RunAsync(shutdown.Token) });
+                options.ContainsKey("stationary-threat"), options.ContainsKey("factory-adoption")).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-charted-resources":

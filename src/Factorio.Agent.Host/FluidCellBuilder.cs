@@ -236,11 +236,13 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
     public async Task<IReadOnlyDictionary<string, double>> ExtractorRatesAsync(string product, CancellationToken token = default)
     {
         var catalog = await CatalogAsync(token);
-        var cells = (await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token)).Cells
+        var registry = new FactoryRegistry(directory);
+        await using var controller = new SpatialController(game, journal);
+        await AdoptExtractorsAsync(product, catalog, registry, controller, token);
+        var cells = (await registry.LoadAsync(catalog.Scope.WorldId, token)).Cells
             .Where(c => c.Kind == ExtractorKind && c.Status == "ready" && c.Recipe == product && c.Entities.ContainsKey("drill") && c.Plan?.ContainsKey("drill") == true)
             .OrderBy(c => c.Id, StringComparer.Ordinal).Take(16).ToArray();
         var rates = new Dictionary<string, double>(StringComparer.Ordinal);
-        await using var controller = new SpatialController(game, journal);
         foreach (var cell in cells)
         {
             if (rates.ContainsKey(cell.Id)) continue;
@@ -252,6 +254,30 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         }
         await journal.AppendAsync("fluid-extractor-rates", new { product, rates }, token);
         return rates;
+    }
+
+    private async Task AdoptExtractorsAsync(string product, ProductionCatalog catalog, FactoryRegistry registry,
+        SpatialController controller, CancellationToken token)
+    {
+        var snapshot = await SnapshotAsync(catalog, token);
+        var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        var candidates = FluidExtractorAdoption.Candidates(state, snapshot, product);
+        if (candidates.Count == 0) return;
+        var map = await CaptureAsync([], catalog, token);
+        foreach (var candidate in candidates.OrderBy(r => r.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!
+            .DistanceTo(map.Actor.Position)).ThenBy(r => r.EntityId, StringComparer.Ordinal).Take(FluidExtractorAdoption.MaximumCandidates))
+        {
+            await controller.TravelAsync(candidate.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!, 8, catalog, token);
+            map = await CaptureAsync([], catalog, token);
+            snapshot = await SnapshotAsync(catalog, token);
+            state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            var cell = FluidExtractorAdoption.Plan(state, snapshot, map, catalog, product, candidate.EntityId);
+            if (cell is null) continue;
+            await SaveAsync(registry, catalog, cell, token);
+            await journal.AppendAsync("fluid-extractor-adopted", new { cell.Id, product, drillId = candidate.EntityId, cell.Entities,
+                cell.Plan, map.CollectedTick, snapshotTick = snapshot.CollectedTick,
+                stock = snapshot.FluidStockAt(candidate.EntityId, product), perMinute = Rate(map, catalog, cell) }, token);
+        }
     }
 
     /// <summary>The deposit yield of an extractor observed on the map, or null when its drill or deposit is out of view.</summary>

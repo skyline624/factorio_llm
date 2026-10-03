@@ -1,5 +1,7 @@
 # Qualification du socle — 12 septembre 2026
 
+La qualification headless du 3 octobre 2026 du [réemploi du chevalet initial](fluid-production.md#réemploi-du-chevalet-initial-dans-lusine-persistante) conserve un seul chevalet, reconstruit un poteau détruit et produit 90 unités de gaz dans une raffinerie raccordée. La graine préparée 20261055 passe avec les 1 236 tests hors ligne. Le terrain, les équipements et les recherches de préparation sont déclarés ; cet essai ne constitue pas une campagne autonome.
+
 La qualification headless du 2 octobre 2026 des [liaisons persistantes entre cellules](factory-transport.md) vérifie deux consommateurs, les limites natives des coffres, l'absence de manutention de l'intermédiaire par l'avatar et la reconstruction de pièces détruites. La graine préparée 20261039 produit 73 engrenages et 15 packs rouges ; les 1 186 tests hors ligne passent, avec un cloud facultatif ignoré. Cette preuve de composant reste distincte des trois campagnes finales jusqu'à la fusée.
 
 Ce document décrit des essais de composants, des fixtures synthétiques et une première production en économie normale sur Factorio **2.0.77** de base, graine **424242**. Aucune de ces parties ne constitue une campagne autonome jusqu'à la fusée.
