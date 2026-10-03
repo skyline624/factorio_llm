@@ -17,6 +17,8 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
     {
         string pipeItem = catalog.Items.Where(p => p.Value.PlaceEntityType == "pipe").OrderBy(p => p.Key, StringComparer.Ordinal)
             .Select(p => p.Key).FirstOrDefault() ?? throw new InvalidOperationException("No native pipe item for a remote supply.");
+        string[] pumpItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "offshore-pump").OrderBy(p => p.Key, StringComparer.Ordinal)
+            .Select(p => p.Key).ToArray();
         var registry = new FactoryRegistry(directory);
         var builder = new FactoryCellBuilder(game, journal, directory);
         for (int section = 0; section < MaximumSections; section++)
@@ -26,26 +28,72 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
             var stock = await StockAsync();
             if (cell is null)
             {
-                var source = Sources(stock, fluid).OrderBy(p => p.Position.DistanceTo(destination)).ThenBy(p => p.Id, StringComparer.Ordinal).FirstOrDefault()
-                    ?? throw new InvalidOperationException($"No known native {fluid} source supplies a remote pipe section.");
-                await controller.TravelAsync(source.Position, 6, catalog, token);
-                var map = await MapAsync();
-                if ((await StockAsync()).FluidStockAt(source.Id, fluid) <= 0 && !OffshoreSupplyPlanner.CanExtract(map, source.Id, fluid))
-                    throw new InvalidOperationException("The observed relay source has neither stock nor a compatible native terrain intake.");
-                if (source.Position.DistanceTo(destination) <= FluidRelayPlanner.Step) return;
-                var site = await ControllerPlanning.RunAsync(t => new FluidRelayPlanner().Find(
-                    FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, t),
-                    controller, TimeSpan.FromMinutes(2), token)
-                    ?? throw new InvalidOperationException($"No safe local pipe section extends {fluid} toward its consumer.");
+                var sources = Sources(stock, fluid).OrderBy(p => p.Position.DistanceTo(destination))
+                    .ThenBy(p => p.Id, StringComparer.Ordinal).Take(16).ToArray();
+                FluidRelaySite? site = null;
+                SpatialSnapshot? map = null;
+                foreach (var source in sources)
+                {
+                    await controller.TravelAsync(source.Position, 6, catalog, token);
+                    map = await MapAsync();
+                    var boxes = WithdrawableBoxes(map, await StockAsync(), source.Id, fluid);
+                    if (boxes.Count == 0) continue;
+                    if (source.Position.DistanceTo(destination) <= FluidRelayPlanner.Step) return;
+                    site = await ControllerPlanning.RunAsync(t => new FluidRelayPlanner().Find(
+                        FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, t, boxes),
+                        controller, TimeSpan.FromMinutes(2), token);
+                    if (site is not null) break;
+                }
+                // A steam pump's only outlet can be occupied and the boiler's free water port reserved for expansion.
+                // A separate intake preserves that installation instead of routing through its future footprints.
+                if (site is null)
+                {
+                    var shores = stock.Records.Where(r => r.Kind == "entity" && IsFactory(r)
+                            && r.Data.GetProperty("type").GetString() == "offshore-pump")
+                        .Select(r => r.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!)
+                        .Distinct().OrderBy(p => p.DistanceTo(destination)).Take(8);
+                    foreach (var shore in shores)
+                    {
+                        await controller.TravelAsync(shore, 6, catalog, token);
+                        map = await MapAsync();
+                        foreach (string pumpItem in pumpItems)
+                        {
+                            site = await ControllerPlanning.RunAsync(t => new FluidRelayPlanner().FindOffshore(
+                                FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pumpItem, pipeItem, shore, fluid, destination, t),
+                                controller, TimeSpan.FromMinutes(2), token);
+                            if (site is not null) break;
+                        }
+                        if (site is not null) break;
+                    }
+                }
+                if (site is null || map is null)
+                    throw new InvalidOperationException($"No safe local pipe section or observed terrain intake extends {fluid} toward its consumer.");
                 var plans = new Dictionary<string, PlannedEntity>(StringComparer.Ordinal)
                     { ["outlet"] = new("outlet", pipeItem, site.Outlet.Position, site.Outlet.Direction) };
+                if (site.Pump is { } pump) plans["pump"] = new("pump", pump.Item, pump.Placement.Position, pump.Placement.Direction);
                 for (int i = 0; i < site.Route.Pipes.Count; i++) plans[$"pipe-{i}"] = new($"pipe-{i}", pipeItem, site.Route.Pipes[i], 0);
                 cell = new($"fluid-link-{Guid.NewGuid():N}", 0, new(0, 0, true), Kind, pipeItem, fluid,
                     new Dictionary<string, string>(), "building", map.CollectedTick, Plan: plans, FluidRoute: site.Route);
                 await SaveAsync();
                 await journal.AppendAsync("fluid-relay-plan", new { cell.Id, fluid, destination, site, map.CollectedTick }, token);
             }
-            else await controller.TravelAsync(cell.Plan!["outlet"].Position, 6, catalog, token);
+            else await controller.TravelAsync(cell.Plan!.GetValueOrDefault("pump", cell.Plan!["outlet"]).Position, 6, catalog, token);
+
+            if (cell.Plan!.TryGetValue("pump", out var pumpPlan))
+            {
+                var pumpMap = await MapAsync();
+                var standingPump = ObserveParts(pumpMap, cell).GetValueOrDefault("pump");
+                if (standingPump is null)
+                {
+                    await builder.EnsureCarriedAsync(registry, catalog, pumpPlan.Item, 1, token);
+                    standingPump = await new PoweredMachineController(game, journal).BuildAtAsync(pumpPlan.Item,
+                        new(pumpPlan.Position, pumpPlan.Direction, 0), catalog, controller, token,
+                        cell.Plan.Where(p => p.Key != "pump").Select(p => p.Value.Position).ToArray());
+                }
+                cell = cell with { Entities = new Dictionary<string, string>(cell.Entities) { ["pump"] = standingPump } };
+                await SaveAsync();
+                await journal.AppendAsync("fluid-relay-source-ready", new { cell.Id, entityId = standingPump, plan = pumpPlan }, token);
+            }
 
             var initial = await MapAsync();
             var route = cell.FluidRoute!;
@@ -125,7 +173,7 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
 
         async Task<SpatialSnapshot> MapAsync()
         {
-            var map = await new SpatialClient(game).CaptureAsync(new[] { pipeItem }.Concat(ground.Items).Distinct(StringComparer.Ordinal).ToArray(), 48, token);
+            var map = await new SpatialClient(game).CaptureAsync(new[] { pipeItem }.Concat(pumpItems).Concat(ground.Items).Distinct(StringComparer.Ordinal).ToArray(), 48, token);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor scope changed during fluid relay construction.");
             return map;
         }
@@ -143,11 +191,26 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
             .SelectMany(r => r.Data.GetProperty("sourceBoxes").EnumerateArray().Select(b => b.GetProperty("entityId").GetString()!))
             .Concat(stock.Records.Where(r => r.Kind == "entity" && r.Data.GetProperty("type").GetString() == "offshore-pump").Select(r => r.EntityId))
             .Distinct(StringComparer.Ordinal).Select(id => stock.Records.SingleOrDefault(r => r.Kind == "entity" && r.EntityId == id))
-            .OfType<FactoryRecord>().Where(r => r.Data.GetProperty("type").GetString() is "pipe" or "pipe-to-ground" or "offshore-pump" or "storage-tank")
+            .OfType<FactoryRecord>().Where(IsFactory)
             .Select(r => new FluidRelaySource(r.EntityId, r.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!));
 
+    private static bool IsFactory(FactoryRecord record) => record.Data.TryGetProperty("role", out var role) && role.GetString() == "factory";
+
+    internal static IReadOnlySet<int> WithdrawableBoxes(SpatialSnapshot map, FactorySnapshot stock, string sourceId, string fluid)
+    {
+        if (map.Scope != stock.Scope) throw new InvalidDataException("Relay source observations require one actor scope.");
+        if (!stock.Records.Any(r => r.Kind == "entity" && r.EntityId == sourceId && IsFactory(r))) return new HashSet<int>();
+        var source = map.Entities.SingleOrDefault(e => e.Id == sourceId);
+        if (source is null) return new HashSet<int>();
+        bool intake = OffshoreSupplyPlanner.CanExtract(map, sourceId, fluid);
+        return (source.FluidConnections ?? []).Where(p => p.Type == "normal" && p.TargetEntityId is null
+                && p.FlowDirection is "output" or "input-output" && (p.Filter is null || p.Filter == fluid))
+            .Select(p => p.BoxIndex).Distinct().Where(index => intake || stock.FluidStockAt(sourceId, fluid, index) > 0).ToHashSet();
+    }
+
     internal static Dictionary<string, string> ObserveParts(SpatialSnapshot map, FactoryCell cell) => cell.Plan!.ToDictionary(p => p.Key,
-        p => map.Entities.SingleOrDefault(e => e.Name == map.Items[p.Value.Item].EntityName && e.Position.DistanceTo(p.Value.Position) < .01)?.Id)
+        p => map.Entities.SingleOrDefault(e => e.Name == map.Items[p.Value.Item].EntityName && e.Direction == p.Value.Direction
+            && e.Position.DistanceTo(p.Value.Position) < .01)?.Id)
         .Where(p => p.Value is not null).ToDictionary(p => p.Key, p => p.Value!, StringComparer.Ordinal);
 
     internal static IReadOnlySet<string> RegisteredDownstreamParts(SpatialSnapshot map, IReadOnlySet<string> parts, FactoryState state, string fluid)

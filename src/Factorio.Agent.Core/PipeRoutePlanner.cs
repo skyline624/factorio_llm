@@ -9,7 +9,7 @@ public sealed record PipeRoutePlan(PipeRouteStatus Status, FluidEndpoint? Source
 public sealed class PipeRoutePlanner
 {
     public PipeRoutePlan Find(SpatialSnapshot map, string pipeItem, string sourceId, string targetId,
-        string fluid, int nodeBudget = 20000, CancellationToken cancellationToken = default)
+        string fluid, int nodeBudget = 20000, CancellationToken cancellationToken = default, IReadOnlySet<int>? sourceBoxIndices = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (nodeBudget < 1) throw new ArgumentOutOfRangeException(nameof(nodeBudget));
@@ -18,7 +18,7 @@ public sealed class PipeRoutePlanner
             throw new InvalidDataException("Routing requires native ordinary one-tile pipe geometry.");
         var source = map.Entities.Single(e => e.Id == sourceId);
         var target = map.Entities.Single(e => e.Id == targetId);
-        var pairs = (from output in Ports(source, true)
+        var pairs = (from output in Ports(source, true).Where(p => sourceBoxIndices is null || sourceBoxIndices.Contains(p.BoxIndex))
                      from input in Ports(target, false)
                      select (Source: Endpoint(source, output), Target: Endpoint(target, input), Output: output, Input: input))
             .OrderBy(p => Manhattan(p.Source.TargetPosition, p.Target.TargetPosition)).ToArray();

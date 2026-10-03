@@ -34,7 +34,7 @@ try
           deploy-defense --session FILE --item NAME --quantity N
           factory-cell --session FILE --kind assembler|furnace|lab --machine ITEM [--recipe NAME]
           automate --session FILE --item NAME --quantity PER_MINUTE
-          verify-oil-chemistry --session FILE [--item plastic-bar|sulfur] [--remote-water]
+          verify-oil-chemistry --session FILE [--item plastic-bar|sulfur] [--remote-water] [--steam-water]
           factory-logistics --session FILE [--quantity CRAFTS]
           verify-factory-cells|verify-factory-research|verify-resource-cells|verify-power-expansion --session FILE
           verify-factory-cells --session FILE --from-materials
@@ -125,7 +125,8 @@ try
         case "verify-oil-chemistry":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
-            Print(new { report = await new OilChemistryQualification(session, Option("item") ?? "plastic-bar", options.ContainsKey("remote-water")).RunAsync(shutdown.Token) });
+            Print(new { report = await new OilChemistryQualification(session, Option("item") ?? "plastic-bar",
+                options.ContainsKey("remote-water") || options.ContainsKey("steam-water"), options.ContainsKey("steam-water")).RunAsync(shutdown.Token) });
             break;
         }
         case "factory-logistics":

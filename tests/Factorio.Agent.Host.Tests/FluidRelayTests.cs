@@ -99,14 +99,14 @@ public sealed class FluidRelayTests
     }
 
     [Fact]
-    public void WaterLoadedInABoilerIsNotAPlacementHintForAWithdrawableRelaySource()
+    public void WaterLoadedInABoilerIsACandidatePendingItsNativePortValidation()
     {
         var map = Map();
         var stock = new FactorySnapshot("photo", map.Scope, 1, 1, Protocol.ToElement(new { }), [
             Entity("boiler", "boiler", new(120, 0)), Entity("pump", "offshore-pump", new(-20, 0)),
             Fluid("boiler"), Fluid("pump")]);
-        Assert.Equal("pump", Assert.Single(FluidRelayController.Sources(stock, "water")).Id);
-        static FactoryRecord Entity(string id, string type, MapPosition position) => new(id, "entity", id, id, Protocol.ToElement(new { type, position }));
+        Assert.Equal(["boiler", "pump"], FluidRelayController.Sources(stock, "water").Select(s => s.Id));
+        static FactoryRecord Entity(string id, string type, MapPosition position) => new(id, "entity", id, id, Protocol.ToElement(new { type, position, role = "factory" }));
         static FactoryRecord Fluid(string id) => new(id + ":fluid", "fluid", id, "fluid", Protocol.ToElement(new { contents = new { water = 90 },
             sourceBoxes = new[] { new { entityId = id, index = 1 } } }));
     }
@@ -116,8 +116,118 @@ public sealed class FluidRelayTests
     {
         var map = Map();
         var stock = new FactorySnapshot("photo", map.Scope, 1, 1, Protocol.ToElement(new { }), [
-            new("pump", "entity", "pump", "offshore-pump", Protocol.ToElement(new { type = "offshore-pump", position = new MapPosition(-20, 0) }))]);
+            new("pump", "entity", "pump", "offshore-pump", Protocol.ToElement(new { type = "offshore-pump", role = "factory", position = new MapPosition(-20, 0) }))]);
         Assert.Equal("pump", Assert.Single(FluidRelayController.Sources(stock, "water")).Id);
+    }
+
+    [Fact]
+    public void ARelayWithdrawsOnlyFromTheStockedNativeBoxWithAnUnoccupiedOutlet()
+    {
+        var map = Map();
+        var source = map.Entities.Single(e => e.Id == "source");
+        var right = source.FluidConnections!.Single(p => p.TargetPosition.X > p.Position.X);
+        var lower = source.FluidConnections!.Single(p => p.TargetPosition.Y > p.Position.Y) with { BoxIndex = 2, Filter = null };
+        map = map with { Entities = map.Entities.Select(e => e.Id == source.Id ? e with { FluidConnections = [right, lower] } : e).ToArray() };
+        var stock = SourceStock(map, "factory", 2);
+        var boxes = FluidRelayController.WithdrawableBoxes(map, stock, source.Id, "water");
+        Assert.Equal([2], boxes);
+        var site = new FluidRelayPlanner().Find(map, "pipe", source.Id, "water", new(130.5, .5), sourceBoxIndices: boxes);
+        Assert.NotNull(site);
+        Assert.Equal(2, site.Route.Source!.BoxIndex);
+        // The other box is still visible to the safety checks, even though it is not an eligible source.
+        Assert.DoesNotContain(right.TargetPosition, site.Route.Pipes);
+        map = map with { Entities = map.Entities.Select(e => e.Id == source.Id ? e with
+            { FluidConnections = [right, lower with { TargetEntityId = "occupied" }] } : e).ToArray() };
+        Assert.Empty(FluidRelayController.WithdrawableBoxes(map, stock, source.Id, "water"));
+    }
+
+    [Theory]
+    [InlineData("actor")]
+    [InlineData("foreign")]
+    public void OnlyOwnKnownFactoryEntitiesCanSupplyARelay(string role)
+    {
+        var map = Map();
+        var stock = SourceStock(map, role, 1);
+        Assert.Empty(FluidRelayController.Sources(stock, "water"));
+        Assert.Empty(FluidRelayController.WithdrawableBoxes(map, stock, "source", "water"));
+    }
+
+    [Fact]
+    public void SourceBoxValidationRejectsAChangedActorScope()
+    {
+        var map = Map();
+        var stock = SourceStock(map, "factory", 1) with { Scope = map.Scope with { Generation = map.Scope.Generation + 1 } };
+        Assert.Throws<InvalidDataException>(() => FluidRelayController.WithdrawableBoxes(map, stock, "source", "water"));
+    }
+
+    [Fact]
+    public void ADedicatedRelayIntakeAvoidsTheExistingInstallationAndReservedGround()
+    {
+        var map = ShoreMap();
+        var existing = new SpatialEntity("steam-pump", "pump", new(-20.5, .5), new(new(-20.65, .35), new(-20.35, .65)), 0, "agent",
+            FluidConnections: FluidCellPlanner.Ports(map.Prototypes["pump"], new(new(-20.5, .5), 0, 0))
+                .Select(p => p with { TargetEntityId = "boiler" }).ToArray());
+        map = map with { Entities = [.. map.Entities.Where(e => e.Id != "source"), existing] };
+        var reserved = new WorldBox(new(-23, 0), new(-14, 11));
+        var site = new FluidRelayPlanner().FindOffshore(FactoryGround.Reserve(map, [reserved], "pipe"), "pump", "pipe",
+            existing.Position, "water", new(130.5, .5));
+        Assert.NotNull(site);
+        Assert.NotNull(site.Pump);
+        Assert.NotEqual(existing.Position, site.Pump.Placement.Position);
+        Assert.DoesNotContain(site.Route.Pipes.Append(site.Outlet.Position).Append(site.Pump.Placement.Position), reserved.Contains);
+        Assert.InRange(site.Route.Pipes.Count, 1, FluidRelayPlanner.MaximumPipes);
+        var pump = site.Pump.Placement;
+        var offset = ExtractionPlanner.Rotate(map.Prototypes["pump"].FluidSourceOffset!, pump.Direction);
+        Assert.Equal("water", new SpatialCollisionField(map).FluidAt(new(pump.Position.X + offset.X, pump.Position.Y + offset.Y)));
+    }
+
+    [Fact]
+    public void ANewRelayPumpNeedsObservedWaterRatherThanOnlyFreeLand()
+    {
+        var map = ShoreMap();
+        map = map with { Rows = map.Rows.Select(r => r with { Name = "grass" }).ToArray() };
+        Assert.Null(new FluidRelayPlanner().FindOffshore(map, "pump", "pipe", new(-20.5, .5), "water", new(130.5, .5)));
+    }
+
+    [Fact]
+    public void APlannedPumpReceiptIsAdoptedOnlyAtItsOriginalOrientation()
+    {
+        var map = ShoreMap();
+        var at = new MapPosition(-20.5, .5);
+        var pump = new SpatialEntity("applied", "pump", at, map.Prototypes["pump"].CollisionBox.Translate(at), 0, "agent");
+        var cell = new FactoryCell("link", 0, new(0, 0, true), FluidRelayController.Kind, "pipe", "water",
+            new Dictionary<string, string>(), "building", 1, Plan: new Dictionary<string, PlannedEntity> { ["pump"] = new("pump", "pump", at, 0) });
+        map = map with { Entities = [.. map.Entities, pump] };
+        Assert.Equal("applied", FluidRelayController.ObserveParts(map, cell)["pump"]);
+        map = map with { Entities = map.Entities.Select(e => e.Id == pump.Id ? e with { Direction = 4 } : e).ToArray() };
+        Assert.Empty(FluidRelayController.ObserveParts(map, cell));
+    }
+
+    private static FactorySnapshot SourceStock(SpatialSnapshot map, string role, int box) => new("photo", map.Scope, 1, 1,
+        Protocol.ToElement(new { }), [
+            new("source", "entity", "source", "pipe", Protocol.ToElement(new { role, type = "pipe", position = new MapPosition(-20.5, .5) })),
+            new("source:fluid", "fluid", "source", "fluid", Protocol.ToElement(new { aggregateSafe = true, contents = new { water = 90 },
+                sourceBoxes = new[] { new { entityId = "source", index = box } } }))]);
+
+    private static SpatialSnapshot ShoreMap()
+    {
+        var map = Map();
+        var native = SteamPowerPlannerTests.Map(true);
+        return map with
+        {
+            Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            {
+                ["pump"] = native.Prototypes["pump"] with { Type = "offshore-pump" },
+                ["pipe"] = map.Prototypes["pipe"] with { Mask = native.Prototypes["boiler"].Mask },
+                ["character"] = map.Prototypes["character"] with { Mask = native.Prototypes["boiler"].Mask }
+            },
+            Items = new Dictionary<string, PlaceableItem>(map.Items) { ["pump"] = new("pump", 50) },
+            Entities = [.. map.Entities, new(map.Actor.Id, "character", map.Actor.Position,
+                map.Prototypes["character"].CollisionBox.Translate(map.Actor.Position), 0, "agent")],
+            TilePrototypes = native.TilePrototypes,
+            TileFluids = native.TileFluids,
+            Rows = Enumerable.Range(-48, 96).SelectMany(y => new TileRun[] { new(-48, y, 27, "water"), new(-21, y, 69, "grass") }).ToArray()
+        };
     }
 
     [Fact]
