@@ -75,6 +75,28 @@ public sealed class ExplorationPlannerTests
     }
 
     [Fact]
+    public void MoreThanSixteenUnapproachableFrontiersDoNotHideADryWayOutOfACorner()
+    {
+        // Synthetic coverage and a narrow passage reproduce the normal refusal:
+        // many nearer northern frontiers cannot be approached, while dry ground leads south.
+        var surveyed = (from x in Enumerable.Range(-56, 188)
+                        from y in Enumerable.Range(-99, 132)
+                        select new SurveyedCell(x, y)).ToArray();
+        var planner = new ExplorationPlanner();
+        MapPosition actor = new(220, -344);
+        for (int step = 0; step < 32 && actor.X is >= -180 and <= 476 && actor.Y <= 80; step++)
+        {
+            SpatialSnapshot map = Map(actor);
+            map = map with { Rows = map.Rows.SelectMany(r => Enumerable.Range(r.X, r.Length)
+                .Select(x => new TileRun(x, r.Y, 1,
+                    r.Y < -352 || r.Y < -300 && (x < 217 || x >= 224) ? "water" : "grass"))).ToArray() };
+            actor = planner.Choose(map, "", Catalog(), surveyed: surveyed, deaths: []);
+            Assert.True(new SpatialCollisionField(map).Walkable(actor));
+        }
+        Assert.True(actor.X < -180 || actor.X > 476 || actor.Y > 80, $"Exploration never left the covered corner: {actor}.");
+    }
+
+    [Fact]
     public void FrontierInsideARecentDeathZoneIsNotChosen()
     {
         // Without the zone the first step heads north (see the first test above).

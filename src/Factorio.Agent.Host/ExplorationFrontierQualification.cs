@@ -5,7 +5,7 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 /// <summary>Explicit synthetic shoreline and historical coverage; native walking must leave the old survey without gifts.</summary>
-public sealed class ExplorationFrontierQualification(RuntimeSession session)
+public sealed class ExplorationFrontierQualification(RuntimeSession session, bool corner = false)
 {
     public async Task<string> RunAsync(CancellationToken token)
     {
@@ -24,7 +24,9 @@ public sealed class ExplorationFrontierQualification(RuntimeSession session)
                 reason = "Synthetic shoreline, cleared ground, actor reset and remembered survey. Native blind walking; not a campaign."
             }), deadline.Token);
             Require(marked.Ok, "Fixture marking failed.");
-            const string setup = """
+            string setup = corner ? """
+                /silent-command local s=game.surfaces.nauvis; local c=s.find_entities_filtered{type="character",force="factorio_agent"}[1]; assert(c); s.request_to_generate_chunks({128,-128},18); s.force_generate_chunk_requests(); for _,e in ipairs(s.find_entities_filtered{area={{-304,-448},{640,176}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-304,640 do for y=-448,176 do tiles[#tiles+1]={name=(y< -352 or (y< -300 and (x<217 or x>=224))) and "water" or "grass-1",position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({220,-344})); rcon.print("synthetic-frontier-shoreline");
+                """ : """
                 /silent-command local s=game.surfaces.nauvis; local c=s.find_entities_filtered{type="character",force="factorio_agent"}[1]; assert(c); s.request_to_generate_chunks({0,-128},10); s.force_generate_chunk_requests(); for _,e in ipairs(s.find_entities_filtered{area={{-304,-448},{320,176}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-304,320 do for y=-448,176 do tiles[#tiles+1]={name=y< -352 and "water" or "grass-1",position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({64,-348})); rcon.print("synthetic-frontier-shoreline");
                 """;
             Require((await session.CreateRcon().ExecuteAsync(setup, deadline.Token)).Trim() == "synthetic-frontier-shoreline",
@@ -33,7 +35,7 @@ public sealed class ExplorationFrontierQualification(RuntimeSession session)
             Require(before.Ok, "Initial observation failed.");
             var initialScope = before.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
             var initialInventory = Inventory(before);
-            var surveyed = (from x in Enumerable.Range(-56, 122)
+            var surveyed = (from x in Enumerable.Range(-56, corner ? 188 : 122)
                             from y in Enumerable.Range(-99, 132)
                             select new SurveyedCell(x, y)).ToArray();
             var game = new SurveyedFixtureClient(native, surveyed);
@@ -45,7 +47,7 @@ public sealed class ExplorationFrontierQualification(RuntimeSession session)
             Require(initial.Rows.Any(r => r.Name == "water") && initial.Rows.Any(r => r.Name == "grass-1"),
                 "The initial normal view must show both sides of the native shoreline.");
             bool leftSurvey = false;
-            for (int step = 0; step < 24; step++)
+            for (int step = 0; step < (corner ? 32 : 24); step++)
             {
                 var target = await controller.FindExplorationWaypointAsync(planner, catalog, "", token: deadline.Token);
                 var frontier = planner.Frontier;
@@ -54,7 +56,7 @@ public sealed class ExplorationFrontierQualification(RuntimeSession session)
                 Require(after.Scope == initialScope && after.Actor.Position.DistanceTo(target.Position) <= .4
                     && navigation.Receipts.Count > 0 && navigation.Receipts.All(r => r.Status == "completed"),
                     "A blind step did not complete natively with the original actor.");
-                leftSurvey = after.Actor.Position.X < -180 || after.Actor.Position.X > 212 || after.Actor.Position.Y > 80;
+                leftSurvey = after.Actor.Position.X < -180 || after.Actor.Position.X > (corner ? 476 : 212) || after.Actor.Position.Y > 80;
                 evidence.Add(new { check = "native-blind-step", step, target, frontier, position = after.Actor.Position,
                     after.CollectedTick, moves = navigation.Receipts.Count, leftSurvey });
                 if (leftSurvey) break;
@@ -70,7 +72,7 @@ public sealed class ExplorationFrontierQualification(RuntimeSession session)
                 && Connected(final) == Connected(before),
                 "Blind exploration stayed in the old survey, changed inventory, harmed the actor or changed its pilot.");
             evidence.Add(new { check = "native-left-historical-survey", beforeTick = before.Tick, final.Tick,
-                initialScope, surveyedCells = surveyed.Length, inventoryPreserved = true,
+                initialScope, corner, surveyedCells = surveyed.Length, inventoryPreserved = true,
                 health = final.Data.GetProperty("agent").GetProperty("health").GetDouble(), connectedPlayers = Connected(final),
                 setup = "Cleared terrain, created a shoreline, teleported once at setup and injected explicit synthetic historical coverage. No resources or research supplied." });
             await SaveAsync(true, null, token);

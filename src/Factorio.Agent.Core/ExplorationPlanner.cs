@@ -66,6 +66,34 @@ public sealed class ExplorationPlanner
                 && (!map.Bounds.Contains(frontierGoal) || field.Walkable(frontierGoal))) known = frontierGoal;
             else frontierGoal = null;
         }
+        bool towardFrontier = known == frontierGoal;
+        var candidates = new List<(MapPosition Point, (int, int) Cell, int Gain)>();
+        var unreachable = new HashSet<(int, int)>();
+        int hazardous = 0;
+        for (int x = (int)Math.Ceiling(map.Bounds.Min.X / 4) + 1; x < map.Bounds.Max.X / 4 - 1; x++)
+            for (int y = (int)Math.Ceiling(map.Bounds.Min.Y / 4) + 1; y < map.Bounds.Max.Y / 4 - 1; y++)
+            {
+                var point = new MapPosition(x * 4, y * 4);
+                double distance = point.DistanceTo(map.Actor.Position);
+                if (distance is < 16 or > 28 || !field.Walkable(point)) continue;
+                if (exploring && (deaths!.Any(d => Enters(map, point, d.Position, DangerZones.Radius))
+                    || towardFrontier && threats.Values.Any(t => Enters(map, point, t.Position, t.Range + ThreatMargin))))
+                {
+                    hazardous++;
+                    continue;
+                }
+                int gain = 0;
+                for (int dx = -7; dx <= 7; dx++)
+                    for (int dy = -7; dy <= 7; dy++) if (!observed.Contains((x + dx, y + dy))) gain++;
+                candidates.Add((point, (x, y), gain));
+            }
+        if (candidates.Count == 0 && hazardous > 0)
+            throw new ExplorationDangerException($"All {hazardous} local exploration steps enter a recent death zone or "
+                + $"{ThreatMargin} tiles beyond a known stationary threat's range.");
+
+        bool Progresses((MapPosition Point, (int, int) Cell, int Gain) candidate, MapPosition target) => candidate.Gain > 0
+            || candidate.Point.DistanceTo(target) < map.Actor.Position.DistanceTo(target) - 1;
+
         for (int selection = 0; selection < MaximumFrontierSelections; selection++)
         {
             if (known is null)
@@ -82,51 +110,45 @@ public sealed class ExplorationPlanner
                 // Prefer nearby frontiers while retaining a modest home-distance cost. Pure nearest
                 // selection drifts along one axis when tile rounding makes that border slightly nearer.
                 // Frontiers just outside a hazard cost extra walking, so farther safe ones can win.
-                var selected = safe.OrderBy(p => Center(p).DistanceTo(map.Actor.Position) + 0.25 * Center(p).DistanceTo(origin)
+                // Many consecutive shoreline cells can fail the same geometric approach.
+                // They must not consume the bounded route attempts before a farther dry exit is considered.
+                var ranked = safe.OrderBy(p => Center(p).DistanceTo(map.Actor.Position) + 0.25 * Center(p).DistanceTo(origin)
                         + Math.Max(0, PreferredClearance - Clearance(Center(p))))
-                    .ThenBy(p => Center(p).DistanceTo(origin)).ThenBy(p => p.Y).ThenBy(p => p.X).First();
-                known = Center(selected);
+                    .ThenBy(p => Center(p).DistanceTo(origin)).ThenBy(p => p.Y).ThenBy(p => p.X).ToArray();
+                (int X, int Y)? selected = null;
+                foreach (var cell in ranked)
+                {
+                    if (candidates.Any(c => !unreachable.Contains(c.Cell) && Progresses(c, Center(cell))))
+                    {
+                        selected = cell;
+                        break;
+                    }
+                    // Keep this local refusal for the current search, as with a failed route,
+                    // so adjacent shoreline cells do not repeatedly reverse the next walk.
+                    frontierAttempts[cell] = 4;
+                }
+                if (selected is null)
+                    throw new ExplorationBlockedException("No locally progressing step toward a safe frontier in the current collision map.");
+                known = Center(selected.Value);
                 frontierGoal = known;
                 frontierDistance = known.DistanceTo(map.Actor.Position);
                 stalledFrontierSteps = 0;
-                frontierAttempts[selected] = frontierAttempts.GetValueOrDefault(selected) + 1;
+                frontierAttempts[selected.Value] = frontierAttempts.GetValueOrDefault(selected.Value) + 1;
             }
-            bool towardFrontier = known == frontierGoal;
-            var candidates = new List<(MapPosition Point, double Score, (int, int) Cell, int Gain)>();
-            int hazardous = 0;
-            for (int x = (int)Math.Ceiling(map.Bounds.Min.X / 4) + 1; x < map.Bounds.Max.X / 4 - 1; x++)
-                for (int y = (int)Math.Ceiling(map.Bounds.Min.Y / 4) + 1; y < map.Bounds.Max.Y / 4 - 1; y++)
-                {
-                    var point = new MapPosition(x * 4, y * 4);
-                    double distance = point.DistanceTo(map.Actor.Position);
-                    if (distance is < 16 or > 28 || !field.Walkable(point)) continue;
-                    if (exploring && (deaths!.Any(d => Enters(map, point, d.Position, DangerZones.Radius))
-                        || towardFrontier && threats.Values.Any(t => Enters(map, point, t.Position, t.Range + ThreatMargin))))
-                    {
-                        hazardous++;
-                        continue;
-                    }
-                    int gain = 0;
-                    for (int dx = -7; dx <= 7; dx++)
-                        for (int dy = -7; dy <= 7; dy++) if (!observed.Contains((x + dx, y + dy))) gain++;
-                    double score = known is null ? gain - distance * 0.1 : -point.DistanceTo(known) * 5 + gain * 0.1;
-                    candidates.Add((point, score - visits.GetValueOrDefault((x, y)) * 100, (x, y), gain));
-                }
-            if (candidates.Count == 0 && hazardous > 0)
-                throw new ExplorationDangerException($"All {hazardous} local exploration steps enter a recent death zone or "
-                    + $"{ThreatMargin} tiles beyond a known stationary threat's range.");
             bool searchBudgetExceeded = false;
-            foreach (var candidate in candidates.OrderByDescending(c => c.Score).ThenBy(c => c.Point.Y).ThenBy(c => c.Point.X))
+            foreach (var candidate in candidates.Where(c => !unreachable.Contains(c.Cell))
+                .OrderByDescending(c => -c.Point.DistanceTo(known) * 5 + c.Gain * 0.1 - visits.GetValueOrDefault(c.Cell) * 100)
+                .ThenBy(c => c.Point.Y).ThenBy(c => c.Point.X))
             {
                 // A blind frontier beyond a shoreline must not keep the actor pacing its bank.
                 // An ordinary step either approaches that frontier or observes some new terrain.
                 // A caller's destination retains its existing detours and is never replaced here.
-                if (towardFrontier && candidate.Gain == 0
-                    && candidate.Point.DistanceTo(known!) >= map.Actor.Position.DistanceTo(known!) - 1) continue;
+                if (towardFrontier && !Progresses(candidate, known)) continue;
                 RoutePlan route = new RoutePlanner().Find(field, candidate.Point);
                 if (route.Status != RouteStatus.Found)
                 {
                     searchBudgetExceeded |= route.Status == RouteStatus.BudgetExceeded;
+                    if (route.Status != RouteStatus.BudgetExceeded) unreachable.Add(candidate.Cell);
                     continue;
                 }
                 visits[candidate.Cell] = visits.GetValueOrDefault(candidate.Cell) + 1;
