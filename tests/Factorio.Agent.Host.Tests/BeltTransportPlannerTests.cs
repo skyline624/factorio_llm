@@ -6,6 +6,30 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class BeltTransportPlannerTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ElectricExtensionsLeaveBothFutureBeltPortsAvailable(bool reverseEndpoints)
+    {
+        var map = Map(true);
+        var pole = map.Prototypes["pole"];
+        var wall = map.Prototypes["wall"];
+        var blockers = new[] { new MapPosition(.5, -.5), new(-.5, .5), new(1.5, .5), new(-.5, 1.5), new(1.5, 1.5) }
+            .Select((p, index) => new SpatialEntity($"wall-{index}", "wall", p, wall.CollisionBox.Translate(p), 0, "own"));
+        // The chest's only free arm stands south. Its old pole does not cover that arm, and the nearest new
+        // pole position is exactly the arm's future belt port. Another powered placement and belt route exist.
+        map = map with { Entities = [.. map.Entities.Where(e => e.Id != "pole1"),
+            new("pole1", "pole", new(.5, 5.5), pole.CollisionBox.Translate(new(.5, 5.5)), 0, "own", Power: new(0, 1)), .. blockers] };
+        var plan = new BeltTransportPlanner().Find(map, new("belt", "arm", "pole"),
+            reverseEndpoints ? "target" : "source", reverseEndpoints ? "source" : "target");
+        Assert.NotNull(plan);
+        Assert.NotEmpty(plan.Poles);
+        Assert.Equal(new(.5, 1.5), reverseEndpoints ? plan.TargetInserter.Position : plan.SourceInserter.Position);
+        var belt = map.Prototypes["belt"];
+        Assert.All(plan.Poles, p => Assert.DoesNotContain(plan.Belts,
+            b => pole.CollisionBox.Translate(p.Position).Overlaps(belt.CollisionBox.Rotate(b.Direction).Translate(b.Position))));
+    }
+
+    [Theory]
     [InlineData(true, true)]
     [InlineData(false, false)]
     public void CompleteLayoutUsesNativePickupDropAndAvailableElectricSupply(bool power, bool expected)

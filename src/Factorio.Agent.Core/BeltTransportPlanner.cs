@@ -13,6 +13,7 @@ public sealed class BeltTransportPlanner
         var target = map.Entities.Single(e => e.Id == targetId);
         var arm = map.Prototypes[map.Items[equipment.Inserter].EntityName];
         var pole = map.Prototypes[map.Items[equipment.Pole].EntityName];
+        var belt = map.Prototypes[map.Items[equipment.Belt].EntityName];
         if (sourceId == targetId || source.Force != target.Force || arm.Type != "inserter" || !arm.IsElectric
             || arm.InserterPickup is null || arm.InserterDrop is null || pole.Type != "electric-pole"
             || pole.SupplyArea is not > 0 || pole.MaxWireDistance is not > 0)
@@ -32,17 +33,22 @@ public sealed class BeltTransportPlanner
             var projected = clearMap with { Entities = [.. clearMap.Entities, ProjectArm("planned:source-arm", pair.Output)] };
             if (!new SpatialCollisionField(projected).PlacementClear(arm, pair.Input.Position, pair.Input.Direction)) continue;
             projected = projected with { Entities = [.. projected.Entities, ProjectArm("planned:target-arm", pair.Input)] };
+            // Power must leave the native drop/pickup belt tiles free; otherwise its nearest pole blocks our own route.
+            WorldBox[] beltPorts = [belt.CollisionBox.Translate(BeltRoutePlanner.Cell(At(pair.Output, arm.InserterDrop))),
+                belt.CollisionBox.Translate(BeltRoutePlanner.Cell(At(pair.Input, arm.InserterPickup)))];
             var poles = new List<PlacementCandidate>();
             bool powered = true;
             foreach (var candidate in new[] { pair.Output, pair.Input })
             {
                 var box = arm.CollisionBox.Rotate(candidate.Direction).Translate(candidate.Position);
                 if (projected.Entities.Any(e => Covers(e, box))) continue;
-                var extension = placements.FindCandidates(new(projected), equipment.Pole, candidate.Position, requireBuildReach: false)
-                    .FirstOrDefault(p => Coverage(p.Position, pole.SupplyArea.Value).Overlaps(box)
+                var extension = placements.FindCandidates(new(projected), equipment.Pole, candidate.Position, requireBuildReach: false,
+                    eligible: p => Coverage(p.Position, pole.SupplyArea.Value).Overlaps(box)
+                        && beltPorts.All(port => !port.Overlaps(pole.CollisionBox.Rotate(p.Direction).Translate(p.Position)))
                         && projected.Entities.Any(e => e.Force == source.Force && e.Power?.NetworkId is not null
                             && map.Prototypes[e.Name].MaxWireDistance is > 0
-                            && e.Position.DistanceTo(p.Position) <= Math.Min(pole.MaxWireDistance.Value, map.Prototypes[e.Name].MaxWireDistance!.Value)));
+                            && e.Position.DistanceTo(p.Position) <= Math.Min(pole.MaxWireDistance.Value, map.Prototypes[e.Name].MaxWireDistance!.Value)),
+                    cancellationToken: cancellationToken).FirstOrDefault();
                 if (extension is null) { powered = false; break; }
                 var connection = projected.Entities.First(e => e.Force == source.Force && e.Power?.NetworkId is not null
                     && map.Prototypes[e.Name].MaxWireDistance is > 0
