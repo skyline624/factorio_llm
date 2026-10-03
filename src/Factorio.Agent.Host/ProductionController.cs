@@ -160,7 +160,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     return;
                 }
                 await new SurvivalKitController(game, journal).BeforeTripAsync("production-travel", deadline.Token);
-                ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, "", position, deadline.Token);
+                ExplorationWaypoint next = await controller.FindExplorationWaypointAsync(exploration, catalog, "", position, deadline.Token,
+                    avoidDestinationDeathZones: true);
                 await journal.AppendAsync("travel-segment", new { position, waypoint = next.Position, next.CollectedTick }, deadline.Token);
                 await controller.NavigateAsync(next.Position, cancellationToken: deadline.Token);
             }
