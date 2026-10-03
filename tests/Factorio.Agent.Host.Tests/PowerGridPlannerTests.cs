@@ -100,6 +100,54 @@ public sealed class PowerGridPlannerTests
         Assert.True(map.Bounds.Contains(result.Pole!.Position));
     }
 
+    [Fact]
+    public void APoleInsideAReservedBandIsJoinedByWireWithoutOccupyingTheBand()
+    {
+        var map = ReservedBand();
+        var owned = new HashSet<string> { "source" };
+        var target = map.Entities.Single(e => e.Id == "target");
+        Assert.Equal(PowerGridSearchStatus.NoObservedPath,
+            new PowerGridPlanner().Next(map, "pole-item", target.Bounds, owned).Status);
+
+        var result = new PowerGridPlanner().NextToPole(map, "pole-item", target.Name, target.Position, owned);
+        Assert.Equal(PowerGridSearchStatus.Extension, result.Status);
+        Assert.True(new SpatialCollisionField(map).PlacementClear(map.Prototypes["pole"], result.Pole!.Position, 0));
+        Assert.False(map.Entities.Single(e => e.Id == "band").Bounds.Overlaps(
+            map.Prototypes["pole"].CollisionBox.Translate(result.Pole.Position)));
+        Assert.InRange(result.Pole.Position.DistanceTo(map.Entities.Single(e => e.Id == "source").Position), .1, 7.5);
+    }
+
+    [Fact]
+    public void TargetPolesOwnShorterWireRangeStillConstrainsTheConnection()
+    {
+        var map = ReservedBand();
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            { ["short"] = map.Prototypes["pole"] with { Name = "short", MaxWireDistance = 2 } } };
+        var result = new PowerGridPlanner().NextToPole(map, "pole-item", "short", new(20.5, .5), new HashSet<string> { "source" });
+        Assert.Equal(PowerGridSearchStatus.NoObservedPath, result.Status);
+        Assert.Null(result.Pole);
+    }
+
+    [Theory]
+    [InlineData("character")]
+    [InlineData("unknown")]
+    public void OnlyNativePolesCanUseTheWireTarget(string prototype)
+    {
+        Assert.Throws<InvalidDataException>(() => new PowerGridPlanner().NextToPole(Map(), "pole-item", prototype,
+            new(20.5, .5), new HashSet<string> { "source" }));
+    }
+
+    private static SpatialSnapshot ReservedBand()
+    {
+        var map = Map();
+        var geometry = map.Prototypes["pole"];
+        return map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            { ["reservation"] = geometry with { Name = "reservation", Type = "reservation" } },
+            Entities = [.. map.Entities,
+                new("target", "pole", new(20.5, .5), geometry.CollisionBox.Translate(new(20.5, .5)), 0, "agent", Power: new(0, 8)),
+                new("band", "reservation", new(19, 1.5), new(new(15, -5), new(23, 8)), 0, "planned")] };
+    }
+
     internal static SpatialSnapshot Map()
     {
         CollisionMask solid = new(["object"], false, false, false), empty = new([], false, false, false);

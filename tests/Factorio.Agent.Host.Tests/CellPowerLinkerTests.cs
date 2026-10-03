@@ -101,7 +101,8 @@ public sealed class CellPowerLinkerTests
     private static SpatialEntity Pole(string id, MapPosition at, long network) =>
         new(id, PoleItem, at, new WorldBox(new(-.15, -.15), new(.15, .15)).Translate(at), 0, "agent", Power: new(0, network));
 
-    private static FactoryRecord Entity(string id, string type, MapPosition position, long? network) => new(id, "entity", id, type,
+    private static FactoryRecord Entity(string id, string type, MapPosition position, long? network) => new(id, "entity", id,
+        type == "electric-pole" ? PoleItem : type,
         network is null ? Protocol.ToElement(new { role = "factory", type, position })
             : Protocol.ToElement(new { role = "factory", type, position, electricNetworkId = network }));
 }

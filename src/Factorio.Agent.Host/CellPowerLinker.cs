@@ -70,11 +70,11 @@ internal sealed class CellPowerLinker(IGameClient game, IControllerJournal journ
     {
         var sources = map.Entities.Where(e => e.Id != poleId && FactoryPower.IsFed(known, e.Id) == true).Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
         if (!map.Entities.Any(e => sources.Contains(e.Id) && map.Prototypes[e.Name].Type == "electric-pole")) return null;
-        var target = map.Prototypes[map.Items[poleItem].EntityName].CollisionBox.Translate(polePosition);
+        var target = known.Records.Single(r => r.Kind == "entity" && r.EntityId == poleId);
         var next = new PowerGridLink(PowerGridSearchStatus.NoObservedPath);
         foreach (var reserve in reservations)
         {
-            next = new PowerGridPlanner().Next(reserve(map), poleItem, target, sources, token);
+            next = new PowerGridPlanner().NextToPole(reserve(map), poleItem, target.Name, polePosition, sources, token);
             if (next.Status != PowerGridSearchStatus.NoObservedPath) break;
         }
         return next;

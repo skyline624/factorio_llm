@@ -17,7 +17,23 @@ public sealed class PowerGridPlanner
     private sealed record Node(MapPosition Position, int Cost, string SourceId, MapPosition? First, double WireRange);
 
     public PowerGridLink Next(SpatialSnapshot map, string poleItem, WorldBox target, IReadOnlySet<string> owned,
-        CancellationToken token = default)
+        CancellationToken token = default) => Search(map, poleItem, target, owned, token);
+
+    /// <summary>Joins a native pole by wire, including a pole inside a reserved factory band. Its supply area is irrelevant.</summary>
+    public PowerGridLink NextToPole(SpatialSnapshot map, string poleItem, string targetPrototype, MapPosition targetPosition,
+        IReadOnlySet<string> owned, CancellationToken token = default)
+    {
+        if (!map.Prototypes.TryGetValue(targetPrototype, out var target)
+            || target.Type != "electric-pole" || target.MaxWireDistance is not > 0 or > 64
+            || !double.IsFinite(target.MaxWireDistance.Value)
+            || !double.IsFinite(targetPosition.X) || !double.IsFinite(targetPosition.Y))
+            throw new InvalidDataException("Missing bounded native target pole wire geometry.");
+        return Search(map, poleItem, target.CollisionBox.Translate(targetPosition), owned, token,
+            targetPosition, target.MaxWireDistance.Value);
+    }
+
+    private static PowerGridLink Search(SpatialSnapshot map, string poleItem, WorldBox target, IReadOnlySet<string> owned,
+        CancellationToken token, MapPosition? targetPolePosition = null, double targetWireRange = 0)
     {
         var pole = map.Prototypes[map.Items[poleItem].EntityName];
         if (pole.Type != "electric-pole" || pole.MaxWireDistance is not > 0 or > 64 || pole.SupplyArea is not > 0
@@ -26,10 +42,14 @@ public sealed class PowerGridPlanner
         double wire = pole.MaxWireDistance.Value;
         var sources = map.Entities.Where(e => owned.Contains(e.Id) && map.Prototypes[e.Name].Type == "electric-pole"
             && e.Power?.NetworkId is not null && map.Prototypes[e.Name].MaxWireDistance is > 0).ToArray();
+        bool Connects(MapPosition position, EntityGeometry geometry) => targetPolePosition is null
+            ? Supplies(position, geometry, target)
+            : position.DistanceTo(targetPolePosition) <= Math.Min(geometry.MaxWireDistance!.Value, targetWireRange);
         foreach (var source in sources)
-            if (Supplies(source.Position, map.Prototypes[source.Name], target)) return new(PowerGridSearchStatus.Connected, source.Id);
+            if (Connects(source.Position, map.Prototypes[source.Name])) return new(PowerGridSearchStatus.Connected, source.Id);
         if (sources.Length == 0) return new(PowerGridSearchStatus.NoObservedPath);
-        var center = new MapPosition((target.Min.X + target.Max.X) / 2, (target.Min.Y + target.Max.Y) / 2);
+        var center = targetPolePosition ?? new MapPosition((target.Min.X + target.Max.X) / 2, (target.Min.Y + target.Max.Y) / 2);
+        double goalRange = targetPolePosition is null ? pole.SupplyArea.Value : Math.Min(wire, targetWireRange);
         double initialDistance = sources.Min(s => s.Position.DistanceTo(center));
         bool localTarget = map.Bounds.Contains(target);
         var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
@@ -48,7 +68,7 @@ public sealed class PowerGridPlanner
             token.ThrowIfCancellationRequested();
             if (costs[node.Position] != node.Cost) continue;
             if (++expanded > 8192) return new(PowerGridSearchStatus.SearchBudgetExhausted);
-            if (node.First is not null && (Supplies(node.Position, pole, target)
+            if (node.First is not null && (Connects(node.Position, pole)
                 || !localTarget && node.Position.DistanceTo(center) <= initialDistance - Math.Min(16, initialDistance / 2)))
                 return new(PowerGridSearchStatus.Extension, node.SourceId, new(node.First, 0, node.Cost));
             double range = node.WireRange, alignX = pole.TileWidth % 2 * .5, alignY = pole.TileHeight % 2 * .5;
@@ -68,7 +88,7 @@ public sealed class PowerGridPlanner
                     if (!allowed) continue;
                     costs[point] = node.Cost + 1;
                     queue.Enqueue(new(point, node.Cost + 1, node.SourceId, node.First ?? point, wire),
-                        node.Cost + 1 + Math.Max(0, point.DistanceTo(center) - pole.SupplyArea.Value) / wire);
+                        node.Cost + 1 + Math.Max(0, point.DistanceTo(center) - goalRange) / wire);
                 }
         }
         return new(PowerGridSearchStatus.NoObservedPath);

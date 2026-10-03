@@ -247,9 +247,9 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             var sources = map.Entities.Where(e => e.Force == pole.Force && e.Id != poleId
                 && (fed is null || FactoryPower.IsFed(snapshot, e.Id) == true)).Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
             var reserved = context.Zone is null ? map : ReserveZone(map, context.Zone, context.Equipment.Pole);
-            var next = new PowerGridPlanner().Next(context.Protect(reserved), context.Equipment.Pole, pole.Bounds, sources, token);
+            var next = new PowerGridPlanner().NextToPole(context.Protect(reserved), context.Equipment.Pole, pole.Name, pole.Position, sources, token);
             if (next.Status is PowerGridSearchStatus.NoObservedPath)
-                next = new PowerGridPlanner().Next(reserved, context.Equipment.Pole, pole.Bounds, sources, token);
+                next = new PowerGridPlanner().NextToPole(reserved, context.Equipment.Pole, pole.Name, pole.Position, sources, token);
             await journal.AppendAsync("factory-power-link", new { poleId, fed, next, map.CollectedTick }, token);
             if (next.Status == PowerGridSearchStatus.Connected && fed is null) return;
             if (next.Status != PowerGridSearchStatus.Extension || next.Pole is null)
