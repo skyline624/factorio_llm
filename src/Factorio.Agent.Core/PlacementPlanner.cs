@@ -106,7 +106,7 @@ public sealed class PlacementPlanner
         return false;
     }
 
-    private static bool CanStop(SpatialCollisionField field, MapPosition position)
+    public static bool CanStop(SpatialCollisionField field, MapPosition position)
     {
         if (!field.Walkable(position)) return false;
         var body = field.Character.CollisionBox.Translate(position);

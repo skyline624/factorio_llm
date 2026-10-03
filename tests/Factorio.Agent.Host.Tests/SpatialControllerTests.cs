@@ -65,6 +65,91 @@ public sealed class SpatialControllerTests
     }
 
     [Fact]
+    public void ACornerOnAMovingBeltContinuesToStableGroundWithinOneMove()
+    {
+        var map = BeltCornerMap();
+        var field = new SpatialCollisionField(map);
+        var points = SpatialController.Subdivide(map.Actor.Position, [new(3.5, .5), new(3.5, 3.5)]);
+        var route = new RoutePlan(RouteStatus.Found, points, 0, 6.5);
+        Assert.Equal(new MapPosition(3.5, .5), SpatialController.SelectWaypoint(field, route));
+        var path = SpatialController.SelectMovePath(field, route);
+        Assert.Equal(new MapPosition[] { new(3.5, .5), new(3.5, 3.5) }, path);
+        Assert.False(PlacementPlanner.CanStop(field, path[0]));
+        Assert.True(PlacementPlanner.CanStop(field, path[^1]));
+        MapPosition from = map.Actor.Position;
+        foreach (var point in path) { Assert.True(field.SteeringRegionClear(from, point)); from = point; }
+    }
+
+    [Fact]
+    public void ContinuousCornersRetainTheTotalDistanceBound()
+    {
+        var map = BeltCornerMap();
+        var points = SpatialController.Subdivide(map.Actor.Position, [new(3.5, .5), new(3.5, 7.5)]);
+        var path = SpatialController.SelectMovePath(new(map), new(RouteStatus.Found, points, 0, 10.5), 4);
+        double length = map.Actor.Position.DistanceTo(path[0]) + path.Zip(path.Skip(1), (a, b) => a.DistanceTo(b)).Sum();
+        Assert.InRange(length, 0, 4.000000001);
+        Assert.DoesNotContain(new MapPosition(3.5, 7.5), path);
+    }
+
+    [Fact]
+    public void StableGroundRetainsTheExistingSingleMoveBehavior()
+    {
+        var field = new SpatialCollisionField(SpatialPlannerTests.Map([]));
+        var points = SpatialController.Subdivide(field.Map.Actor.Position, [new(7, 3)]);
+        Assert.Equal(new MapPosition[] { new(7, 3) }, SpatialController.SelectMovePath(field, new(RouteStatus.Found, points, 0, 8)));
+    }
+
+    private static SpatialSnapshot BeltCornerMap()
+    {
+        var map = SpatialPlannerTests.Map([]);
+        return map with
+        {
+            ContinuousMovePaths = true,
+            Actor = map.Actor with { Position = new(0, .5) },
+            Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+                { ["belt"] = new("belt", "transport-belt", new(new(-.4, -.4), new(.4, .4)), new([], false, false, false), 1, 1) },
+            Entities = [new("belt", "belt", new(3.5, .5), new(new(3.1, .1), new(3.9, .9)), 12, "agent"),
+                new("wall", "wall", new(2, 1.5), new(new(1.8, 1.3), new(2.2, 1.7)), 0, "agent")]
+        };
+    }
+
+    [Fact]
+    public void AnOlderNativeApiCannotIgnoreCornersAndPursueOnlyTheFinalDestination()
+    {
+        var map = BeltCornerMap() with { ContinuousMovePaths = false };
+        var points = SpatialController.Subdivide(map.Actor.Position, [new(3.5, .5), new(3.5, 3.5)]);
+        var path = SpatialController.SelectMovePath(new(map), new(RouteStatus.Found, points, 0, 6.5));
+        Assert.Equal(new MapPosition[] { new(3.5, .5) }, path);
+        Assert.False(new SpatialCollisionField(map).SteeringRegionClear(map.Actor.Position, new(3.5, 3.5)));
+    }
+
+    [Fact]
+    public void ContinuousMoveIgnoresAnObstacleAtACornerAlreadyPassedInTheNativeFrame()
+    {
+        var map = SpatialPlannerTests.Map([]);
+        map = map with { Actor = map.Actor with { Position = new(3.5, 2), Movement = new("move", 2, 2) },
+            Entities = [new("behind", "wall", new(3.5, .5), new(new(3.1, .1), new(3.9, .9)), 0, "agent")] };
+        MapPosition[] path = [new(3.5, .5), new(3.5, 3.5)];
+        Assert.False(new SpatialCollisionField(map).SteeringRegionClear(map.Actor.Position, path[0]));
+        Assert.True(SpatialController.MovementPathIsClear(map, map.Scope, "move", path, out int leg));
+        Assert.Equal(1, leg);
+        map = map with { Entities = [.. map.Entities, new("ahead", "wall", new(3.5, 3), new(new(3.1, 2.6), new(3.9, 3.4)), 0, "agent")] };
+        Assert.False(SpatialController.MovementPathIsClear(map, map.Scope, "move", path, out _));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("different-operation")]
+    [InlineData("changed-scope")]
+    public void ContinuousMoveRequiresItsOwnProgressInTheCurrentActorScope(string change)
+    {
+        var map = SpatialPlannerTests.Map([]);
+        map = map with { Actor = map.Actor with { Movement = change == "missing" ? null : new(change == "different-operation" ? "other" : "move", 1, 2) } };
+        var scope = change == "changed-scope" ? map.Scope with { Generation = map.Scope.Generation + 1 } : map.Scope;
+        Assert.False(SpatialController.MovementPathIsClear(map, scope, "move", [new(1, 0), new(2, 0)], out _));
+    }
+
+    [Fact]
     public void LongerMovesRemainBoundedToTwentyFourKnownClearTiles()
     {
         var map = SpatialPlannerTests.Map([]) with

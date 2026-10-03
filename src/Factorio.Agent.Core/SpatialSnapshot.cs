@@ -67,7 +67,8 @@ public sealed record FluidPortGeometry(int Index, string Type, int Direction, st
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Categories);
 public sealed record TileBuildRule(WorldBox Area, CollisionMask CollidingTiles, CollisionMask RequiredTiles);
 public sealed record SpatialActor(string Id, string Name, MapPosition Position, double BuildDistance, double ReachDistance, string ControlMode,
-    double? ResourceReachDistance = null);
+    double? ResourceReachDistance = null, ObservedMovement? Movement = null);
+public sealed record ObservedMovement(string OperationId, int WaypointIndex, int WaypointCount);
 public sealed record TileRun(int X, int Y, int Length, string Name);
 public sealed record SpatialEntity(string Id, string Name, MapPosition Position, WorldBox Bounds, int Direction, string Force, double? Amount = null,
     MapPosition? DropPosition = null, string? DropTargetId = null,
@@ -98,7 +99,8 @@ public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int S
     [property: JsonConverter(typeof(NativeArrayConverter<SpatialEntity>))] IReadOnlyList<SpatialEntity> Entities,
     IReadOnlyDictionary<string, PlaceableItem> Items, SpatialCoverage Coverage,
     IReadOnlyDictionary<string, string>? TileFluids = null,
-    [property: JsonConverter(typeof(NativeArrayConverter<StationaryThreat>))] IReadOnlyList<StationaryThreat>? StationaryThreats = null)
+    [property: JsonConverter(typeof(NativeArrayConverter<StationaryThreat>))] IReadOnlyList<StationaryThreat>? StationaryThreats = null,
+    bool ContinuousMovePaths = false)
 {
     public static SpatialSnapshot Parse(GameResponse response)
     {

@@ -94,13 +94,19 @@ function M.observe(args)
   local x0, y0 = math.floor(c.position.x) - radius, math.floor(c.position.y) - radius
   local x1, y1 = math.floor(c.position.x) + radius + 1, math.floor(c.position.y) + radius + 1
   local area = {{x0, y0}, {x1, y1}}
-  local result = {scope = Actor.scope(), collectedTick = game.tick, surfaceIndex = c.surface.index,
+  local result = {scope = Actor.scope(), collectedTick = game.tick, surfaceIndex = c.surface.index, continuousMovePaths = true,
     bounds = {min = {x = x0, y = y0}, max = {x = x1, y = y1}},
     actor = {id = U.entity_id(c), name = c.name, position = U.copy(c.position),
       buildDistance = c.build_distance, reachDistance = c.reach_distance,
       resourceReachDistance = c.resource_reach_distance, controlMode = Actor.state().controlMode},
     prototypes = {[c.name] = prototype(c.prototype)}, tilePrototypes = {}, tileFluids = {}, rows = {}, entities = {}, items = {}, stationaryThreats = {},
     coverage = {atomic = true, complete = true, visibility = "current-character-local-area", radius = radius}}
+  local state = Actor.state()
+  local active = state.activeId and state.receipts[state.activeId]
+  if active and active.request.kind == 'move' and active.work and active.work.waypoints then
+    result.actor.movement = {operationId = active.receipt.operationId,
+      waypointIndex = active.work.waypointIndex, waypointCount = #active.work.waypoints}
+  end
   U.check(args.items == nil or type(args.items) == "table", "invalid_arguments", "items must be an array")
   for index, name in pairs(args.items or {}) do
     U.number(index, "item index", 1, 16, nil, true)

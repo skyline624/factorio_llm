@@ -130,12 +130,16 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             }
             if (route.Status != RouteStatus.Found || route.Waypoints.Count == 0)
                 throw new NavigationPlanningException(route.Status, $"{route.Status}: no executable route under the current snapshot and search budget.");
-            MapPosition waypoint = SelectWaypoint(field, route, maximumMoveDistance);
+            var movePath = SelectMovePath(field, route, maximumMoveDistance);
+            MapPosition waypoint = movePath[^1];
             remaining = route.Waypoints.SkipWhile(p => p != waypoint).Skip(1).ToList();
-            var submission = OperationSubmission.Create(map.Scope, "move", new { position = waypoint, tolerance = 0.15 },
+            if (movePath.Count > 1)
+                await journal.AppendAsync("movement-path-plan", new { map.Scope, map.CollectedTick, waypoints = movePath }, deadline.Token);
+            var submission = OperationSubmission.Create(map.Scope, "move", new
+                { position = waypoint, tolerance = 0.15, waypoints = movePath.Count > 1 ? movePath : null },
                 map.CollectedTick + 1800, new { position = map.Actor.Position, positionTolerance = 0.5 });
             OperationReceipt receipt = await ExecuteAsync(submission, deadline.Token,
-                map.Actor.Position.DistanceTo(waypoint) > 8 ? waypoint : null);
+                movePath.Count > 1 || map.Actor.Position.DistanceTo(waypoint) > 8 ? movePath : null);
             receipts.Add(receipt);
             if (receipt.Status != "completed") remaining.Clear();
             if (receipt.Status != "completed" && receipt.Error?.Code is not ("path_blocked" or "deadline_exceeded" or "cancelled" or "actor_dead" or "stale_scope" or "position_precondition"))
@@ -252,7 +256,40 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     public static MapPosition SelectWaypoint(SpatialCollisionField field, RoutePlan route, int maximumMoveDistance = 24)
     {
         if (maximumMoveDistance is < 1 or > 24) throw new ArgumentOutOfRangeException(nameof(maximumMoveDistance));
-        MapPosition start = field.Map.Actor.Position;
+        return SelectWaypoint(field, route, field.Map.Actor.Position, maximumMoveDistance);
+    }
+
+    /// <summary>Continues through moving terrain without a network pause at each planned corner.</summary>
+    public static IReadOnlyList<MapPosition> SelectMovePath(SpatialCollisionField field, RoutePlan route, int maximumMoveDistance = 24)
+    {
+        if (maximumMoveDistance is < 1 or > 24) throw new ArgumentOutOfRangeException(nameof(maximumMoveDistance));
+        // An older native API ignores unknown move arguments. It must never turn a cornered path into
+        // a single pursuit of the final destination; retain individual guarded moves until support is observed.
+        if (!field.Map.ContinuousMovePaths) return [SelectWaypoint(field, route, maximumMoveDistance)];
+        var path = new List<MapPosition>();
+        MapPosition from = field.Map.Actor.Position;
+        double length = 0;
+        var remaining = route;
+        while (remaining.Waypoints.Count > 0 && path.Count < 64)
+        {
+            MapPosition next = SelectWaypoint(field, remaining, from, maximumMoveDistance - length);
+            double distance = from.DistanceTo(next);
+            if (length + distance > maximumMoveDistance + 1e-9)
+            {
+                if (path.Count > 0) break;
+                throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "The first movement waypoint exceeds its distance bound.");
+            }
+            path.Add(next);
+            length += distance;
+            if (PlacementPlanner.CanStop(field, next)) break;
+            remaining = remaining with { Waypoints = remaining.Waypoints.SkipWhile(p => p != next).Skip(1).ToArray() };
+            from = next;
+        }
+        return path.AsReadOnly();
+    }
+
+    private static MapPosition SelectWaypoint(SpatialCollisionField field, RoutePlan route, MapPosition start, double maximumMoveDistance)
+    {
         int index = 0;
         while (index < route.Waypoints.Count && start.DistanceTo(route.Waypoints[index]) <= 0.15) index++;
         if (index == route.Waypoints.Count) throw new NavigationPlanningException(RouteStatus.StartBlocked, "No waypoint beyond native arrival tolerance.");
@@ -305,7 +342,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     }
 
     private async Task<OperationReceipt> ExecuteAsync(OperationSubmission submission, CancellationToken token,
-        MapPosition? watchedDestination = null)
+        IReadOnlyList<MapPosition>? watchedPath = null)
     {
         await journal.AppendAsync("submission", submission, token);
         ownedOperation = submission.OperationId;
@@ -329,14 +366,15 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             receipt = await QueryKnownAsync(submission.OperationId, token);
             // Longer open-terrain moves avoid intermediate stops. Revalidate while walking,
             // without extending the native deadline or dispatching a competing movement.
-            if (!receipt.IsTerminal && watchedDestination is not null && receipt.UpdatedTick - lastTerrainTick >= 30)
+            if (!receipt.IsTerminal && watchedPath is not null && receipt.UpdatedTick - lastTerrainTick >= 30)
             {
                 SpatialSnapshot current = await spatial.CaptureAsync(cancellationToken: token);
                 lastTerrainTick = current.CollectedTick;
-                bool valid = current.Scope == submission.Scope && current.Actor.ControlMode == "ai"
-                    && new SpatialCollisionField(current).SteeringRegionClear(current.Actor.Position, watchedDestination);
+                // The active corner and position must come from one native frame; a receipt queried before this
+                // photograph can already refer to a corner that the continuously walking character has passed.
+                bool valid = MovementPathIsClear(current, submission.Scope, submission.OperationId, watchedPath, out int leg);
                 await journal.AppendAsync("movement-terrain-check", new { submission.OperationId, current.Scope,
-                    current.CollectedTick, current.Actor.Position, destination = watchedDestination, valid }, token);
+                    current.CollectedTick, current.Actor.Position, destination = watchedPath[^1], waypointIndex = leg + 1, valid }, token);
                 if (!valid)
                 {
                     await journal.AppendAsync("cancel-intent", new { submission.OperationId,
@@ -353,6 +391,22 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         await journal.AppendAsync("receipt", receipt, token);
         ownedOperation = null;
         return receipt;
+    }
+
+    internal static bool MovementPathIsClear(SpatialSnapshot current, ActorScope scope, string operationId,
+        IReadOnlyList<MapPosition> path, out int leg)
+    {
+        leg = path.Count == 1 ? 0 : current.Actor.Movement is { } movement
+            && movement.OperationId == operationId && movement.WaypointCount == path.Count ? movement.WaypointIndex - 1 : -1;
+        if (current.Scope != scope || current.Actor.ControlMode != "ai" || leg < 0 || leg >= path.Count) return false;
+        var field = new SpatialCollisionField(current);
+        MapPosition from = current.Actor.Position;
+        for (int index = leg; index < path.Count; index++)
+        {
+            if (!field.SteeringRegionClear(from, path[index])) return false;
+            from = path[index];
+        }
+        return true;
     }
 
     public async Task<OperationReceipt> WorkAsync(string kind, object arguments, long durationTicks,

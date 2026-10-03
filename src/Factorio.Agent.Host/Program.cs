@@ -83,6 +83,7 @@ try
           defend --session FILE [--seconds N]
           verify-native|verify-defense|verify-factory|verify-spatial|verify-crafting --session FILE
           verify-navigation-flow --session FILE
+          verify-belt-navigation --session FILE
           verify-pilot --session FILE --phase manual|ai|standalone
           stop --session FILE
         """);
@@ -755,6 +756,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new SpatialQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-belt-navigation":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new BeltNavigationQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-navigation-flow":

@@ -57,12 +57,36 @@ starts.move = function(r, c, args)
   r.work.destination = U.position(args.position)
   r.work.tolerance = U.number(args.tolerance, "tolerance", 0.15, 2, 0.3)
   U.check(U.distance(c.position, r.work.destination) <= 256, "move_too_far", "A native move is limited to 256 tiles")
+  local w = r.work
+  w.waypoints = {w.destination}
+  if args.waypoints ~= nil then
+    U.check(type(args.waypoints) == 'table' and #args.waypoints >= 2 and #args.waypoints <= 64,
+      'invalid_move_path', 'A C# movement path requires 2 to 64 waypoints')
+    w.waypoints = {}
+    local previous, length = c.position, 0
+    for i=1,#args.waypoints do
+      local point = U.position(args.waypoints[i])
+      length = length + U.distance(previous, point)
+      U.check(length <= 24.000000001, 'move_path_too_far', 'A continuous C# movement path is limited to 24 tiles')
+      w.waypoints[i], previous = point, point
+    end
+    U.check(U.distance(w.waypoints[#w.waypoints], w.destination) <= 0.000000001,
+      'invalid_move_path', 'The final waypoint must match the requested destination')
+  end
+  w.waypointIndex, w.destination = 1, w.waypoints[1]
+  r.receipt.effects.waypointIndex, r.receipt.effects.waypointCount, r.receipt.effects.waypointsReached = 1, #w.waypoints, 0
   r.work.lastPosition = U.copy(c.position)
 end
 
 steps.move = function(r, c)
   local w = r.work
-  if U.distance(c.position, w.destination) <= w.tolerance then return "completed" end
+  while U.distance(c.position, w.destination) <= w.tolerance do
+    r.receipt.effects.waypointsReached = w.waypointIndex
+    if w.waypointIndex == #w.waypoints then return "completed" end
+    w.waypointIndex = w.waypointIndex + 1
+    w.destination = w.waypoints[w.waypointIndex]
+    r.receipt.effects.waypointIndex = w.waypointIndex
+  end
   if U.distance(c.position, w.lastPosition) > 0.01 then
     w.lastProgressTick, w.lastPosition = game.tick, U.copy(c.position)
   end
