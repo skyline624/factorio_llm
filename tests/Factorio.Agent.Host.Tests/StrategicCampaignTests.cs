@@ -12,6 +12,25 @@ public sealed class StrategicCampaignTests : IDisposable
     private string Memory => Path.Combine(directory, "strategy.json");
 
     [Fact]
+    public async Task DiscoveryFeedbackPreservesTheObservationProofWithoutSendingItsPositionOrNativeEntityId()
+    {
+        var discovery = new ResourceDiscoveryResult("crude-oil", "private-resource-coordinate-id", new(12345, 67890), 100000, 10, 20, 3);
+        var completed = Completed() with { Goal = Completed().Goal with { Category = GoalCategory.Exploration,
+            Target = "crude-oil", Quantity = 1, Unit = GoalUnit.Completion }, Research = null, Discovery = discovery };
+        var runner = new Runner(() => completed);
+        await new StrategicCampaignController(new Game(), runner, Memory).RunAsync(2);
+        using var feedback = JsonDocument.Parse(runner.History[1]!);
+        var measured = feedback.RootElement.GetProperty("discovery");
+        Assert.Equal("crude-oil", measured.GetProperty("resource").GetString());
+        Assert.Equal(20, measured.GetProperty("endTick").GetInt64());
+        Assert.Equal("current-native-local-resource", measured.GetProperty("evidence").GetString());
+        Assert.Contains("not proven", measured.GetProperty("interpretation").GetString());
+        Assert.DoesNotContain("12345", runner.History[1]);
+        Assert.DoesNotContain("67890", runner.History[1]);
+        Assert.DoesNotContain(discovery.EntityId, runner.History[1]);
+    }
+
+    [Fact]
     public async Task InstalledDefenseEvidenceSurvivesIntoTheNextStrategicGoal()
     {
         var defense = new DefenseDeploymentResult("gun-turret", 2, 2, 1, 2, 10, 20, 1, 4, 1, ["existing", "new"], ["exposed"]);

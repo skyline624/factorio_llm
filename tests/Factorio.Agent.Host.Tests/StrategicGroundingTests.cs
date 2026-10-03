@@ -108,6 +108,22 @@ public sealed class StrategicGroundingTests
     }
 
     [Theory]
+    [InlineData("crude-oil", GoalUnit.Completion, 1, true)]
+    [InlineData("iron-ore", GoalUnit.Completion, 1, true)]
+    [InlineData("crude oil", GoalUnit.Completion, 1, false)]
+    [InlineData("iron-plate", GoalUnit.Completion, 1, false)]
+    [InlineData("tree", GoalUnit.Completion, 1, false)]
+    [InlineData("crude-oil", GoalUnit.Items, 1, false)]
+    [InlineData("crude-oil", GoalUnit.Completion, 2, false)]
+    public void ResourceExplorationUsesExactNativeDepositsAndOneCompletion(string target, GoalUnit unit, int quantity, bool accepted)
+    {
+        var catalog = OilCatalogs.Oil() with { MiningSourceTypes = new Dictionary<string, string>
+            { ["crude-oil"] = "resource", ["iron-ore"] = "resource", ["tree"] = "tree" } };
+        var goal = Goal() with { Category = GoalCategory.Exploration, Target = target, Unit = unit, Quantity = quantity };
+        Assert.Equal(accepted, StrategicProductionController.GroundingFailure(goal, "observation", catalog) is null);
+    }
+
+    [Theory]
     [InlineData("other", "iron-plate", 10)]
     [InlineData("observation", "iron plates", 10)]
     [InlineData("observation", "iron-plate", 1001)]

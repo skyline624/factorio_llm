@@ -10,7 +10,19 @@ Pour borner le stockage, un échantillon réellement observé est conservé par 
 
 En l'absence de souvenir, une machine connue qui consomme la ressource peut fournir un indice de zone encore inexplorée. La dernière recette d'un four vide est exposée séparément sous `previousRecipe` et ne remplace pas sa recette en cours. Le journal qualifie cet indice d'hypothèse de zone de traitement. Une zone déjà observée sans gisement n'est plus proposée par cet indice.
 
+## Objectif stratégique de découverte
+
+Le modèle peut proposer `exploration`, `completion`, quantité 1, avec un identifiant de ressource exact du catalogue natif, par exemple `crude-oil`. Les arbres, les noms d'objets produits, les alias et les descriptions libres de secteurs restent des propositions non exécutables. Le catalogue des identifiants disponibles est fourni au modèle sans positions.
+
+`ResourceDiscoveryController` relit d'abord la zone locale, puis la carte de la force et les souvenirs datés. Une position mémorisée ou cartographiée sert uniquement de destination ; l'objectif termine seulement après une photographie locale normale, complète et cohérente, montrant une ressource native non épuisée hors des zones de mort récente. Un ancien point absent de la photographie complète ne devient pas une destination. Le changement d'acteur ou de surface interrompt la recherche. Les déplacements vers un souvenir conservent désormais l'évitement des zones de mort, également pour les déclencheurs de recherche pétrolière ; les destinations explicites de construction gardent leur comportement antérieur.
+
+Sans destination sûre après deux morts récentes, l'exploration aveugle est refusée et le radar existant peut continuer de cartographier. Avec un registre d'usine, le contrôleur essaie une fois le radar et ses attentes bornées avant de marcher à l'aveugle. La découverte limite la recherche à 64 déplacements et 20 minutes ; un budget épuisé ne prouve pas l'absence mondiale de la ressource. Le résultat établit une observation de gisement, sans promettre un emplacement d'extraction, une route sûre, de l'énergie ou un débit. Le compte rendu transmis au modèle exclut l'identifiant d'entité et ses coordonnées.
+
 ## Qualification
+
+Le 3 octobre 2026, les 63 tests ciblés de découverte, validation stratégique et retour au modèle passent ; la suite complète compte 1 400 réussites et un contrat cloud facultatif ignoré. Les cas couvrent notamment les identifiants exacts, les souvenirs devenus absents sous couverture complète, les frontières d'acteur/surface et l'évitement des zones de mort avec une destination explicite.
+
+Une fixture headless distincte, graine 20261131, qualifie l'objectif public de découverte avec une proposition C# explicitement préparée, sans appel LLM. Le terrain, un gisement de pétrole de 100 000 unités, l'armure, les munitions et un indice cartographié sont fournis ; aucune recherche n'est accordée. La simulation utilise une vitesse de 4. Le pétrole est absent de la vue locale et de la mémoire au tick 340. Le contrôleur suit l'indice, effectue deux déplacements natifs et observe le gisement au tick 1 309. La répétition termine au tick 1 405 sans déplacement d'exploration ; l'alias `crude oil` est ensuite refusé sans nouvelle soumission native. L'acteur reste le même, sans mort, intervention humaine, client connecté, minage, fabrication ni construction. Les six contrôles passent et le serveur est sauvegardé puis arrêté. Cet essai prouve la découverte locale, sans qualifier l'extraction, l'exécution d'une décision LLM ni une campagne jusqu'à la fusée.
 
 Les tests vérifient la persistance après changement de processus et de session de contrôle, les frontières de monde/surface/temps, la disparition sous couverture complète, l'exclusion des ennemis et la distinction entre indice de machine et gisement connu.
 

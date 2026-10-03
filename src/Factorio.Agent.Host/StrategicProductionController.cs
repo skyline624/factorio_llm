@@ -6,7 +6,8 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Production = null, ResearchGoalResult? Research = null, string? UnsupportedReason = null, FluidProductionResult? Fluid = null, RocketLaunchResult? Rocket = null, DefenseDeploymentResult? Defense = null,
-    AutomationPlan? Automation = null, LogisticsResult? Logistics = null, PerimeterDefenseResult? Perimeter = null);
+    AutomationPlan? Automation = null, LogisticsResult? Logistics = null, PerimeterDefenseResult? Perimeter = null,
+    ResourceDiscoveryResult? Discovery = null);
 
 /// <summary>Grounds semantic production or research goals into verified native execution.</summary>
 public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal,
@@ -47,6 +48,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             visibleEnemyCount = observation.Data.GetProperty("enemies").ValueKind == JsonValueKind.Array
                 ? observation.Data.GetProperty("enemies").GetArrayLength() : 0,
             knownResources = Names(observation.Data.GetProperty("resources")),
+            nativeResourceIdentifiers = catalog.Mining.Keys.Where(name => ResourceDiscoveryController.Supported(catalog, name))
+                .Order(StringComparer.Ordinal).ToArray(),
             knownBuildings = Names(observation.Data.GetProperty("entities")).Take(compact ? 40 : int.MaxValue).ToArray(),
             availableSolidRecipes = catalog.Recipes.Where(r => r.Enabled && r.Products.All(p => p.DeterministicItem) && r.Ingredients.All(p => p.DeterministicItem))
                 .Select(r => r.Name).ToArray(),
@@ -78,6 +81,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 "C# explores, mines, hand-crafts, installs or reuses furnaces, powered assemblers and native steam supply. " +
                 "Prefer machine production and fuel over bulk hand mining. C# can prepare or reuse burner or electric drills feeding compatible storage or furnaces for deterministic solid deposits such as coal, stone and iron ore. Electric solid extraction can extend a known power network with calculated poles and service a distant connected boiler. Trees still require manual harvesting and machine bootstrap may need small manual quantities. " +
                 "Research goals use category research, unit completion, quantity 1 and an exact native technology identifier. C# resolves native prerequisites, supported craft-item triggers and laboratory research, including science production and power maintenance. It can also satisfy fluid resource mining triggers by installing or reusing an owned compatible electric extractor on an observed deposit. C# can extend a known power network with calculated poles and service its connected steam supply. Exploration, reachable terrain and the 128-link grid budget still bound remote fluid extraction; solid-resource mining triggers remain unsupported. " +
+                "Exploration goals use category exploration, unit completion, quantity 1 and an exact native resource identifier such as crude-oil. C# reads the force's chart, follows dated resource hints and uses bounded local exploration with ordinary visibility and recent-death avoidance. Completion proves a deposit in a fresh local observation, not extraction capacity or a safe factory site. Arbitrary area descriptions and item/fluid aliases are unsupported. " +
                 "Fluid production goals use category production, unit fluid_units and an exact native fluid identifier, up to 100000 units in the known factory. C# supports native refinery configuration and ordinary pipe routes in the observed construction area. Compatible chemical recipes may combine deterministic solid and fluid inputs, including sulfuric acid output, with finite fluid preparation and native pipe connections. Observed solid producer outputs can supply assemblers through calculated belts and inserters. Long-distance fluid networks, temperature-constrained chemistry, complete factory logistics and automatic relocation after resource depletion remain incomplete. " +
                 "Launch goals use category launch, unit completion, quantity 1 and an exact native rocket-silo item identifier. Research the silo and rocket-part recipes first. C# reuses or installs a silo, supplies bounded batches from native requirements and verifies the engine launch counter. Local powered placement and existing production capabilities still bound execution. " +
                 "With the factory, rocket-part automation builds one silo cell fed by its chest and inserter plus enabled solid and chemical chains behind it, including plastic, processing units and rocket fuel when advanced oil processing and the consumer recipes are researched. Its refinery uses finite isolated co-product tanks; regulated cracking and sustained flow after those tanks fill remain incomplete. Launch goals prefer that cell, resume or rebuild it at its plan (never a second one) or build it when no powered silo stands, and keep logistics and maintenance running until the native rocket is ready; a cell that makes no progress stops the goal for reconciliation. " +
@@ -158,6 +162,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         }
         if (goal.Category == GoalCategory.Research)
             return new(goal, Research: await new ResearchGoalExecutor(game, journal, factoryDirectory: factoryDirectory).RunAsync(goal.Target, token));
+        if (goal.Category == GoalCategory.Exploration)
+            return new(goal, Discovery: await new ResourceDiscoveryController(game, journal, factoryDirectory).RunAsync(goal.Target, token));
         if (goal.Category == GoalCategory.Launch)
             return new(goal, Rocket: await new RocketLaunchController(game, journal, factoryDirectory).RunAsync(goal.Target, token));
         if (goal.Category == GoalCategory.Defense && catalog.Items[goal.Target].PlaceEntityType == "wall")
@@ -219,6 +225,12 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
     {
         bool Obtainable(string item) => stock?.GetValueOrDefault(item) > 0 || FactoryDirector.Enabled(catalog, item);
         if (goal.ObservationId != observationId) return "The proposal references a different observation.";
+        if (goal.Category == GoalCategory.Exploration)
+        {
+            if (goal.Unit != GoalUnit.Completion || goal.Quantity != 1) return "Resource exploration requires a completion goal with quantity 1.";
+            return ResourceDiscoveryController.Supported(catalog, goal.Target) ? null
+                : "Exploration requires an exact observed native resource identifier; aliases and arbitrary area descriptions are unsupported.";
+        }
         if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.ItemsPerMinute)
         {
             if (!automation) return "Automation needs enabled assembler, inserter, pole and lab recipes and a factory directory.";

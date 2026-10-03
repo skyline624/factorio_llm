@@ -104,7 +104,8 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
             }
             // Run 16 (2026-10-01, seed 20261002): the crude-oil search met a pack far east while the actor was unarmored.
             await new SurvivalKitController(game, journal).BeforeTripAsync("resource-research-search", token);
-            var frontier = await controller.FindExplorationWaypointAsync(exploration, catalog, "", historical?.Position, token);
+            var frontier = await controller.FindExplorationWaypointAsync(exploration, catalog, "", historical?.Position, token,
+                avoidDestinationDeathZones: true);
             await journal.AppendAsync("resource-research-search", new { resourceName, historical, frontier,
                 deferredObservedResources = unsuitable }, token);
             await controller.NavigateAsync(frontier.Position, cancellationToken: token);

@@ -189,15 +189,15 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     }
 
     public async Task<ExplorationWaypoint> FindExplorationWaypointAsync(ExplorationPlanner planner, ProductionCatalog catalog,
-        string wanted, MapPosition? destination = null, CancellationToken token = default)
+        string wanted, MapPosition? destination = null, CancellationToken token = default, bool avoidDestinationDeathZones = false)
     {
         for (int cleared = 0; ; cleared++)
         {
             SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
             RequireAi(map);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during exploration clearance.");
-            // A caller's destination is its own choice. Exploration targets keep out of the zones of recent own deaths.
-            IReadOnlyList<NativeDeathTransition>? deaths = destination is not null ? null : game is IDangerZoneReader zones
+            // Construction travel can keep its explicit destination; resource searches also require recent-death avoidance.
+            IReadOnlyList<NativeDeathTransition>? deaths = destination is not null && !avoidDestinationDeathZones ? null : game is IDangerZoneReader zones
                 ? await zones.ReadActiveDeathsAsync(map.Scope, map.SurfaceIndex, map.CollectedTick, token) : [];
             bool Safe(MapPosition position) => deaths is null || !deaths.Any(d => DangerZones.Covers(d, position));
             ResourceMemorySnapshot? memory = game is IResourceMemoryReader reader ? await reader.ReadResourceMemoryAsync(map, token) : null;
