@@ -17,8 +17,7 @@ public sealed record FluidChainPlan(string Item, double PerMinute, IReadOnlyList
 /// </summary>
 public static class FluidChainPlanner
 {
-    public static FluidChainPlan? Plan(ProductionCatalog catalog, string item, double perMinute, IReadOnlySet<string> machineItems,
-        int maximumMachinesPerStage = 8)
+    public static FluidChainPlan? Plan(ProductionCatalog catalog, string item, double perMinute, IReadOnlySet<string> machineItems)
     {
         if (!double.IsFinite(perMinute) || perMinute <= 0 || perMinute > 100000) throw new ArgumentOutOfRangeException(nameof(perMinute));
         if (Choose(catalog, item, machineItems) is null) return null;
@@ -35,7 +34,7 @@ public static class FluidChainPlanner
                 ? Math.Min(machineCrafts, 60 * AutomationPlanner.InserterItemsPerSecond / Math.Max(solidIn, solidOut)) : machineCrafts;
             int machines = (int)Math.Ceiling(needed / limit - 1e-9);
             return new AutomationStage(recipe.Name, product, machine, needed,
-                Math.Clamp(machines, 1, maximumMachinesPerStage), AutomationPlanner.FluidKind);
+                Math.Max(1, machines), AutomationPlanner.FluidKind);
         }).ToArray();
         return new(item, perMinute, stages, graph.Inputs.Where(p => IsFluid(catalog, p.Key))
             .Select(p => new FluidSource(p.Key, Resource(catalog, p.Key), p.Value)).OrderBy(s => s.Fluid, StringComparer.Ordinal).ToArray(),

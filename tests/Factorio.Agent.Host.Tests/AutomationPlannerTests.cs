@@ -30,12 +30,15 @@ public sealed class AutomationPlannerTests
     }
 
     [Fact]
-    public void SharedIntermediatesAreSummedAndMachinesCapped()
+    public void SharedIntermediatesAreSummedAndFullySizedBeforeBoundedConstruction()
     {
-        var plan = AutomationPlanner.Plan(Catalogs.Early(), "inserter", 600, Machines, maximumMachinesPerStage: 4);
+        var catalog = Catalogs.Early();
+        var plan = AutomationPlanner.Plan(catalog, "inserter", 600, Machines);
         var gears = plan.Stages.Single(s => s.Recipe == "iron-gear-wheel");
         Assert.Equal(600, gears.CraftsPerMinute, 6);
-        Assert.All(plan.Stages, s => Assert.InRange(s.Machines, 1, 4));
+        Assert.All(plan.Stages, s => Assert.True(s.Machines * AutomationPlanner.CellCraftsPerMinute(catalog,
+            catalog.Recipes.Single(r => r.Name == s.Recipe), s.MachineItem) >= s.CraftsPerMinute));
+        Assert.Contains(plan.Stages, s => s.Machines > AutomationPlanner.MaximumNewMachinesPerStage);
         Assert.True(plan.RawPerMinute.ContainsKey("copper-plate"));
     }
 

@@ -14,14 +14,16 @@ public static class AutomationPlanner
     public const string FluidKind = "fluid";
     /// <summary>Observed native throughput of one basic inserter between a chest and a machine.</summary>
     public const double InserterItemsPerSecond = 0.8;
+    /// <summary>New cells per stage and automation call; existing cells do not consume this construction budget.</summary>
+    public const int MaximumNewMachinesPerStage = 8;
 
     public static AutomationPlan Plan(ProductionCatalog catalog, string item, double perMinute, IReadOnlySet<string> machineItems,
-        int maximumMachinesPerStage = 8, IReadOnlySet<string>? fluidMachineItems = null) => Plan(catalog,
-            new Dictionary<string, double>(StringComparer.Ordinal) { [item] = perMinute }, machineItems, maximumMachinesPerStage, fluidMachineItems);
+        IReadOnlySet<string>? fluidMachineItems = null) => Plan(catalog,
+            new Dictionary<string, double>(StringComparer.Ordinal) { [item] = perMinute }, machineItems, fluidMachineItems);
 
     /// <summary>Targets share intermediate demand and simultaneous recipe outputs before machines are counted.</summary>
     public static AutomationPlan Plan(ProductionCatalog catalog, IReadOnlyDictionary<string, double> targets, IReadOnlySet<string> machineItems,
-        int maximumMachinesPerStage = 8, IReadOnlySet<string>? fluidMachineItems = null)
+        IReadOnlySet<string>? fluidMachineItems = null)
     {
         if (targets.Count == 0 || targets.Values.Any(rate => !double.IsFinite(rate) || rate <= 0 || rate > 10000))
             throw new ArgumentOutOfRangeException(nameof(targets));
@@ -37,7 +39,7 @@ public static class AutomationPlanner
                 ? FluidKind : Kind(catalog, stage.MachineItem);
             int machines = (int)Math.Ceiling(stage.CraftsPerMinute / CellCraftsPerMinute(catalog, stage.Recipe, stage.MachineItem) - 1e-9);
             return new AutomationStage(stage.Recipe.Name, stage.Product, stage.MachineItem, stage.CraftsPerMinute,
-                Math.Clamp(machines, 1, Maximum(kind, maximumMachinesPerStage)), kind);
+                kind == SiloCellPlanner.Kind ? SiloCellPlanner.MaximumCells : Math.Max(1, machines), kind);
         }).ToArray();
         return new(stages, raw)
         {
@@ -65,15 +67,20 @@ public static class AutomationPlanner
 
     /// <summary>
     /// Cells to add so the ready cells of the stage's recipe cover its crafts. Each ready cell counts with its own machine,
-    /// so slower early cells are not mistaken for the faster machines a new plan sizes; the per-stage budget still applies.
+    /// so slower early cells are not mistaken for the faster machines a new plan sizes. The budget bounds new cells per call,
+    /// allowing subsequent calls to keep growing the stage. The single-silo policy remains a total limit.
     /// </summary>
     public static int MissingMachines(ProductionCatalog catalog, AutomationStage stage, IReadOnlyList<string> readyMachineItems,
-        int maximumMachinesPerStage = 8)
+        int maximumNewMachinesPerStage = MaximumNewMachinesPerStage)
     {
+        if (maximumNewMachinesPerStage < 0) throw new ArgumentOutOfRangeException(nameof(maximumNewMachinesPerStage));
         var recipe = catalog.Recipes.Single(r => r.Name == stage.Recipe);
         double missing = stage.CraftsPerMinute - readyMachineItems.Sum(machine => CellCraftsPerMinute(catalog, recipe, machine));
         int wanted = missing <= 1e-9 ? 0 : (int)Math.Ceiling(missing / CellCraftsPerMinute(catalog, recipe, stage.MachineItem) - 1e-9);
-        return Math.Clamp(wanted, 0, Math.Max(0, Maximum(stage.Kind, maximumMachinesPerStage) - readyMachineItems.Count));
+        int budget = stage.Kind == SiloCellPlanner.Kind
+            ? Math.Min(maximumNewMachinesPerStage, Math.Max(0, SiloCellPlanner.MaximumCells - readyMachineItems.Count))
+            : maximumNewMachinesPerStage;
+        return Math.Clamp(wanted, 0, budget);
     }
 
     /// <summary>
@@ -107,7 +114,4 @@ public static class AutomationPlanner
     private static string Kind(ProductionCatalog catalog, string machineItem) => catalog.Silos?.ContainsKey(machineItem) == true
         ? SiloCellPlanner.Kind : catalog.Assemblers?.ContainsKey(machineItem) == true ? "assembler" : FurnaceCellPlanner.Kind;
 
-    // One silo serves the whole factory, whatever the planned rate.
-    private static int Maximum(string kind, int maximumMachinesPerStage) =>
-        kind == SiloCellPlanner.Kind ? SiloCellPlanner.MaximumCells : maximumMachinesPerStage;
 }

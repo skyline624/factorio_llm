@@ -36,8 +36,44 @@ public sealed class AutomationDemandTests
         Assert.Equal(1, AutomationPlanner.MissingMachines(catalog, science, ["assembling-machine-1", "assembling-machine-1"]));
         Assert.Equal(0, AutomationPlanner.MissingMachines(catalog, science, ["assembling-machine-2", "assembling-machine-2"]));
         // The per-stage cell budget still bounds what is added.
-        Assert.Equal(1, AutomationPlanner.MissingMachines(catalog, science with { CraftsPerMinute = 600 }, ["assembling-machine-1"],
-            maximumMachinesPerStage: 2));
+        Assert.Equal(2, AutomationPlanner.MissingMachines(catalog, science with { CraftsPerMinute = 600 }, ["assembling-machine-1"],
+            maximumNewMachinesPerStage: 2));
+    }
+
+    [Theory]
+    [InlineData("copper-cable", 498, 249, 11, 3)]
+    [InlineData("electronic-circuit", 106, 106, 9, 1)]
+    public void EightExistingCellsDoNotPreventTheRestOfTheRequestedStage(string item, double rate, double crafts, int total, int missing)
+    {
+        // Normal seed20261019: eight cable cells cover192crafts/min instead of249; eight circuit cells cover96 instead of106.
+        var catalog = WithFastAssembler(Catalogs.Early());
+        var machines = new HashSet<string>(StringComparer.Ordinal) { "assembling-machine-2" };
+        var stage = AutomationPlanner.Plan(catalog, item, rate, machines).Stages.Single(s => s.Item == item);
+        var recipe = Recipe(catalog, stage.Recipe);
+        double capacity = AutomationPlanner.CellCraftsPerMinute(catalog, recipe, stage.MachineItem);
+        Assert.Equal(crafts, stage.CraftsPerMinute, 6);
+        Assert.Equal(total, stage.Machines);
+        Assert.True(8 * capacity < crafts);
+        Assert.Equal(missing, AutomationPlanner.MissingMachines(catalog, stage, Enumerable.Repeat(stage.MachineItem, 8).ToArray()));
+        Assert.True(total * capacity >= crafts);
+        Assert.Equal(0, AutomationPlanner.MissingMachines(catalog, stage, Enumerable.Repeat(stage.MachineItem, total).ToArray()));
+    }
+
+    [Fact]
+    public void RepeatedBoundedCallsFinishALargeStageWithoutLosingItsDemand()
+    {
+        var catalog = Catalogs.Early();
+        var stage = AutomationPlanner.Plan(catalog, "copper-cable", 1000, Machines).Stages.Single();
+        Assert.Equal(21, stage.Machines);
+        var ready = new List<string>();
+        foreach (int expected in new[] { 8, 8, 5, 0 })
+        {
+            int missing = AutomationPlanner.MissingMachines(catalog, stage, ready);
+            Assert.Equal(expected, missing);
+            ready.AddRange(Enumerable.Repeat(stage.MachineItem, missing));
+        }
+        Assert.Equal(stage.Machines, ready.Count);
+        Assert.True(ready.Sum(m => AutomationPlanner.CellCraftsPerMinute(catalog, Recipe(catalog, stage.Recipe), m)) >= stage.CraftsPerMinute);
     }
 
     [Fact]

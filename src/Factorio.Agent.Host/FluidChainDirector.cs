@@ -11,7 +11,7 @@ namespace Factorio.Agent.Host;
 public sealed class FluidChainDirector(IGameClient game, IControllerJournal journal, string directory)
 {
     /// <summary>Machines added to one stage per call; a supply still short afterwards is journaled, not chased.</summary>
-    public const int MaximumNewMachines = 8;
+    public const int MaximumNewMachines = AutomationPlanner.MaximumNewMachinesPerStage;
 
     public async Task<FluidChainPlan> AutomateAsync(string item, double perMinute, CancellationToken token)
     {
@@ -48,7 +48,7 @@ public sealed class FluidChainDirector(IGameClient game, IControllerJournal jour
             var next = rates is null ? (Extractor: false, Machine: machines < wanted)
                 : NextPair(machines, wanted, rates.Count, rates.Values.Sum(), source!.UnitsPerMinute);
             if (!next.Machine) break;
-            if (added >= MaximumNewMachines || machines >= MaximumNewMachines)
+            if (added >= MaximumNewMachines)
             {
                 await journal.AppendAsync("fluid-chain-stage-short", new { stage, machines, extraction = rates?.Values.Sum(), source }, token);
                 break;

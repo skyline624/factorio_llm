@@ -32,6 +32,22 @@ public sealed class FluidChainPlannerTests
     }
 
     [Fact]
+    public void DedicatedAndSharedFluidPlansKeepDemandBeyondEightMachines()
+    {
+        var catalog = OilCatalogs.Oil();
+        var dedicated = OilCatalogs.Plan(catalog, "plastic-bar", 498)!;
+        var shared = AutomationPlanner.Plan(catalog, "plastic-bar", 498, FactoryDirector.MachineItems(catalog),
+            fluidMachineItems: FluidChainDirector.Machines(catalog));
+        foreach (var stages in new[] { dedicated.Stages, shared.Stages })
+        {
+            Assert.Equal(11, stages.Single(s => s.Recipe == "plastic-bar").Machines);
+            Assert.Equal(10, stages.Single(s => s.Recipe == "basic-oil-processing").Machines);
+            Assert.All(stages, s => Assert.True(s.Machines * AutomationPlanner.CellCraftsPerMinute(catalog,
+                catalog.Recipes.Single(r => r.Name == s.Recipe), s.MachineItem) >= s.CraftsPerMinute));
+        }
+    }
+
+    [Fact]
     public void SulfurDrawsWaterFromTerrainAndSizesRefineriesByCraftingSpeed()
     {
         // 60 sulfur: 30 crafts, 900 gas = 20 refinery cycles against 12 per refinery and minute.
