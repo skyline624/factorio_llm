@@ -4,6 +4,7 @@ namespace Factorio.Agent.Host;
 /// Decides when a raw shortfall justifies one more resource cell. The shortfall must persist over consecutive logistics
 /// rounds that span real game time, so a new cell delivers before the next one counts; ready cells must fall short of
 /// the demanded rate; and each item's cells stay within a budget counted in the registry across research runs. An item
+/// whose entire supply is explicitly depleted may replace one cell on the first short round. An item
 /// whose growth failed is left to ordinary procurement until a retry delay passes: depleted local deposits leave no row
 /// site in view, but a later attempt that explores toward remembered deposits may succeed.
 /// </summary>
@@ -55,9 +56,23 @@ public sealed class RawCapacityGrowth(long persistentTicks = 3600, int persisten
     /// </summary>
     public void Procured(string item) => procured.Add(item);
 
-    public bool Due(string item, int cells, double capacity, double demand) => cells < maximumCells
+    public bool Due(string item, int cells, double capacity, double demand) => Due(item, cells, capacity, demand, exhausted: false);
+
+    /// <summary>
+    /// A native-depleted supply with no standing or unfinished resource cell need not wait for a second large procurement
+    /// round. A new factory, a silent powered cell and an interrupted construction keep the usual persistence gate.
+    /// </summary>
+    public bool Due(string item, FactoryState factory, double capacity, double demand)
+    {
+        int cells = Cells(factory, item);
+        bool exhausted = cells == 0 && capacity == 0
+            && factory.Cells.Any(c => c.IsResource && c.Recipe == item && c.Status == "depleted");
+        return Due(item, cells, capacity, demand, exhausted);
+    }
+
+    private bool Due(string item, int cells, double capacity, double demand, bool exhausted) => cells < maximumCells
         && capacity < demand - 1e-9 && streaks.TryGetValue(item, out var streak) && !HasFailed(item, streak.LastTick)
-        && streak.Rounds >= persistentRounds && streak.LastTick - streak.FirstTick >= persistentTicks;
+        && (exhausted || streak.Rounds >= persistentRounds && streak.LastTick - streak.FirstTick >= persistentTicks);
 
     public void Grew(string item)
     {

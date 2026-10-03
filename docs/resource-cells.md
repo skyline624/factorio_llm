@@ -87,11 +87,21 @@ La variante explicite `verify-resource-cells --session FILE --burner` fournit tr
 
 Les deux rapports indiquent `passed: true` et `isAutonomousCampaign: false`. Ils sont conservés hors Git dans `.runtime/fixture-20261002-162936-8468845c/` : `resource-cell-qualification-5ced5c8560e649f5960d6aa1504d30b0.json` (thermique) et `resource-cell-qualification-0acbdfa459994bdc8ff87fb3163475b3.json` (électrique). Le serveur a été sauvegardé et arrêté. Les 1 129 tests ordinaires passent, sans jeu ni appel cloud ; le test cloud optionnel reste ignoré. Ces essais ne démontrent pas encore un gain de durée en campagne normale.
 
+### Remplacement d'une capacité entièrement épuisée
+
+Le 3 octobre 2026, dans la partie normale de graine **20261070**, les trois cellules à charbon sont `depleted` et la recherche attend un stock de 260 charbons provenant d'une ancienne foreuse thermique. La règle de croissance attendait une deuxième tournée logistique avant de remplacer cette capacité, ce qui prolongeait la collecte sur cette seule foreuse.
+
+La recherche peut maintenant remplacer **une cellule** dès sa première tournée avec pénurie lorsque le registre contient une cellule de cette ressource explicitement épuisée, sans aucune cellule prête ou en construction et avec une capacité restante nulle. Un manque de courant, une cellule interrompue ou une usine sans historique d'épuisement garde la règle habituelle de persistance. Le budget de cellules et le délai après une croissance refusée restent appliqués ; la nouvelle cellule doit ensuite livrer avant une extension supplémentaire.
+
+L'essai séparé **20261118**, sur Factorio **2.0.77 headless**, fournit explicitement deux gisements, l'électricité, les recherches et les équipements. Aucune unité de charbon n'est fournie. La première foreuse produit trois charbons avant la suppression préparée de ses 96 gisements. Le service constate `no_minable_resources`, retire sa capacité et distribue les trois charbons ; une pénurie de neuf charbons subsiste. La nouvelle règle autorise immédiatement le remplacement, tandis que la règle sans preuve d'épuisement le refuse au même tick **1223**. C# construit une seule cellule sur le second gisement ; au tick **2565**, son coffre contient trois charbons produits par la nouvelle foreuse. Les pièces de la cellule retirée restent en place. Aucun minage ni fabrication manuelle n'est soumis pendant l'essai.
+
+Le rapport préparé passe, puis le serveur est sauvegardé et arrêté. Les **1 344 tests ordinaires** passent également, sans jeu ni appel cloud. Cette preuve vérifie le remplacement et sa production native ; elle ne mesure pas encore le gain de temps dans une campagne normale ni un débit industriel soutenu.
+
 ## Limites
 
 - Seuls les produits minés directement ou issus d'une recette de fusion à un seul minerai sont pris en charge ; l'acier reste hors de ces cellules et passe par les [bandes de fours](furnace-bands.md).
 - Les rangées planifiées ne sont pas encore réservées lors du choix d'une nouvelle bande d'assemblage : une bande peut réduire une allée à une seule case.
-- La croissance pendant la recherche n'explore pas ; elle n'utilise que les gisements observés localement.
+- La croissance pendant la recherche cherche d'abord localement, puis peut avancer jusqu'à six étapes vers les gisements mémorisés, avec observation normale et budget borné. L'essai de remplacement ci-dessus utilise seulement un gisement déjà observé.
 - Le raccordement lointain suit la chaîne de poteaux par étapes locales ; il n'a pas encore été qualifié au-delà de la fenêtre observée.
 - Une cellule privée de courant parce que tout le réseau manque de vapeur n'est ni retirée ni raccordée de nouveau : elle cesse de couvrir son produit, que le personnage se procure alors lui-même. Seule une cellule sur un îlot sans générateur est raccordée de nouveau.
 - Le raccordement des îlots est couvert par la compilation et les tests existants ; sa réparation en jeu reste à constater dans une campagne ou une qualification.

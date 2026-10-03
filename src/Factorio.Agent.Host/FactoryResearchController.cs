@@ -130,7 +130,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         {
             double capacity = FactoryDirector.RawCapacity(factory, item).PerMinute;
             double demand = growth.Demand(item, rawRates.GetValueOrDefault(item), capacity);
-            if (!growth.Due(item, RawCapacityGrowth.Cells(factory, item), capacity, demand)) return false;
+            if (!growth.Due(item, factory, capacity, demand)) return false;
             try
             {
                 if ((await director.EnsureRawAsync(item, demand, token, maximumNewCells: 1, explorationBudget: RawCapacityGrowth.ExplorationBudget)).Built > 0)

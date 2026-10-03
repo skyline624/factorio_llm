@@ -177,6 +177,59 @@ public sealed class ResourceCellSupplyTests
         Assert.False(Left("copper-plate", true, later)); // No cell ever delivered it.
     }
 
+    [Fact]
+    public void EntirelyDepletedSupplyIsReplacedBeforeTheFirstLargeProcurement()
+    {
+        // Normal seed 20261070: three depleted coal cells left a 260-coal research shortfall to one old burner drill.
+        var state = new FactoryState(1, "world", [], [Cell(CoalRow, 0, "depleted")], [CoalRow]);
+        var growth = new RawCapacityGrowth();
+        Assert.False(growth.Due("coal", state, 0, 15)); // No observed shortfall.
+        growth.Observe(Round(1000, ["coal"]));
+        Assert.True(growth.Due("coal", state, 0, 15));
+        Assert.False(growth.Due("coal", state, 0, 0)); // No demanded capacity.
+        Assert.False(growth.Due("iron-plate", state, 0, 15)); // Depletion belongs to another item.
+        growth.Failed("coal", 1000);
+        Assert.False(growth.Due("coal", state, 0, 15)); // A known failure still backs off.
+        growth.Observe(Round(1000 + RawCapacityGrowth.RetryTicks, ["coal"]));
+        Assert.True(growth.Due("coal", state, 0, 15));
+        growth.Observe(Round(1100 + RawCapacityGrowth.RetryTicks, []));
+        Assert.False(growth.Due("coal", state, 0, 15)); // A cleared shortfall stops replacement.
+    }
+
+    [Theory]
+    [InlineData("ready", 0)]
+    [InlineData("ready", 30)]
+    [InlineData("building", 0)]
+    [InlineData("abandoned", 0)]
+    public void SilentUnfinishedOrAbandonedCellsDoNotProveAnExhaustedSupply(string status, double capacity)
+    {
+        var state = new FactoryState(1, "world", [], [Cell(CoalRow, 0, status)], [CoalRow]);
+        var growth = new RawCapacityGrowth();
+        growth.Observe(Round(1000, ["coal"]));
+        Assert.False(growth.Due("coal", state, capacity, 45));
+        var mixed = state.With(Cell(CoalRow, 1, "depleted"));
+        if (status is "ready" or "building") Assert.False(growth.Due("coal", mixed, capacity, 45));
+    }
+
+    [Fact]
+    public void AReplacementKeepsTheGrowthBudgetAndMustDeliverBeforeAnotherCell()
+    {
+        var state = new FactoryState(1, "world", [], [Cell(CoalRow, 0, "depleted")], [CoalRow with { Cells = 2 }]);
+        var growth = new RawCapacityGrowth(maximumCells: 1);
+        growth.Observe(Round(1000, ["coal"]));
+        Assert.True(growth.Due("coal", state, 0, 15));
+        growth.Grew("coal");
+        state = state.With(Cell(CoalRow, 1, "ready"));
+        growth.Observe(Round(1100, ["coal"]));
+        Assert.False(growth.Due("coal", state, 30, 60));
+        growth.Observe(Round(10000, ["coal"]));
+        Assert.False(growth.Due("coal", state, 30, 60)); // The one-cell budget is spent even after persistence.
+        var empty = state with { Cells = [] };
+        var cold = new RawCapacityGrowth();
+        cold.Observe(Round(1000, ["coal"]));
+        Assert.False(cold.Due("coal", empty, 0, 15)); // No prior native depletion.
+    }
+
     private static LogisticsResult Round(long tick, string[] shortfall, long coal = 0, long iron = 0)
     {
         var collected = new Dictionary<string, long>(StringComparer.Ordinal);
