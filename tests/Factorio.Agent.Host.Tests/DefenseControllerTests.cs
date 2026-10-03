@@ -116,9 +116,12 @@ public sealed class DefenseControllerTests
         // Campaign 2026-10-01 (seed 20261002): against packs the pistol-armed actor died in about seven seconds; retreating
         // only once hurt left the biters time to catch it.
         var fake = new GameStub { EnemyCount = 3, Defenses = Refuge() };
+        var journal = new JournalStub();
         var reflexes = new ReflexEventLog();
-        Assert.Equal("defending", (await new DefenseController(fake, new JournalStub(), reflexes).StepAsync()).State);
-        Assert.Equal("move", fake.Submission?.Kind);
+        Assert.Equal("defending", (await new DefenseController(fake, journal, reflexes).StepAsync()).State);
+        Assert.True(fake.Submission?.Kind == "move",
+            $"Expected movement into observed turret coverage, received {fake.Submission?.Kind ?? "none"}; "
+                + $"retreat plans: {JsonSerializer.Serialize(journal.RetreatPlans, Protocol.Json)}");
         Assert.True(fake.Submission!.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!.X < 0);
         var fight = Assert.Single(reflexes.Since(0));
         Assert.Equal(("retreat", 3, new MapPosition(4, 0)), (fight.Kind, fight.Enemies, fight.Enemy));
@@ -392,11 +395,13 @@ public sealed class DefenseControllerTests
     private sealed class JournalStub : IControllerJournal
     {
         public List<string> Types { get; } = [];
+        public List<JsonElement> RetreatPlans { get; } = [];
         public bool Fail { get; init; }
         public Task AppendAsync(string type, object data, CancellationToken token)
         {
             if (Fail) throw new IOException("Simulated disk failure.");
             Types.Add(type);
+            if (type == "retreat-plan") RetreatPlans.Add(Protocol.ToElement(data));
             return Task.CompletedTask;
         }
     }
