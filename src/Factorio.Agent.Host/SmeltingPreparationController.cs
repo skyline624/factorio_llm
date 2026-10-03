@@ -83,9 +83,10 @@ internal sealed class SmeltingPreparationController(IGameClient game, IControlle
                 continue;
             }
             await journal.AppendAsync("smelting-site-plan", new { site, map.CollectedTick }, token);
-            // A drill recipe may consume a furnace; obtain the receiving furnace last.
-            await production.ProduceAsync(site.Equipment.DrillItem, 1, token);
-            await production.ProduceAsync(site.Equipment.FurnaceItem, 1, token);
+            // Bootstrap production of the furnace's materials may place the carried drill.
+            // Procure the complete kit after its materials, with both items observed together.
+            await CarriedStock.EnsureAsync(game, journal, catalog, new Dictionary<string, int>(StringComparer.Ordinal)
+                { [site.Equipment.DrillItem] = 1, [site.Equipment.FurnaceItem] = 1 }, token);
             await controller.TravelAsync(site.Furnace.Position, 8, catalog, token);
             map = await MapAsync();
             state = await ObserveAsync();

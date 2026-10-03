@@ -50,6 +50,17 @@ L'essai headless du 13 septembre 2026 passe entre les ticks 876325 et 889717 : 5
 
 Le scénario passe également avec un joueur connecté entre les ticks 909701 et 923364 : mêmes quantités, même absence de minage manuel et même personnage natif 17. La capture native inspectée montre le coffre de charbon, les deux foreuses et le four en fonctionnement. Le client unique a été lancé réduit, puis fermé avant la sauvegarde et l'arrêt de la fixture. Ces preuves qualifient le composant sur des équipements préparés ; elles ne constituent pas une campagne finale.
 
+## Kit d'extraction après une production imbriquée
+
+La préparation d'un site de fusion obtient désormais la foreuse et le four comme un kit complet, avec `CarriedStock` : les matériaux sont procurés avant les équipements finaux, puis une même observation native doit confirmer les deux objets portés. La production des briques d'un four en acier peut installer la foreuse déjà portée pour alimenter un four de briques. Vérifier séparément la foreuse avant cette production ne garantissait donc pas sa présence au moment de construire le site principal. Les géométries sont toujours recalculées après l'approvisionnement ; une observation incohérente ou une mutation incertaine arrête la construction.
+
+Le 3 octobre 2026, deux fixtures distinctes de graine **20261122** reproduisent et vérifient ce cas sur Factorio **2.0.77 headless**. La préparation explicite fournit une rive, deux gisements, un four à pierre, une seule foreuse électrique portée, un kit vapeur, des matériaux et les recherches nécessaires ; aucune brique n'est fournie. Les contrôleurs construisent leur centrale et produisent les briques nativement.
+
+- L'ancien code produit 13 briques, installe l'unique foreuse pour cette production, puis échoue avec `The replanned extraction equipment is not in the actor inventory.` Le personnage porte le four en acier, sans foreuse restante ; aucun fer n'est produit.
+- Le nouveau code confirme une foreuse et un four en acier portés ensemble au tick **8691**, construit le site de fer et conserve la foreuse des briques. Le stock porté de fer passe de **90 à 101** entre les ticks **9289 et 14054**. Une lecture indépendante constate **11 plaques de fer**, **35 briques** et **73 pierres** produites, avec deux foreuses conservées, 250 points de vie, zéro mort, aucun minage manuel ni pilote connecté.
+
+Les deux mondes sont sauvegardés et arrêtés. Des tentatives préparatoires ayant échoué dans le marqueur ou la lecture du rapport restent conservées. Les **1 355 tests hors ligne** passent, avec le test cloud facultatif ignoré. Un premier passage complet avait dépassé le délai d'un test de repli défensif pendant un diagnostic spatial coûteux ; le test isolé puis la suite complète passent sur le même binaire après l'arrêt de ce diagnostic, sans modification de la défense. Ces fournitures et recherches restent propres aux fixtures ; elles ne constituent aucune progression normale ni qualification jusqu'à la fusée.
+
 ## Limites restantes
 
 La [répartition de la fusion entre plusieurs fours](furnace-fleet.md) complète cette priorité : construction calculée en C#, approvisionnements regroupés et prise en compte des cuissons déjà engagées. Les essais acier et briques vérifient les coûts natifs et l'absence de minage manuel sur des lots préparés.

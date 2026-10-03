@@ -46,6 +46,26 @@ public sealed class ConstructionSupplyPlannerTests
     }
 
     [Fact]
+    public void ACarriedDrillDoesNotHideTheSteelFurnacesMachineProducedBrickRequirement()
+    {
+        var catalog = Catalog() with
+        {
+            Recipes = [
+                new("electric-mining-drill", true, "crafting", 2,
+                    [new("iron-plate", "item", 10)], [new("electric-mining-drill", "item", 1)], false),
+                new("steel-furnace", true, "crafting", 3,
+                    [new("steel-plate", "item", 8), new("stone-brick", "item", 10)], [new("steel-furnace", "item", 1)], false),
+                new("stone-brick", true, "smelting", 3.2,
+                    [new("stone", "item", 2)], [new("stone-brick", "item", 1)], true)]
+        };
+        var needed = new Dictionary<string, int> { ["electric-mining-drill"] = 1, ["steel-furnace"] = 1 };
+        var plan = ConstructionSupplyPlanner.Plan(catalog, needed,
+            new Dictionary<string, long> { ["electric-mining-drill"] = 1, ["steel-plate"] = 8 })!;
+        Assert.Equal(new Dictionary<string, int> { ["stone-brick"] = 10 }, Materials(plan));
+        Assert.Equal(needed, plan.Equipment.ToDictionary(p => p.Item, p => p.TargetStock));
+    }
+
+    [Fact]
     public void ObservedStoredGearsAreStockGoalsRatherThanInventedCarriedStockOrNewPlateDemand()
     {
         var plan = ConstructionSupplyPlanner.Plan(Catalog(), AssemblerKit, new Dictionary<string, long>(),
