@@ -6,6 +6,59 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class GrowingOutputLogisticsTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PreparationFeedsThePlannedBufferEvenWhenThisStageAlreadyExists(bool existing)
+    {
+        string directory = Directory.CreateTempSubdirectory("preparation-input-buffer-").FullName;
+        try
+        {
+            var game = new OutputGame(500, 0, false, recipeInput: true);
+            var cell = new FactoryCell("gear", 1, new(0, 0, true), "assembler", "assembling-machine-1", "iron-gear-wheel",
+                new Dictionary<string, string> { ["input-chest"] = "input" }, "ready", 100, Plan: new Dictionary<string, PlannedEntity>());
+            var state = new FactoryState(1, game.Scope.WorldId, [], [cell]).WithTarget("iron-gear-wheel", 24);
+            await new FactoryRegistry(directory).SaveAsync(state, default);
+            var catalog = Catalogs.Raw();
+            var stage = AutomationPlanner.Plan(catalog, "iron-gear-wheel", 24, FactoryDirector.MachineItems(catalog)).Stages.Single();
+            var journal = new Journal();
+            await new FactoryDirector(game, journal, directory).StartStageAsync(stage, catalog,
+                existing ? new HashSet<string> { cell.Id } : new HashSet<string>(), default);
+            Assert.Equal(480, game.InputStock);
+            Assert.Equal(20, game.Carried);
+            Assert.Equal(1, game.Submissions);
+            Assert.Contains("factory-stage-startup", journal.Types);
+            Assert.False(File.Exists(Path.Combine(directory, "factory-logistics-completion.json")));
+            var retained = Assert.Single((await new FactoryRegistry(directory).LoadAsync(game.Scope.WorldId, default)).Cells);
+            Assert.Equal(cell.Id, retained.Id);
+            Assert.Equal(cell.Entities, retained.Entities);
+            Assert.Equal("ready", retained.Status);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task AnExistingPlasticStageReceivesItsPlannedCoalDuringPreparation()
+    {
+        string directory = Directory.CreateTempSubdirectory("preparation-plastic-buffer-").FullName;
+        try
+        {
+            var catalog = OilCatalogs.Oil();
+            var game = new OutputGame(500, 0, false, recipeInput: true, nativeCatalog: catalog, recipeItem: "coal");
+            var cell = new FactoryCell("plastic", 0, new(0, 0, true), "fluid", "chemical-plant", "plastic-bar",
+                new Dictionary<string, string> { ["input-chest"] = "input" }, "ready", 100, Plan: new Dictionary<string, PlannedEntity>());
+            var state = new FactoryState(1, game.Scope.WorldId, [], [cell]).WithTarget("plastic-bar", 30);
+            await new FactoryRegistry(directory).SaveAsync(state, default);
+            var stage = AutomationPlanner.Plan(catalog, "plastic-bar", 30, FactoryDirector.MachineItems(catalog),
+                fluidMachineItems: FluidChainDirector.Machines(catalog)).Stages.Single(s => s.Recipe == "plastic-bar");
+            await new FactoryDirector(game, new Journal(), directory).StartStageAsync(stage, catalog, new HashSet<string> { cell.Id }, default);
+            Assert.Equal(150, game.InputStock);
+            Assert.Equal(350, game.Carried);
+            Assert.Equal(1, game.Submissions);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     [Fact]
     public async Task ANewStageStartsWithoutVisitingOtherConsumersOrReplacingTheFullTourReceipt()
     {
@@ -212,15 +265,16 @@ public sealed class GrowingOutputLogisticsTests
     }
 
     /// <summary>Six items in the cycle photograph; a different native quantity after approach, with measured receipts.</summary>
-    private sealed class OutputGame(int carried, int currentStock, bool lostReply, bool labScience = false, bool recipeInput = false) : IGameClient
+    private sealed class OutputGame(int carried, int currentStock, bool lostReply, bool labScience = false, bool recipeInput = false,
+        ProductionCatalog? nativeCatalog = null, string? recipeItem = null) : IGameClient
     {
-        private readonly ProductionCatalog catalog = Catalogs.Raw();
+        private readonly ProductionCatalog catalog = nativeCatalog ?? Catalogs.Raw();
         private readonly SpatialSnapshot map = FactoryMaps.Grass(8, labScience
             ? new[] { Lab("lab-0", 3.5, -.5), Lab("lab-1", -.5, 3.5), Lab("lab-2", 4.5, 4.5) }
             : [new(recipeInput ? "input" : "chest", "iron-chest", new(2.5, .5), new(new(2.15, .15), new(2.85, .85)), 0, "own")]);
         private object? receipt;
         private string? operationId;
-        private string Item => labScience ? "automation-science-pack" : "iron-plate";
+        private string Item => labScience ? "automation-science-pack" : recipeItem ?? "iron-plate";
         public Dictionary<string, long> LabStocks { get; } = new() { ["lab-0"] = 10, ["lab-1"] = 0, ["lab-2"] = 0 };
         public ActorScope Scope => catalog.Scope with { Generation = Generation };
         public long Generation { get; set; } = Catalogs.Raw().Scope.Generation;

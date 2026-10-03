@@ -77,7 +77,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             if (stage.Kind == FluidCellBuilder.MachineKind)
             {
                 await fluids.EnsureStageAsync(stage, catalog, token);
-                await StartStageAsync(stage, existing);
+                await StartStageAsync(stage, catalog, existing, token);
                 continue;
             }
             var ready = before.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready").Select(c => c.MachineItem).ToArray();
@@ -88,12 +88,12 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             {
                 if (await DeferAsync())
                 {
-                    await StartStageAsync(stage, existing);
+                    await StartStageAsync(stage, catalog, existing, token);
                     return plan;
                 }
                 await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
             }
-            await StartStageAsync(stage, existing);
+            await StartStageAsync(stage, catalog, existing, token);
         }
         if (await DeferAsync()) return plan;
         await new FactoryTransportBuilder(game, journal, directory).ConnectAsync(catalog, token: token);
@@ -106,18 +106,22 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             return true; // Targets and completed cells stay registered; a later goal can continue their construction.
         }
 
-        async Task StartStageAsync(AutomationStage stage, IReadOnlySet<string> existing)
-        {
-            var current = await registry.LoadAsync(catalog.Scope.WorldId, token);
-            var added = current.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready"
-                && !existing.Contains(c.Id)).Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
-            if (added.Count == 0) return;
-            int links = await new FactoryTransportBuilder(game, journal, directory)
-                .ConnectAsync(catalog, token: token, targetCellIds: added);
-            var startup = await new FactoryLogistics(game, journal, directory)
-                .ServiceAsync(FactoryLogistics.MinimumBufferCrafts, token, targetCellIds: added);
-            await journal.AppendAsync("factory-stage-startup", new { stage.Recipe, added, links, startup }, token);
-        }
+    }
+
+    /// <summary>Refills this stage before downstream construction, including suppliers retained from a previous call.</summary>
+    internal async Task StartStageAsync(AutomationStage stage, ProductionCatalog catalog, IReadOnlySet<string> existing,
+        CancellationToken token)
+    {
+        var current = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
+        var serviced = current.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready")
+            .Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
+        if (serviced.Count == 0) return;
+        var added = serviced.Where(id => !existing.Contains(id)).ToHashSet(StringComparer.Ordinal);
+        int links = await new FactoryTransportBuilder(game, journal, directory)
+            .ConnectAsync(catalog, token: token, targetCellIds: serviced);
+        var startup = await new FactoryLogistics(game, journal, directory)
+            .ServiceAsync(FactoryLogistics.MinimumBufferCrafts, token, usePlannedBuffers: true, targetCellIds: serviced);
+        await journal.AppendAsync("factory-stage-startup", new { stage.Recipe, added, serviced, links, startup }, token);
     }
 
     public async Task<int> EnsureLabsAsync(int count, CancellationToken token)
