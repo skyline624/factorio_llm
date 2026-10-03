@@ -37,6 +37,7 @@ public sealed class FactoryResearchCompletionTests
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
+    [InlineData(3)]
     public async Task LoadedLabsStartBeforePreparationAndStopFurtherWorkAfterNativeCompletion(int photosBeforeCompletion)
     {
         string directory = Directory.CreateTempSubdirectory("research-overlap-").FullName;
@@ -62,6 +63,33 @@ public sealed class FactoryResearchCompletionTests
             Assert.DoesNotContain("factory-logistics", journal.Types);
             Assert.Equal(photosBeforeCompletion == 1 ? 0 : 1, journal.Types.Count(t => t == "factory-automation-plan"));
             Assert.Equal("factory-research-result", journal.Types[^1]);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task FinishedResearchKeepsTheRequestedFactoryPlanWithoutBuildingItsMissingScienceCell()
+    {
+        string directory = Directory.CreateTempSubdirectory("research-deferred-factory-").FullName;
+        try
+        {
+            var game = new FinishingGame(photosBeforeCompletion: 2, initialSelection: "stale");
+            var lab = new FactoryCell("laboratory", 1, new(0, 0, true), "lab", "lab", null,
+                new Dictionary<string, string> { ["machine"] = "lab" }, "ready", 100, Plan: new Dictionary<string, PlannedEntity>());
+            var registry = new FactoryRegistry(directory);
+            await registry.SaveAsync(new(1, game.Scope.WorldId, [new(1, new(0, 0), 4, 6, 6)], [lab]), default);
+            var journal = new Journal();
+
+            var result = await new FactoryResearchController(game, journal, directory).RunAsync("target");
+
+            Assert.Equal(0, result.Rounds);
+            Assert.Empty(result.Procured);
+            Assert.Equal(0, game.Transfers);
+            Assert.Contains("factory-preparation-deferred", journal.Types);
+            var retained = await registry.LoadAsync(game.Scope.WorldId, default);
+            Assert.Contains("automation-science-pack", retained.Targets!.Keys);
+            Assert.Single(retained.Cells);
+            Assert.Equal((lab.Id, "lab", "ready"), (retained.Cells[0].Id, retained.Cells[0].Entities["machine"], retained.Cells[0].Status));
         }
         finally { Directory.Delete(directory, true); }
     }

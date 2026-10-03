@@ -109,6 +109,25 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
                 result = warm, delayedResearch = delayed.StateAfterDelay, native = warmNative });
             if (!warmNative.Researched || delayed.StateAfterDelay?.Researched != true || warm.Rounds != 0 || warm.Procured.Count != 0)
                 throw new InvalidDataException("Loaded laboratory did not finish research before factory preparation returned.");
+
+            // Finish during the director's catalog read rather than during its earlier power observation. A retained
+            // circuit target requires missing cells, but the completed research must yield at the next safe boundary.
+            var registry = new FactoryRegistry(session.Directory);
+            var beforeDeferred = (await registry.LoadAsync(state.WorldId, token)).WithTarget("electronic-circuit", 36);
+            await registry.SaveAsync(beforeDeferred, token);
+            using var deferredSetup = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(warmPreparation, token));
+            var slowCatalog = new SlowPreparationGame(game, TimeSpan.FromSeconds(delaySeconds), warmTarget, "production_catalog");
+            var deferred = await new FactoryResearchController(slowCatalog, journal, session.Directory).RunAsync(warmTarget, token);
+            var afterDeferred = await registry.LoadAsync(state.WorldId, token);
+            var deferredNative = ResearchSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("research_state", new { technology = warmTarget }), token), warmTarget);
+            evidence.Add(new { check = "completed-research-defers-missing-factory-cells", prepared = deferredSetup.RootElement.Clone(),
+                delaySeconds, result = deferred, delayedResearch = slowCatalog.StateAfterDelay, native = deferredNative,
+                slowCatalog.WorkKinds, cellsBefore = beforeDeferred.Cells.Count, cellsAfter = afterDeferred.Cells.Count, retainedTargets = afterDeferred.Targets });
+            if (!deferredNative.Researched || slowCatalog.StateAfterDelay?.Researched != true || deferred.Rounds != 0 || deferred.Procured.Count != 0
+                || slowCatalog.WorkKinds.Any(k => k != "research") || !beforeDeferred.Cells.Select(c => c.Id).SequenceEqual(afterDeferred.Cells.Select(c => c.Id))
+                || afterDeferred.Targets?.GetValueOrDefault("electronic-circuit") != 36
+                || !(await File.ReadAllLinesAsync(journalPath, token)).Any(line => line.Contains("\"type\":\"factory-preparation-deferred\"", StringComparison.Ordinal)))
+                throw new InvalidDataException("Completed native research did not defer further construction while preserving its registered targets.");
             passed = true;
             return path;
         }
@@ -145,14 +164,16 @@ public sealed class FactoryResearchQualification(RuntimeSession session)
         }
     }
 
-    private sealed class SlowPreparationGame(IGameClient game, TimeSpan delay, string technology) : IGameClient
+    private sealed class SlowPreparationGame(IGameClient game, TimeSpan delay, string technology, string action = "factory_snapshot") : IGameClient
     {
         private bool waited;
         public ResearchSnapshot? StateAfterDelay { get; private set; }
+        public List<string> WorkKinds { get; } = [];
 
         public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
-            if (!waited && request.Action == "factory_snapshot")
+            if (request.Action == "submit") WorkKinds.Add(request.Arguments.GetProperty("kind").GetString()!);
+            if (!waited && request.Action == action)
             {
                 waited = true;
                 await Task.Delay(delay, cancellationToken);

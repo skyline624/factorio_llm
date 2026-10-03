@@ -49,7 +49,8 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         AutomationPlan? plan = null;
         foreach (var pack in technology.Ingredients)
         {
-            plan = await director.AutomateAsync(pack.Name, Math.Min(120, technology.Count * pack.Amount / minutes), token);
+            plan = await director.AutomateAsync(pack.Name, Math.Min(120, technology.Count * pack.Amount / minutes), token,
+                isObjectiveComplete: async _ => (await ReadStateAsync()).Researched);
             state = await ReadStateAsync();
             if (state.Researched) return await FinishAsync(state.CollectedTick, 0);
         }

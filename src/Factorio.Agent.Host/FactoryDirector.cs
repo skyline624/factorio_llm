@@ -43,7 +43,8 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             .Concat(FurnaceCellPlanner.Machine(catalog, FactoryLogistics.Fuel) is { } furnace ? [furnace] : Array.Empty<string>())
             .Concat(SiloCellPlanner.Machines(catalog)).ToHashSet(StringComparer.Ordinal);
 
-    public async Task<AutomationPlan> AutomateAsync(string item, double perMinute, CancellationToken token)
+    public async Task<AutomationPlan> AutomateAsync(string item, double perMinute, CancellationToken token,
+        Func<CancellationToken, Task<bool>>? isObjectiveComplete = null)
     {
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         var machines = MachineItems(catalog);
@@ -61,12 +62,14 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         // Every registered target shares the stages: a second science pack adds its gears to the first one's.
         var plan = AutomationPlanner.Plan(catalog, registered.Targets!, machines, fluidMachineItems: fluidMachines);
         await journal.AppendAsync("factory-automation-plan", new { item, perMinute, targets = registered.Targets, plan }, token);
-        await SeedRawAsync(catalog, plan.RawPerMinute, token);
+        if (await DeferAsync()) return plan;
+        await SeedRawAsync(catalog, plan.RawPerMinute, token, isObjectiveComplete);
         var builder = new FactoryCellBuilder(game, journal, directory);
         var fluids = new FluidChainDirector(game, journal, directory);
         // Consumers after their suppliers keeps early cells useful even if a later build is interrupted.
         foreach (var stage in plan.Stages)
         {
+            if (await DeferAsync()) return plan;
             var before = await registry.LoadAsync(catalog.Scope.WorldId, token);
             var existing = before.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready")
                 .Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
@@ -81,11 +84,26 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             // Power grows before the cells that will draw it, so new machines never brown out the running factory.
             await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync(stage.MachineItem, missing, true, token);
             for (int count = 0; count < missing; count++)
+            {
+                if (await DeferAsync())
+                {
+                    await StartStageAsync(stage, existing);
+                    return plan;
+                }
                 await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
+            }
             await StartStageAsync(stage, existing);
         }
+        if (await DeferAsync()) return plan;
         await new FactoryTransportBuilder(game, journal, directory).ConnectAsync(catalog, token: token);
         return plan;
+
+        async Task<bool> DeferAsync()
+        {
+            if (isObjectiveComplete is null || !await isObjectiveComplete(token)) return false;
+            await journal.AppendAsync("factory-preparation-deferred", new { item, perMinute, reason = "caller-objective-completed" }, token);
+            return true; // Targets and completed cells stay registered; a later goal can continue their construction.
+        }
 
         async Task StartStageAsync(AutomationStage stage, IReadOnlySet<string> existing)
         {
@@ -117,7 +135,8 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     /// drill, furnace and inserter speeds; at most maximumNewCells are built per call.
     /// </summary>
     public async Task<RawCellCapacity> EnsureRawAsync(string item, double perMinute, CancellationToken token,
-        int maximumNewCells = ResourceCellPlanner.MaximumRowCells, int explorationBudget = 16)
+        int maximumNewCells = ResourceCellPlanner.MaximumRowCells, int explorationBudget = 16,
+        Func<CancellationToken, Task<bool>>? isObjectiveComplete = null)
     {
         if (!double.IsFinite(perMinute) || perMinute <= 0 || perMinute > 10000) throw new ArgumentOutOfRangeException(nameof(perMinute));
         if (maximumNewCells is < 0 or > 64) throw new ArgumentOutOfRangeException(nameof(maximumNewCells));
@@ -130,6 +149,11 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         for (int built = 0; ; built++)
         {
             var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            if (isObjectiveComplete is not null && await isObjectiveComplete(token))
+            {
+                var existing = RawCapacity(state, item);
+                return new(item, supply.Kind, existing.Cells, existing.PerMinute, built);
+            }
             if (item == FactoryLogistics.Fuel)
                 foreach (var producer in state.Cells.Where(c => c.Kind == "miner" && c.Recipe == item && c.Status == "ready"))
                     await new CoalProducerStartup(game, journal).StartAsync(producer, catalog, startupController, token);
@@ -235,14 +259,17 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     /// Up to two resource cells per undersupplied raw item before any assembler, travelling at most a few steps toward remembered
     /// deposits. A failure leaves the item to the usual growth and procurement; a changed actor identity stays fatal.
     /// </summary>
-    private async Task SeedRawAsync(ProductionCatalog catalog, IReadOnlyDictionary<string, double> raw, CancellationToken token)
+    private async Task SeedRawAsync(ProductionCatalog catalog, IReadOnlyDictionary<string, double> raw, CancellationToken token,
+        Func<CancellationToken, Task<bool>>? isObjectiveComplete)
     {
         var carried = FactoryLogistics.Carried(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token));
         foreach (var (item, perMinute) in RawSeeds(catalog, await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token), raw, carried))
         {
+            if (isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
             try
             {
-                await EnsureRawAsync(item, Math.Min(perMinute, 10000), token, maximumNewCells: SeedCellsPerItem, explorationBudget: 4);
+                await EnsureRawAsync(item, Math.Min(perMinute, 10000), token, maximumNewCells: SeedCellsPerItem, explorationBudget: 4,
+                    isObjectiveComplete: isObjectiveComplete);
             }
             catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
             {
