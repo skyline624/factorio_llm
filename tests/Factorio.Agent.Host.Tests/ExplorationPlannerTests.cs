@@ -53,6 +53,28 @@ public sealed class ExplorationPlannerTests
     }
 
     [Fact]
+    public void AWaterfrontDoesNotTrapBlindExplorationInsideAlreadySurveyedGround()
+    {
+        // Historical local coverage extends across the shoreline. A northern frontier is
+        // close in a straight line but cannot be approached through native water collisions.
+        var surveyed = (from x in Enumerable.Range(-56, 122)
+                        from y in Enumerable.Range(-99, 132)
+                        select new SurveyedCell(x, y)).ToArray();
+        var planner = new ExplorationPlanner();
+        MapPosition actor = new(64, -348);
+        var positions = new List<MapPosition>();
+        for (int step = 0; step < 24; step++)
+        {
+            SpatialSnapshot map = Map(actor);
+            map = map with { Rows = map.Rows.Select(r => r.Y < -352 ? r with { Name = "water" } : r).ToArray() };
+            actor = planner.Choose(map, "", Catalog(), surveyed: surveyed, deaths: []);
+            positions.Add(actor);
+            Assert.True(new SpatialCollisionField(map).Walkable(actor));
+        }
+        Assert.Contains(positions, p => p.X < -180 || p.X > 212 || p.Y > 80);
+    }
+
+    [Fact]
     public void FrontierInsideARecentDeathZoneIsNotChosen()
     {
         // Without the zone the first step heads north (see the first test above).

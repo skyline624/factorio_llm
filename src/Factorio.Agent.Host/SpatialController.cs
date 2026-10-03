@@ -220,8 +220,11 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                     radius = DangerZones.Radius }, token);
             try
             {
-                return new(planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position,
-                    memory?.SurveyedCells, deaths), map.CollectedTick);
+                var point = planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position,
+                    memory?.SurveyedCells, deaths);
+                await journal.AppendAsync("exploration-waypoint", new { map.Scope, map.CollectedTick, map.Actor.Position,
+                    wanted, destination, planner.Frontier, point }, token);
+                return new(point, map.CollectedTick);
             }
             catch (ExplorationBlockedException) when (cleared < 16)
             {
