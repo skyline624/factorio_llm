@@ -34,7 +34,9 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
         if (targets.Any(t => !catalog.Recipes.Any(r => r.Name == t.Recipe && r.Ingredients.Any(i => i.DeterministicItem && i.Name == bus.Item))))
             return false;
         var snapshot = await CaptureAsync(catalog, token);
-        if (!FactoryTransportHealth.Healthy(state, snapshot, bus)) return false;
+        if (!FactoryTransportHealth.Healthy(state, snapshot, bus)
+            || !SourceWiringIsExclusive(snapshot, source.Entities["output-chest"],
+                state.Cells.Single(c => c.Id == bus.CellId).Entities["source-inserter"], bus.ActorReserve is not null)) return false;
         var cell = state.Cells.Single(c => c.Id == bus.CellId);
         if (cell.Entities.Values.Intersect(state.Cells.Where(c => c.Id != cell.Id).SelectMany(c => c.Entities.Values), StringComparer.Ordinal).Any())
             throw new InvalidDataException("Transport conversion cannot retire another cell's native equipment.");
@@ -49,7 +51,8 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
         RequireScope(map.Scope, catalog);
         if (required.Any(id => !map.Entities.Any(e => e.Id == id && map.Bounds.Contains(e.Bounds)))) return false;
         snapshot = await CaptureAsync(catalog, token);
-        if (!FactoryTransportHealth.Healthy(state, snapshot, bus)) return false;
+        if (!FactoryTransportHealth.Healthy(state, snapshot, bus)
+            || !SourceWiringIsExclusive(snapshot, source.Entities["output-chest"], cell.Entities["source-inserter"], bus.ActorReserve is not null)) return false;
         string[] belts = FactoryTransportHealth.Belts(cell).Select(r => cell.Entities[r]).ToArray();
         string arm = cell.Entities[bus.Consumers[0].InserterRole];
         int last = Array.IndexOf(belts, map.Entities.Single(e => e.Id == arm).PickupTargetId);
@@ -69,7 +72,9 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
         snapshot = await CaptureAsync(catalog, token, incoming.Keys.ToArray());
         // Refresh stock after the capacity photograph: transit may have advanced since planning.
         incoming = FactoryTransportRecoveryCapacity.Incoming(snapshot, pending, cell.Entities.Values.ToHashSet(StringComparer.Ordinal), bus.Item);
-        if (!FactoryTransportHealth.Healthy(state, snapshot, bus) || !FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, incoming))
+        if (!FactoryTransportHealth.Healthy(state, snapshot, bus)
+            || !SourceWiringIsExclusive(snapshot, source.Entities["output-chest"], cell.Entities["source-inserter"], bus.ActorReserve is not null)
+            || !FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, incoming))
         {
             await journal.AppendAsync("factory-transport-conversion-deferred", new { bus.Id, snapshot.CollectedTick, reason = "native-health-or-recovery-capacity" }, token);
             return false;
@@ -125,13 +130,9 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
         var registry = new FactoryRegistry(directory);
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
         var cell = state.Cells.Single(c => c.Id == bus.CellId);
-        string sourceArm = cell.Entities["source-inserter"], sourceChest = state.Cells.Single(c => c.Id == bus.SourceCellId).Entities["output-chest"];
-        var source = await CaptureAsync(catalog, token);
-        var nativeArm = source.Records.SingleOrDefault(r => r.Kind == "entity" && r.EntityId == sourceArm);
-        if (nativeArm is null) throw new InvalidOperationException("The retained source inserter must be reconciled before conversion recovery.");
-        var position = nativeArm.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
-        await controller.ApproachEntityAsync(sourceArm, position, catalog, token);
-        await new FactoryTransportControl(game, journal).EnsureAsync(sourceArm, bus.Item, catalog, controller, token, sourceChest, 0, "<");
+        string sourceChest = state.Cells.Single(c => c.Id == bus.SourceCellId).Entities["output-chest"];
+        int sourceSurface = 0;
+        string sourceArm = await EnsureSourcePausedAsync();
         foreach (var retirement in bus.PendingRetirements.ToArray())
         {
             bool recovered = false;
@@ -150,13 +151,28 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
                 if (target is not null)
                 {
                     ValidatePart(target, map);
-                    var all = cell.Entities.Values.Concat(bus.PendingRetirements!.Select(r => r.EntityId)).ToHashSet(StringComparer.Ordinal);
                     string[] items = [.. bus.PendingRetirements.Select(r => r.Part.Item).Append(bus.Item).Distinct(StringComparer.Ordinal)];
                     var snapshot = await CaptureAsync(catalog, token, items);
+                    if (!snapshot.Records.Any(r => r.Kind == "entity" && r.EntityId == sourceArm))
+                    {
+                        sourceArm = await EnsureSourcePausedAsync();
+                        map = await ObservePartAsync();
+                        target = map.Entities.SingleOrDefault(e => e.Id == retirement.EntityId);
+                        if (target is null)
+                        {
+                            await RecordRetiredAsync();
+                            continue;
+                        }
+                        ValidatePart(target, map);
+                        await controller.ApproachEntityAsync(target.Id, target.Position, catalog, token);
+                        snapshot = await CaptureAsync(catalog, token, items);
+                    }
                     var armData = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == sourceArm).Data;
                     var control = armData.GetProperty("transport").GetProperty("inserterControl").Deserialize<ObservedInserterControl>(Protocol.Json);
-                    if (!FactoryTransportControl.Matches(control, bus.Item, sourceChest, 0, "<"))
+                    if (!FactoryTransportControl.Matches(control, bus.Item, sourceChest, 0, "<")
+                        || !SourceWiringIsExclusive(snapshot, sourceChest, sourceArm, requireConnection: true))
                         throw new InvalidDataException("Source feeding resumed before transport recovery.");
+                    var all = cell.Entities.Values.Concat(bus.PendingRetirements!.Select(r => r.EntityId)).ToHashSet(StringComparer.Ordinal);
                     var incoming = FactoryTransportRecoveryCapacity.Incoming(snapshot, bus.PendingRetirements, all, bus.Item);
                     if (!FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, incoming))
                         throw new InvalidOperationException("Transport recovery awaits enough shared actor inventory capacity.");
@@ -170,17 +186,23 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
                     recovered = true;
                 }
             }
-            bus = bus with { PendingRetirements = bus.PendingRetirements!.Where(r => r.EntityId != retirement.EntityId).ToArray() };
-            await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(bus), token);
-            await journal.AppendAsync("factory-transport-piece-retired", new { bus.Id, retirement, map.CollectedTick, recovered,
-                evidence = recovered ? "completed-native-mining-receipt-and-local-absence" : "complete-local-absence-no-recovery-claimed",
-                remaining = bus.PendingRetirements.Count }, token);
+            await RecordRetiredAsync();
+
+            async Task RecordRetiredAsync()
+            {
+                bus = bus with { PendingRetirements = bus.PendingRetirements!.Where(r => r.EntityId != retirement.EntityId).ToArray() };
+                await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(bus), token);
+                await journal.AppendAsync("factory-transport-piece-retired", new { bus.Id, retirement, map.CollectedTick, recovered,
+                    evidence = recovered ? "completed-native-mining-receipt-and-local-absence" : "complete-local-absence-no-recovery-claimed",
+                    remaining = bus.PendingRetirements.Count }, token);
+            }
 
             async Task<SpatialSnapshot> ObservePartAsync()
             {
                 await controller.TravelAsync(retirement.Part.Position, 4, catalog, token);
                 var captured = await new SpatialClient(game).CaptureAsync([retirement.Part.Item], 48, token);
                 RequireScope(captured.Scope, catalog);
+                if (captured.SurfaceIndex != sourceSurface) throw new InvalidDataException("Recovery left the native source surface.");
                 var footprint = captured.Prototypes[captured.Items[retirement.Part.Item].EntityName].CollisionBox
                     .Rotate(retirement.Part.Direction).Translate(retirement.Part.Position);
                 if (!captured.Bounds.Contains(footprint)) throw new InvalidDataException("Recovery requires complete local coverage of the recorded native footprint.");
@@ -196,7 +218,92 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
             }
         }
         return bus;
+
+        async Task<string> EnsureSourcePausedAsync()
+        {
+            state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            cell = state.Cells.Single(c => c.Id == bus.CellId);
+            var part = cell.Plan?.GetValueOrDefault("source-inserter")
+                ?? throw new InvalidDataException("Recovery requires the recorded source inserter plan.");
+            if (part.Role != "source-inserter" || part.Item != Equipment.Inserter)
+                throw new InvalidDataException("Recovery requires the original source inserter equipment.");
+            await controller.TravelAsync(part.Position, 4, catalog, token);
+            var map = await new SpatialClient(game).CaptureAsync([part.Item], 48, token);
+            RequireScope(map.Scope, catalog);
+            var snapshot = await CaptureAsync(catalog, token);
+            var chest = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == sourceChest);
+            sourceSurface = chest.Data.GetProperty("surfaceIndex").GetInt32();
+            string force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
+            var footprint = map.Prototypes[map.Items[part.Item].EntityName].CollisionBox.Rotate(part.Direction).Translate(part.Position);
+            if (map.SurfaceIndex != sourceSurface || !map.Bounds.Contains(footprint)
+                || !map.Entities.Any(e => e.Id == sourceChest && e.Force == force && map.Bounds.Contains(e.Bounds)))
+                throw new InvalidDataException("Source recovery requires complete native local coverage on its own surface.");
+            string? previous = cell.Entities.GetValueOrDefault("source-inserter");
+            if (previous is not null && snapshot.Records.Any(r => r.Kind == "entity" && r.EntityId == previous)
+                && !map.Entities.Any(e => e.Id == previous && e.Name == map.Items[part.Item].EntityName
+                    && e.Position == part.Position && e.Direction == part.Direction && e.Force == force))
+                throw new InvalidDataException("The retained source changed its native geometry or ownership.");
+            var reserved = state.Cells.Where(c => c.Id != cell.Id).SelectMany(c => c.Entities.Values)
+                .Concat(cell.Entities.Where(p => p.Key != "source-inserter").Select(p => p.Value))
+                .Concat(bus.PendingRetirements!.Select(r => r.EntityId)).ToHashSet(StringComparer.Ordinal);
+            var localIds = map.Entities.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+            cell = ReconcileSource(cell, snapshot with
+            {
+                Records = snapshot.Records.Where(r => r.Kind != "entity" || localIds.Contains(r.EntityId)).ToArray()
+            }, catalog, reserved);
+            string? id = cell.Entities.GetValueOrDefault("source-inserter");
+            if (!SourceWiringIsExclusive(snapshot, sourceChest, id, requireConnection: false))
+                throw new InvalidDataException("The source chest acquired an unrelated circuit endpoint before recovery.");
+            await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
+            if (id is null)
+            {
+                await new FactoryCellBuilder(game, journal, directory).EnsureCarriedAsync(registry, catalog,
+                    new Dictionary<string, int> { [part.Item] = 1 }, token);
+                id = await new PoweredMachineController(game, journal).BuildAtAsync(part.Item,
+                    new(part.Position, part.Direction, 0), catalog, controller, token, stoppedInserterItem: bus.Item);
+                cell = cell with { Entities = new Dictionary<string, string>(cell.Entities, StringComparer.Ordinal) { [part.Role] = id } };
+                await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
+                await journal.AppendAsync("factory-transport-source-rebuilt", new { busId = bus.Id, previousSourceId = previous, sourceInserterId = id, part,
+                    evidence = "completed-native-stopped-build-consumes-carried-equipment" }, token);
+            }
+            snapshot = await CaptureAsync(catalog, token);
+            if (!SourceWiringIsExclusive(snapshot, sourceChest, id, requireConnection: false))
+                throw new InvalidDataException("The source circuit changed before its verified pause.");
+            await new FactoryTransportControl(game, journal).EnsureAsync(id, bus.Item, catalog, controller, token, sourceChest, 0, "<");
+            snapshot = await CaptureAsync(catalog, token);
+            if (!SourceWiringIsExclusive(snapshot, sourceChest, id, requireConnection: true))
+                throw new InvalidDataException("Rebuilt source pause lacks its exclusive native stock circuit.");
+            return id;
+        }
     }
+
+    internal static FactoryCell ReconcileSource(FactoryCell cell, FactorySnapshot snapshot, ProductionCatalog catalog, IReadOnlySet<string> reserved)
+    {
+        var part = cell.Plan?.GetValueOrDefault("source-inserter") ?? throw new InvalidDataException("Source plan missing.");
+        var source = FactoryMaintenance.Reconcile(cell with
+        {
+            Entities = cell.Entities.Where(p => p.Key == "source-inserter").ToDictionary(p => p.Key, p => p.Value),
+            Plan = new Dictionary<string, PlannedEntity> { [part.Role] = part }
+        }, snapshot, catalog, reserved, removeMissing: true);
+        var ids = new Dictionary<string, string>(cell.Entities, StringComparer.Ordinal);
+        if (source.Entities.TryGetValue(part.Role, out string? id)) ids[part.Role] = id;
+        else ids.Remove(part.Role);
+        return cell with { Entities = ids };
+    }
+
+    internal static bool SourceWiringIsExclusive(FactorySnapshot snapshot, string chest, string? arm, bool requireConnection)
+    {
+        var source = snapshot.Records.SingleOrDefault(r => r.Kind == "entity" && r.EntityId == chest);
+        if (source is null || !source.Data.TryGetProperty("transport", out var data) || data.ValueKind != JsonValueKind.Object) return false;
+        var circuit = data.Deserialize<SourceCircuit>(Protocol.Json);
+        return circuit?.RedNeighbours is not null && circuit.RedNeighbourCount == circuit.RedNeighbours.Count
+            && (circuit.RedNeighbourCount == 0 ? !requireConnection
+                : circuit.RedNeighbourCount == 1 && arm is not null && circuit.RedNeighbours.SequenceEqual([arm]));
+    }
+
+    private sealed record SourceCircuit(
+        [property: System.Text.Json.Serialization.JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? RedNeighbours = null,
+        int? RedNeighbourCount = null);
 
     private async Task<FactorySnapshot> CaptureAsync(ProductionCatalog catalog, CancellationToken token, IReadOnlyList<string>? items = null)
     {

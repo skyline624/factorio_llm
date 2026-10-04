@@ -62,6 +62,68 @@ public sealed class FactoryTransportConversionTests
     }
 
     [Fact]
+    public void SourceRecoveryAdoptsOnlyTheReplacementArmWithoutAdoptingObsoleteFutureParts()
+    {
+        var scope = new ActorScope("world", "session", "actor", 1, 1);
+        var catalog = new ProductionCatalog(scope, 1, [], new Dictionary<string, NativeItem>
+            { ["inserter"] = new(0, 50, PlaceEntity: "inserter") }, new Dictionary<string, NativeMaterial[]>(),
+            new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>());
+        var plan = new Dictionary<string, PlannedEntity>
+        {
+            ["source-inserter"] = new("source-inserter", "inserter", new(1, 1), 0),
+            ["belt-77"] = new("belt-77", "transport-belt", new(3, 3), 4)
+        };
+        var cell = new FactoryCell("line", 0, new(0, 0, true), "transport", "transport-belt", null,
+            new Dictionary<string, string> { ["source-inserter"] = "lost-source", ["belt-77"] = "retained-belt" }, "building", 1, Plan: plan);
+        var snapshot = new FactorySnapshot("native", scope, 2, 100, Protocol.ToElement(new { }),
+        [Entity("replacement", "inserter", new(1, 1), 0), Entity("obsolete-tail", "transport-belt", new(3, 3), 4)]);
+
+        var reconciled = FactoryTransportConversion.ReconcileSource(cell, snapshot, catalog, new HashSet<string>());
+
+        Assert.Equal("replacement", reconciled.Entities["source-inserter"]);
+        Assert.Equal("retained-belt", reconciled.Entities["belt-77"]);
+        Assert.Same(plan, reconciled.Plan);
+        Assert.Equal("building", reconciled.Status);
+        reconciled = FactoryTransportConversion.ReconcileSource(cell, snapshot, catalog, new HashSet<string> { "replacement" });
+        Assert.False(reconciled.Entities.ContainsKey("source-inserter"));
+        Assert.Equal("retained-belt", reconciled.Entities["belt-77"]);
+    }
+
+    [Theory]
+    [InlineData(0, "", false, true)]
+    [InlineData(0, "", true, false)]
+    [InlineData(1, "source-arm", false, true)]
+    [InlineData(1, "source-arm", true, true)]
+    [InlineData(1, "foreign", false, false)]
+    [InlineData(2, "source-arm", false, false)]
+    [InlineData(1, "", false, false)]
+    [InlineData(0, "source-arm", false, false)]
+    public void SourceCircuitMustAccountForEveryNativeWireBeforeConversionOrRecovery(int count, string neighbour,
+        bool requireConnection, bool allowed)
+    {
+        var snapshot = new FactorySnapshot("native", new("world", "session", "actor", 1, 1), 2, 100, Protocol.ToElement(new { }),
+        [new("chest", "entity", "source-chest", "iron-chest", Protocol.ToElement(new
+            { transport = new { redNeighbourCount = count, redNeighbours = neighbour.Length == 0 ? Array.Empty<string>() : new[] { neighbour } } }))]);
+        Assert.Equal(allowed, FactoryTransportConversion.SourceWiringIsExclusive(snapshot, "source-chest", "source-arm", requireConnection));
+    }
+
+    [Fact]
+    public void EmptyLuaCircuitTableIsUnwiredButUnknownCircuitCountsNeverAllowRecovery()
+    {
+        var snapshot = new FactorySnapshot("native", new("world", "session", "actor", 1, 1), 2, 100, Protocol.ToElement(new { }),
+        [new("chest", "entity", "source-chest", "iron-chest", Protocol.ToElement(new
+            { transport = new { redNeighbourCount = 0, redNeighbours = new { } } }))]);
+        Assert.True(FactoryTransportConversion.SourceWiringIsExclusive(snapshot, "source-chest", null, false));
+        Assert.False(FactoryTransportConversion.SourceWiringIsExclusive(snapshot, "source-chest", null, true));
+        snapshot = snapshot with { Records = [new("chest", "entity", "source-chest", "iron-chest",
+            Protocol.ToElement(new { transport = new { redNeighbours = Array.Empty<string>() } }))] };
+        Assert.False(FactoryTransportConversion.SourceWiringIsExclusive(snapshot, "source-chest", null, false));
+    }
+
+    private static FactoryRecord Entity(string id, string name, MapPosition position, int direction) => new(id, "entity", id, name,
+        Protocol.ToElement(new { role = "factory", position, direction, type = name, force = "own", surfaceIndex = 1 }));
+
+    [Fact]
     public void JointCapacityDoesNotCountOneEmptySlotForTwoDifferentItems()
     {
         var (snapshot, catalog) = Bag(1, Array.Empty<object>(), Array.Empty<object>());
