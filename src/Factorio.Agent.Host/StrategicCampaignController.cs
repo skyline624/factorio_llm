@@ -130,10 +130,16 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             if (feedback.Length > 4000) feedback = Feedback(result, after.Tick, compact: true);
             memory = new(1, after.Scope, after.Tick, false, feedback, Deferred: memory.Deferred);
             await LocalJson.WriteAsync(memoryPath, memory, token);
-            observation = after;
             string goalKey = JsonSerializer.Serialize(new { result.Goal.Category, result.Goal.Target, result.Goal.Quantity, result.Goal.Unit }, Protocol.Json);
-            repeated = lastGoal == goalKey ? repeated + 1 : 1;
+            bool progressingSearch = result is { Discovery: null, UnsupportedReason: null, SearchProgress: { NewSurveyedCells: > 0, CoverageTruncated: false } progress }
+                && result.Goal.Category == GoalCategory.Exploration && progress.Resource == result.Goal.Target
+                && progress.SearchSteps is > 0 and <= ResourceDiscoveryController.MaximumSearchSteps
+                && progress.StartTick >= observation.Tick && progress.EndTick > progress.StartTick && progress.EndTick <= after.Tick;
+            // A freshly measured expansion is a new search segment, not a blind replay of the same failed action.
+            // Empty or truncated coverage retains the repeated-goal stop and every goal still consumes its outer budget.
+            repeated = progressingSearch ? 0 : lastGoal == goalKey ? repeated + 1 : 1;
             lastGoal = goalKey;
+            observation = after;
             if (observation.Rockets > 0) return new(true, index + 1, observation.Tick, "rocket-observed");
             if (repeated >= 3) return new(false, index + 1, observation.Tick, "repeated-goal");
         }
@@ -155,6 +161,9 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             discovery = result.Discovery is { } discovery ? new { discovery.Resource, discovery.NativeAmount,
                 discovery.StartTick, discovery.EndTick, discovery.SearchSteps,
                 evidence = "current-native-local-resource", interpretation = "Observed deposit; extraction capacity and factory site are not proven." } : null,
+            searchProgress = result.SearchProgress is { } progress ? new { progress.Resource, progress.StartTick, progress.EndTick,
+                progress.SearchSteps, progress.NewSurveyedCells, progress.CoverageTruncated, completed = false,
+                evidence = "native-local-coverage", interpretation = "No deposit discovered; global absence and reachability remain unproven. New coverage can support a further bounded search from the current world." } : null,
             result.Rocket,
             Defense = defense,
             automation = result.Automation?.Stages.Select(s => new { s.Recipe, s.Machines, s.CraftsPerMinute }).ToArray(),
@@ -170,7 +179,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             {
                 observedTick = tick,
                 goal = new { result.Goal.Category, result.Goal.Target, result.Goal.Quantity, result.Goal.Unit },
-                completed = result.UnsupportedReason is null, evidenceTruncated = true,
+                completed = result.UnsupportedReason is null && result.SearchProgress is null, evidenceTruncated = true,
                 evidenceScope = "Verified details exceeded the context budget; observe current stock and conditions again."
             }, Protocol.Json);
         return feedback;

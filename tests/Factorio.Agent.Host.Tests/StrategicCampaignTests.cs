@@ -31,6 +31,58 @@ public sealed class StrategicCampaignTests : IDisposable
     }
 
     [Fact]
+    public async Task NewNativeCoverageCanContinueTheSameResourceSearchWithinTheOuterBudget()
+    {
+        var game = new Game();
+        var runner = new Runner(() => SearchProgress(game.Tick, game.Tick + 1, 120));
+        var result = await new StrategicCampaignController(game, runner, Memory).RunAsync(5);
+        Assert.Equal("goal-budget", result.StopReason);
+        Assert.Equal(5, result.GoalsExecuted);
+        Assert.False(result.RocketLaunched);
+        using var feedback = JsonDocument.Parse(runner.History[1]!);
+        Assert.Equal(JsonValueKind.Null, feedback.RootElement.GetProperty("discovery").ValueKind);
+        var progress = feedback.RootElement.GetProperty("searchProgress");
+        Assert.False(progress.GetProperty("completed").GetBoolean());
+        Assert.Equal(120, progress.GetProperty("newSurveyedCells").GetInt32());
+        Assert.Contains("No deposit discovered", progress.GetProperty("interpretation").GetString());
+        Assert.False(JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(Memory), Protocol.Json)!.Pending);
+    }
+
+    [Theory]
+    [InlineData("no-new-coverage")]
+    [InlineData("truncated")]
+    [InlineData("old-measurement")]
+    [InlineData("future-measurement")]
+    [InlineData("different-resource")]
+    public async Task IncompleteSearchWithoutFreshVerifiedCoverageRetainsTheRepeatedGoalStop(string fault)
+    {
+        var game = new Game();
+        var runner = new Runner(() =>
+        {
+            var result = SearchProgress(game.Tick, game.Tick + 1, 120);
+            var progress = result.SearchProgress!;
+            progress = fault switch
+            {
+                "no-new-coverage" => progress with { NewSurveyedCells = 0 },
+                "truncated" => progress with { CoverageTruncated = true },
+                "old-measurement" => progress with { StartTick = 1, EndTick = 2 },
+                "future-measurement" => progress with { EndTick = game.Tick + 100 },
+                "different-resource" => progress with { Resource = "iron-ore" },
+                _ => progress
+            };
+            return result with { SearchProgress = progress };
+        });
+        var result = await new StrategicCampaignController(game, runner, Memory).RunAsync(10);
+        Assert.Equal("repeated-goal", result.StopReason);
+        Assert.Equal(3, result.GoalsExecuted);
+        Assert.False(result.RocketLaunched);
+    }
+
+    private static StrategicGoalResult SearchProgress(long start, long end, int cells) => new(
+        Completed().Goal with { Category = GoalCategory.Exploration, Target = "crude-oil" },
+        SearchProgress: new("crude-oil", start, end, 64, cells, false));
+
+    [Fact]
     public async Task InstalledDefenseEvidenceSurvivesIntoTheNextStrategicGoal()
     {
         var defense = new DefenseDeploymentResult("gun-turret", 2, 2, 1, 2, 10, 20, 1, 4, 1, ["existing", "new"], ["exposed"]);

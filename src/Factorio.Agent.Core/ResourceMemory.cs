@@ -26,6 +26,13 @@ public sealed record ResourceMemorySnapshot(string WorldId, int SurfaceIndex, lo
     public static ResourceMemorySnapshot Empty(SpatialSnapshot map) => Empty(map.Scope.WorldId, map.SurfaceIndex, map.CollectedTick);
     public static ResourceMemorySnapshot Empty(string worldId, int surfaceIndex, long tick) => new(worldId, surfaceIndex, tick, [], []);
 
+    /// <summary>Four-tile cells inside this actor's local photograph; charted hints never extend this coverage.</summary>
+    public static IEnumerable<SurveyedCell> LocalCells(SpatialSnapshot map)
+    {
+        for (int x = checked((int)Math.Ceiling(map.Bounds.Min.X / 4)); x < map.Bounds.Max.X / 4; x++)
+            for (int y = checked((int)Math.Ceiling(map.Bounds.Min.Y / 4)); y < map.Bounds.Max.Y / 4; y++) yield return new(x, y);
+    }
+
     public void ValidateFor(SpatialSnapshot map) => ValidateFor(map.Scope.WorldId, map.SurfaceIndex, map.CollectedTick);
 
     public void ValidateFor(string worldId, int surfaceIndex, long tick)
@@ -49,8 +56,7 @@ public sealed record ResourceMemorySnapshot(string WorldId, int SurfaceIndex, lo
         // Within current coverage, absence invalidates a former sample, charted or not.
         var samples = Compact(Resources.Where(r => !map.Bounds.Contains(r.Position)).Concat(current));
         var cells = SurveyedCells.ToHashSet();
-        for (int x = checked((int)Math.Ceiling(map.Bounds.Min.X / 4)); x < map.Bounds.Max.X / 4; x++)
-            for (int y = checked((int)Math.Ceiling(map.Bounds.Min.Y / 4)); y < map.Bounds.Max.Y / 4; y++) cells.Add(new(x, y));
+        cells.UnionWith(LocalCells(map));
         return new(WorldId, SurfaceIndex, map.CollectedTick, samples.Take(ResourceLimit).ToArray(),
             cells.OrderBy(c => new MapPosition(c.X * 4d, c.Y * 4d).DistanceTo(map.Actor.Position))
                 .ThenBy(c => c.Y).ThenBy(c => c.X).Take(SurveyLimit).ToArray(),
