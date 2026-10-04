@@ -131,6 +131,12 @@ L'essai séparé **20261118**, sur Factorio **2.0.77 headless**, fournit explici
 
 Le rapport préparé passe, puis le serveur est sauvegardé et arrêté. Les **1 344 tests ordinaires** passent également, sans jeu ni appel cloud. Cette preuve vérifie le remplacement et sa production native ; elle ne mesure pas encore le gain de temps dans une campagne normale ni un débit industriel soutenu.
 
+### Débit de cuivre mesuré dans une partie normale
+
+Le 4 octobre 2026, dans le monde normal de développement **20261072**, les cinq nouvelles cellules de cuivre produisent **1 304 plaques** entre les ticks **904069 et 954173**. La différence de leurs compteurs natifs `productsFinished`, pour la même recette et les mêmes identités, mesure **93,69 plaques par minute de jeu sur 13,92 minutes**, au-dessus de la demande de 60/minute. Les deux photographies appartiennent au même personnage, monde et génération ; elles constatent zéro mort et zéro intervention humaine. Les ennemis restent actifs et aucun minerai, produit ou déblocage n'est fourni artificiellement.
+
+Cette fenêtre mesure la production achevée, indépendamment des stocks physiques et du transit. Elle ne garantit pas ce débit indéfiniment : le personnage collecte encore des sorties et apporte du combustible. La mesure précède le nouveau cadrage des transports entre cellules ; elle ne qualifie ni leur équilibrage, ni une usine entièrement alimentée par tapis, ni une fusée.
+
 ## Limites
 
 - Seuls les produits minés directement ou issus d'une recette de fusion à un seul minerai sont pris en charge ; l'acier reste hors de ces cellules et passe par les [bandes de fours](furnace-bands.md).

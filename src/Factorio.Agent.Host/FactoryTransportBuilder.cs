@@ -57,8 +57,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                     // Keep the existing graph, but do not mistake one supplier for enough supply or retry its old link.
                     if ((state.Transports ?? []).Any(b => b.Item == ingredient.Name && b.SourceCellId == candidate.Cell.Id
                         && b.Consumers.Any(c => c.TargetCellId == target.Id))) continue;
-                    // A local proof cannot invent tiles between distant installations. Other links retain actor logistics.
-                    if (candidate.Position!.DistanceTo(destination) > 64) continue;
+                    var existingBus = (state.Transports ?? []).SingleOrDefault(b => b.SourceCellId == candidate.Cell.Id && b.Item == ingredient.Name);
+                    if (PlanningCenter(snapshot, FrameEntities(state, candidate.Cell, target, existingBus)) is null) continue;
                     if (++considered > 8) return connected;
                     int limit = checked((int)Math.Clamp(ingredient.Amount!.Value * FactoryLogistics.CellBufferCrafts(target, shares, 40), 1, 10000));
                     if (await LinkAsync(candidate.Cell.Id, target.Id, ingredient.Name, limit, catalog, controller, token))
@@ -94,18 +94,21 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             var source = state.Cells.Where(c => c.Id != target.Id && c.Status == "ready" && c.Entities.ContainsKey("output-chest")
                 && Product(catalog, c) == ingredient.Name && !(state.Transports ?? []).Any(b => b.SourceCellId == c.Id))
                 .Select(c => (Cell: c, Position: Position(snapshot, c.Entities["output-chest"])))
-                .Where(p => p.Position is not null && p.Position.DistanceTo(destination) <= 64)
+                .Where(p => p.Position is not null && PlanningCenter(snapshot, [p.Cell.Entities["output-chest"], targetChest]) is not null)
                 .OrderBy(p => p.Position!.DistanceTo(destination)).Select(p => p.Cell).FirstOrDefault();
             // Existing buses retain their extension path; a distant/unobserved supply retains actor logistics.
             if (source is null) return (0, false);
             int limit = checked((int)Math.Clamp(ingredient.Amount!.Value * FactoryLogistics.CellBufferCrafts(target, shares, 40), 1, 10000));
             requests.Add((source, ingredient.Name, limit));
         }
-        await controller.ApproachEntityAsync(targetChest, destination, catalog, token);
+        var frameEntities = requests.Select(r => r.Source.Entities["output-chest"]).Append(targetChest).ToArray();
+        var frameCenter = PlanningCenter(snapshot, frameEntities);
+        if (frameCenter is null) return (0, false);
+        await controller.TravelAsync(frameCenter, 4, catalog, token);
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
         var map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Transport batch planning scope changed.");
-        if (!map.Entities.Any(e => e.Id == targetChest) || requests.Any(r => !map.Entities.Any(e => e.Id == r.Source.Entities["output-chest"]))
+        if (frameEntities.Any(id => !map.Entities.Any(e => e.Id == id))
             || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0) return (0, false);
         map = ProtectBands(map, state, steam);
         var plan = await ControllerPlanning.RunAsync(t => new BeltTransportBatchPlanner().Find(map, Equipment,
@@ -134,6 +137,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             connected++;
         }
         return (connected, true);
+
     }
 
     private static (FactoryCell Cell, FactoryTransportBus Bus) NewBus(string sourceCellId, string targetCellId, string item,
@@ -176,13 +180,18 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         if (bus is not null && !FactoryTransportHealth.Healthy(state, snapshot, bus)) return false;
         var from = Position(snapshot, source.Entities["output-chest"]);
         var to = Position(snapshot, target.Entities["input-chest"]);
-        if (from is null || to is null || from.DistanceTo(to) > 64) return false;
-        await controller.ApproachEntityAsync(source.Entities["output-chest"], from, catalog, token);
+        if (from is null || to is null) return false;
+        var frameEntities = FrameEntities(state, source, target, bus);
+        var frameCenter = PlanningCenter(snapshot, frameEntities);
+        if (frameCenter is null) return false;
+        await controller.TravelAsync(frameCenter, 4, catalog, token);
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
         var map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Transport planning scope changed.");
-        if (!map.Entities.Any(e => e.Id == target.Entities["input-chest"]) || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0)
+        if (frameEntities.Any(id => !map.Entities.Any(e => e.Id == id)) || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0)
             return false;
+        await journal.AppendAsync("factory-transport-frame", new { map.Scope, map.CollectedTick, sourceCellId, targetCellId,
+            requestedCenter = frameCenter, observedCenter = map.Actor.Position, map.Bounds, requiredEntities = frameEntities.Length }, token);
         map = ProtectBands(map, state, steam);
         if (bus is null)
         {
@@ -388,4 +397,24 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             ?? (cell.IsResource ? cell.Recipe : null);
     private static MapPosition? Position(FactorySnapshot snapshot, string id) => snapshot.Records.FirstOrDefault(r => r.Kind == "entity" && r.EntityId == id)
         ?.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json);
+
+    private static string[] FrameEntities(FactoryState state, FactoryCell source, FactoryCell target, FactoryTransportBus? bus) =>
+        [.. new[] { source.Entities["output-chest"], target.Entities["input-chest"] }
+            .Concat(bus is null ? [] : state.Cells.Single(c => c.Id == bus.CellId).Entities.Values)
+            .Concat(bus is null ? [] : bus.Consumers.Select(c => state.Cells.Single(t => t.Id == c.TargetCellId).Entities["input-chest"]))
+            .Distinct(StringComparer.Ordinal)];
+
+    /// <summary>One native radius-48 photograph must cover every endpoint and retained bus part, with room for approaches and routing.</summary>
+    internal static MapPosition? PlanningCenter(FactorySnapshot snapshot, IReadOnlyList<string> entityIds)
+    {
+        if (entityIds.Count == 0) return null;
+        var positions = entityIds.Distinct(StringComparer.Ordinal).Select(id => Position(snapshot, id)).ToArray();
+        if (positions.Any(p => p is null || !double.IsFinite(p.X) || !double.IsFinite(p.Y))) return null;
+        double left = positions.Min(p => p!.X), right = positions.Max(p => p!.X);
+        double top = positions.Min(p => p!.Y), bottom = positions.Max(p => p!.Y);
+        // Eight tiles on either side retain four tiles even when travel stops four tiles from the requested center.
+        // This is a bounded local proposal, not a claim that longer connections are impossible.
+        if (right - left > 80 || bottom - top > 80) return null;
+        return new(left + (right - left) / 2, top + (bottom - top) / 2);
+    }
 }
