@@ -104,6 +104,31 @@ public sealed class GrowingOutputLogisticsTests
     }
 
     [Fact]
+    public async Task CoalIngredientShortfallDoesNotStartBurnerFuelProcurement()
+    {
+        string directory = Directory.CreateTempSubdirectory("stage-recipe-coal-").FullName;
+        try
+        {
+            var catalog = OilCatalogs.Oil();
+            var game = new OutputGame(0, 0, false, recipeInput: true, nativeCatalog: catalog, recipeItem: "coal");
+            var cell = new FactoryCell("plastic", 0, new(0, 0, true), "fluid", "chemical-plant", "plastic-bar",
+                new Dictionary<string, string> { ["input-chest"] = "input" }, "ready", 100, Plan: new Dictionary<string, PlannedEntity>());
+            await new FactoryRegistry(directory).SaveAsync(new FactoryState(1, game.Scope.WorldId, [], [cell])
+                .WithTarget("plastic-bar", 30), default);
+            var stage = AutomationPlanner.Plan(catalog, "plastic-bar", 30, FactoryDirector.MachineItems(catalog),
+                fluidMachineItems: FluidChainDirector.Machines(catalog)).Stages.Single(s => s.Recipe == "plastic-bar");
+            var journal = new Journal();
+            await new FactoryDirector(game, journal, directory).StartStageAsync(stage, catalog, new HashSet<string> { cell.Id }, default);
+            var tour = Assert.Single(journal.Logistics);
+            Assert.Equal(150, tour.Shortfall.GetValueOrDefault("coal"));
+            Assert.Equal(0, tour.FuelShortfall);
+            Assert.Equal(0, game.Submissions);
+            Assert.DoesNotContain("production-method", journal.Types);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
     public async Task ANewStageStartsWithoutVisitingOtherConsumersOrReplacingTheFullTourReceipt()
     {
         string directory = Directory.CreateTempSubdirectory("stage-startup-").FullName;
@@ -305,7 +330,15 @@ public sealed class GrowingOutputLogisticsTests
     private sealed class Journal : IControllerJournal
     {
         public List<string> Types { get; } = [];
-        public Task AppendAsync(string type, object data, CancellationToken token) { Types.Add(type); return Task.CompletedTask; }
+        public List<LogisticsResult> Logistics { get; } = [];
+        public Task AppendAsync(string type, object data, CancellationToken token)
+        {
+            Types.Add(type);
+            if (data is LogisticsResult result) Logistics.Add(result);
+            else if (type == "factory-stage-logistics")
+                Logistics.Add(Protocol.ToElement(data).GetProperty("result").Deserialize<LogisticsResult>(Protocol.Json)!);
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>Six items in the cycle photograph; a different native quantity after approach, with measured receipts.</summary>

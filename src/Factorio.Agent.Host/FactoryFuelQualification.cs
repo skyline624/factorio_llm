@@ -12,7 +12,7 @@ public sealed class FactoryFuelQualification(RuntimeSession session)
         if (!session.IsFixture || File.Exists(new FactoryRegistry(session.Directory).Path))
             throw new InvalidOperationException("Factory fuel qualification requires a fresh explicit fixture.");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromMinutes(8));
+        deadline.CancelAfter(TimeSpan.FromMinutes(12));
         token = deadline.Token;
         using var lease = ActorControlLease.Acquire(session.Directory);
         await using var game = session.CreateClient(lease);
@@ -127,6 +127,56 @@ public sealed class FactoryFuelQualification(RuntimeSession session)
                 && Coal(scarceAfter, feeder) == Coal(scarceBefore, feeder) && scarceResult.Supplied.GetValueOrDefault("coal") == 120
                 && scarceResult.Shortfall.GetValueOrDefault("coal") == 0 && !scarceResult.PowerStarved,
                 "A healthy feeder consumed scarce ignition coal while native producers stayed dry.");
+            // A separate prepared startup: two dry furnaces, a low boiler, no carried/stored coal, and a real coal drill.
+            // Keep the other eight fixtures physically present but outside this phase's explicit service registry.
+            string startupReply = await session.CreateRcon().ExecuteAsync($$"""
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; c.get_main_inventory().clear(); assert(c.insert{name='burner-mining-drill',count=1}==1); assert(c.teleport({-35,36})); local ids={}; for _,id in pairs{ {{ids}} } do ids[id]=true end; for _,e in pairs(s.find_entities_filtered{type='furnace',force=f}) do if ids[e.unit_number] then e.get_fuel_inventory().clear(); e.burner.remaining_burning_fuel=0; e.get_inventory(defines.inventory.furnace_source).clear(); e.get_inventory(defines.inventory.furnace_result).clear(); assert(e.get_inventory(defines.inventory.furnace_source).insert{name='iron-ore',count=50}==50) end end; for _,e in pairs(s.find_entities_filtered{type='container',force=f}) do if e.unit_number=={{chest}} or e.unit_number=={{feeder}} then e.get_inventory(defines.inventory.chest).clear() end end; for _,e in pairs(s.find_entities_filtered{type='boiler',force=f}) do if e.unit_number=={{boiler}} then e.get_fuel_inventory().clear(); e.burner.remaining_burning_fuel=0; assert(e.get_fuel_inventory().insert{name='coal',count=3}==3) end end; for x=-37,-32 do for y=33,38 do for _,e in pairs(s.find_entities_filtered{area={ {x,y}, {x+1,y+1} },type='resource'}) do e.destroy() end; assert(s.create_entity{name='coal',position={x+.5,y+.5},amount=10000}) end end; rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,players=#game.connected_players,carriedCoal=c.get_item_count('coal'),sourceCoal=0,coalPatch=true,boilerCoal=3,selectedFurnaces=2,orePerFurnace=50})
+                """, token);
+            using var startupSetup = JsonDocument.Parse(startupReply);
+            evidence.Add(new { check = "explicit-cold-stage-and-coal-patch", native = startupSetup.RootElement.Clone() });
+            var drillAt = new MapPosition(-35, 34);
+            string coalDrill = await builder.BuildAtAsync("burner-mining-drill", new(drillAt, 0, 0), catalog, controller, token);
+            string drillReply = await session.CreateRcon().ExecuteAsync($$"""
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; local d; for _,e in pairs(s.find_entities_filtered{type='mining-drill',force=f}) do if e.unit_number=={{coalDrill}} then d=e; break end end; assert(d and d.name=='burner-mining-drill' and d.get_fuel_inventory().insert{name='coal',count=2}==2); rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,drill=d.unit_number,starterCoal=2,carriedCoal=c.get_item_count('coal')})
+                """, token);
+            await journal.AppendAsync("prepared-drill-starter-reply", new { reply = drillReply }, token);
+            using var drillSetup = JsonDocument.Parse(drillReply);
+            evidence.Add(new { check = "explicit-drill-starter", native = drillSetup.RootElement.Clone() });
+            var selected = furnaces.Take(2).Select(id => "fuel-" + id).ToHashSet(StringComparer.Ordinal);
+            current = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            current = current with { Cells = current.Cells.Where(c => selected.Contains(c.Id) || c.Kind == "power" || c.Id == "coal-stock").ToArray() };
+            current = current.With(new FactoryCell("coal-stock", 0, new(0, 0, true), "miner", "burner-mining-drill", "coal",
+                new Dictionary<string, string> { ["drill"] = coalDrill, ["output-chest"] = chest }, "ready", catalog.CollectedTick,
+                Plan: new Dictionary<string, PlannedEntity> { ["drill"] = new("drill", "burner-mining-drill", drillAt, 0),
+                    ["output-chest"] = new("output-chest", "iron-chest", sourcePosition, 0) }));
+            await registry.SaveAsync(current, token);
+            var stageBefore = await snapshots.CaptureAsync(cancellationToken: token);
+            int journalStart = (await File.ReadAllLinesAsync(journalPath, token)).Length;
+            await new FactoryDirector(game, journal, session.Directory).StartStageAsync(
+                new AutomationStage("iron-plate", "iron-plate", "stone-furnace", 6, 2, "smelter"), catalog, selected, token);
+            var stageWait = await controller.WorkAsync("wait", new { ticks = 600 }, 900, token: token);
+            Require(stageWait.Status == "completed", "Cannot observe restarted stage production.");
+            var stageAfter = await snapshots.CaptureAsync(cancellationToken: token);
+            JsonElement stageWitness = default;
+            foreach (string line in (await File.ReadAllLinesAsync(journalPath, token)).Skip(journalStart))
+            {
+                using var row = JsonDocument.Parse(line);
+                string? type = row.RootElement.GetProperty("type").GetString();
+                var data = row.RootElement.GetProperty("data");
+                if (type == "submission") Require(data.GetProperty("kind").GetString() is not ("craft" or "mine" or "build"), "Fuel startup must reuse native coal extraction without crafting, mining or additional construction.");
+                if (type == "factory-stage-startup") stageWitness = data.Clone();
+            }
+            Require(stageWitness.ValueKind == JsonValueKind.Object, "Missing stage startup witness.");
+            long demanded = stageWitness.GetProperty("initialStartup").GetProperty("fuelShortfall").GetInt64();
+            long targetCoal = stageWitness.GetProperty("fuelProcurement").GetProperty("targetStock").GetInt64();
+            var stageBurners = furnaces.Take(2).Select(id => new { id, before = Coal(stageBefore, id), after = Coal(stageAfter, id),
+                craftsBefore = Crafts(stageBefore, id), craftsAfter = Crafts(stageAfter, id) }).ToArray();
+            evidence.Add(new { check = "native-stage-procures-ignition-and-restarts-before-returning", stageWitness, stageBurners,
+                targetCoal, demanded, drillCoal = Coal(stageAfter, coalDrill), boilerCoal = Coal(stageAfter, boiler),
+                feederCoal = Coal(stageAfter, feeder), startTick = stageBefore.CollectedTick, endTick = stageAfter.CollectedTick });
+            Require(demanded is > 0 and <= 60 && targetCoal is > 0 and <= 60 && stageBurners.All(b => b.before == 0 && b.after > 0 && b.craftsAfter > b.craftsBefore)
+                && Coal(stageAfter, coalDrill) > 0 && Coal(stageAfter, boiler) + Coal(stageAfter, feeder) >= 12 && stageAfter.Scope == stageBefore.Scope,
+                "Bounded native stage ignition did not restart coal and both furnaces while preserving boiler supply.");
             using var final = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync("""
                 /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; rcon.print(helpers.table_to_json{tick=game.tick,character=c.unit_number,players=#game.connected_players,craftingQueue=c.crafting_queue_size})
                 """, token));

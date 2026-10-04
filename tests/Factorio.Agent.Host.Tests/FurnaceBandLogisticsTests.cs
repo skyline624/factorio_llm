@@ -10,13 +10,14 @@ public sealed class FurnaceBandLogisticsTests
     [InlineData(14, 0, 0)]
     [InlineData(12, 0, 0)]
     [InlineData(8, 5, 0)]
-    [InlineData(3, 0, 12)]
-    [InlineData(0, 0, 15)]
-    public void OnlyALowBandFurnaceSupplyAsksForCoalProcurement(long chest, long furnace, long shortfall)
+    [InlineData(3, 0, 9)]
+    [InlineData(0, 0, 12)]
+    public void LowBandFurnaceSupplyProcuresOnlyItsQuarterStackGap(long chest, long furnace, long shortfall)
     {
         using var world = new World(chest, furnace);
         var result = world.Service();
         Assert.Equal(shortfall, result.Shortfall.GetValueOrDefault("coal"));
+        Assert.Equal(shortfall, result.FuelShortfall);
         Assert.Empty(result.Supplied);
     }
 

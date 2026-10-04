@@ -77,7 +77,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             if (stage.Kind == FluidCellBuilder.MachineKind)
             {
                 await fluids.EnsureStageAsync(stage, catalog, token);
-                await StartStageAsync(stage, catalog, existing, token);
+                await StartStageAsync(stage, catalog, existing, token, isObjectiveComplete);
                 continue;
             }
             var ready = before.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready").Select(c => c.MachineItem).ToArray();
@@ -88,12 +88,12 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             {
                 if (await DeferAsync())
                 {
-                    await StartStageAsync(stage, catalog, existing, token);
+                    await StartStageAsync(stage, catalog, existing, token, isObjectiveComplete);
                     return plan;
                 }
                 await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
             }
-            await StartStageAsync(stage, catalog, existing, token);
+            await StartStageAsync(stage, catalog, existing, token, isObjectiveComplete);
         }
         if (await DeferAsync()) return plan;
         await new FactoryTransportBuilder(game, journal, directory).ConnectAsync(catalog, token: token);
@@ -110,7 +110,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
 
     /// <summary>Refills this stage before downstream construction, including suppliers retained from a previous call.</summary>
     internal async Task StartStageAsync(AutomationStage stage, ProductionCatalog catalog, IReadOnlySet<string> existing,
-        CancellationToken token)
+        CancellationToken token, Func<CancellationToken, Task<bool>>? isObjectiveComplete = null)
     {
         var current = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
         var serviced = current.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready")
@@ -121,7 +121,24 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             .ConnectAsync(catalog, token: token, targetCellIds: serviced);
         var startup = await new FactoryLogistics(game, journal, directory)
             .ServiceAsync(FactoryLogistics.MinimumBufferCrafts, token, usePlannedBuffers: true, targetCellIds: serviced);
-        await journal.AppendAsync("factory-stage-startup", new { stage.Recipe, added, serviced, links, startup }, token);
+        var initialStartup = startup;
+        // A stage's input can be belt-covered even though its raw supplier ran out of coal during construction.
+        // Pay one bounded ignition shortfall before building downstream consumers; existing stocks still fill reserves.
+        StockGoalResult? fuelProcurement = null;
+        long fuelMissing = startup.FuelShortfall;
+        if (fuelMissing > 0 && (isObjectiveComplete is null || !await isObjectiveComplete(token)))
+        {
+            var stock = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            if (stock.Scope != catalog.Scope) throw new InvalidDataException("Actor changed before stage fuel procurement.");
+            int target = (int)Math.Min(1000, FactoryLogistics.Carried(stock).GetValueOrDefault(FactoryLogistics.Fuel) + Math.Min(fuelMissing, 400));
+            using (ProductionReservations.EnterFactory(await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token)))
+                fuelProcurement = await new ProductionGoalExecutor(game, journal).RunAsync(FactoryLogistics.Fuel, target, token);
+            stock = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            if (stock.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during stage fuel procurement.");
+            startup = await new FactoryLogistics(game, journal, directory)
+                .ServiceAsync(FactoryLogistics.MinimumBufferCrafts, token, usePlannedBuffers: true, targetCellIds: serviced);
+        }
+        await journal.AppendAsync("factory-stage-startup", new { stage.Recipe, added, serviced, links, initialStartup, fuelProcurement, startup }, token);
     }
 
     public async Task<int> EnsureLabsAsync(int count, CancellationToken token)

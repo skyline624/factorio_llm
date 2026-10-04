@@ -51,13 +51,14 @@ public sealed class FactoryPowerLogisticsTests
     [Theory]
     [InlineData(45, 3, 0)]
     [InlineData(8, 4, 0)]
-    [InlineData(5, 2, 195)]
-    [InlineData(0, 1, 200)]
-    public void OnlyALowFeederSupplyAsksForCoalProcurement(long chest, long boiler, long shortfall)
+    [InlineData(5, 2, 5)]
+    [InlineData(0, 1, 11)]
+    public void LowFeederSupplyProcuresItsIgnitionGapBeforeItsFourStackBuffer(long chest, long boiler, long shortfall)
     {
         using var world = new World(chest, boiler, carried: 0);
         var result = world.Service();
         Assert.Equal(shortfall, result.Shortfall.GetValueOrDefault("coal"));
+        Assert.Equal(shortfall, result.FuelShortfall);
         Assert.DoesNotContain("submit", world.Game.Calls);
     }
 
@@ -76,7 +77,8 @@ public sealed class FactoryPowerLogisticsTests
     {
         using var world = new World(chest: 0, boiler: 0, carried: 0);
         var result = world.Service(new HashSet<string> { "new-stage" });
-        Assert.Equal(212, result.Shortfall.GetValueOrDefault("coal")); // Feeder reserve plus the dry boiler's ignition fuel.
+        Assert.Equal(24, result.Shortfall.GetValueOrDefault("coal")); // Feeder ignition plus the dry boiler's direct restart.
+        Assert.Equal(24, result.FuelShortfall);
         Assert.Contains("factory-stage-logistics", world.Journal.Types);
         Assert.DoesNotContain("submit", world.Game.Calls);
     }

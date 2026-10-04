@@ -12,6 +12,24 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
     private static readonly AsyncLocal<bool> Preparing = new();
     internal static bool IsPreparing => Preparing.Value;
 
+    /// <summary>Reuse only a registered pair's observed native drop; it never contributes receivers to construction.</summary>
+    internal static ResourceExtractionPlan? FindReservedConnection(string item, ProductionCatalog catalog, SpatialSnapshot map,
+        ProductionState state, CancellationToken token = default, string? drillId = null, string? chestId = null)
+    {
+        foreach (var pair in ProductionReservations.Extractors.Where(p => p.Item == item
+                     && (drillId is null || p.DrillId == drillId) && (chestId is null || p.ChestId == chestId))
+                 .OrderBy(p => state.Entities.FirstOrDefault(e => e.Id == p.ChestId)?.Position.DistanceTo(map.Actor.Position)
+                     ?? double.PositiveInfinity))
+        {
+            var owned = state.Entities.Where(e => e.Id == pair.DrillId || e.Id == pair.ChestId)
+                .ToDictionary(e => e.Id, e => e.AsMachine(), StringComparer.Ordinal);
+            var found = new StoredResourceExtractionPlanner().Find(item, catalog, map, state.Inventory, owned,
+                allowConstruction: false, token: token);
+            if (found?.ExistingDrillId == pair.DrillId && found.Connection.ReceiverId == pair.ChestId) return found;
+        }
+        return null;
+    }
+
     /// <summary>Only one cold-start fuel item; ordinary raw batches remain machine production.</summary>
     internal static async Task BootstrapFuelAsync(IGameClient game, IControllerJournal journal, string fuel, CancellationToken token)
     {
@@ -69,7 +87,9 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
             var supplied = StoredExtractionStock.From(stock, drill.Id, chest.Id, item, electric);
             if (supplied.Output > 0) continue;
             if (supplied.Insertable == 0) throw new InvalidOperationException("Native storage capacity blocks extraction; reconcile its bar, filters or contents.");
-            if (iteration % 10 == 0 && await new ExtractionRecoveryController(game, journal).TryRecoverAsync(drill.Id, catalog, controller, token))
+            // A registered miner may supply its product, but only factory maintenance may dismantle its cell.
+            if (iteration % 10 == 0 && !ProductionReservations.Current.Contains(drill.Id)
+                && await new ExtractionRecoveryController(game, journal).TryRecoverAsync(drill.Id, catalog, controller, token))
             {
                 plan = await PrepareAsync();
                 map = await MapAsync();
@@ -122,10 +142,13 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
             var state = await ObserveAsync();
             ResourceExtractionPlan? selected = null;
             // Registry locations are hints only; native geometry is recaptured at the destination.
-            foreach (var known in state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id)
+            var registeredChests = ProductionReservations.Extractors.Where(p => p.Item == item)
+                .Select(p => p.ChestId).ToHashSet(StringComparer.Ordinal);
+            foreach (var known in state.Entities.Where(e => (!ProductionReservations.Current.Contains(e.Id) || registeredChests.Contains(e.Id))
                          && catalog.Items.Values.Any(i => i.PlaceEntity == e.Name && i.PlaceEntityType == "container")
                          && e.AsMachine().Output!.All(p => p.Value == 0 || p.Key == item))
-                     .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).Take(8))
+                     .OrderByDescending(e => registeredChests.Contains(e.Id))
+                     .ThenBy(e => e.Position.DistanceTo(map.Actor.Position)).Take(8))
             {
                 await controller.TravelAsync(known.Position, 8, catalog, token);
                 // The initial recovery pass cannot see a distant depleted drill. Recheck here before buying its replacement.
@@ -182,16 +205,18 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
         async Task FuelAsync(ProductionState state)
         {
             map = await MapAsync();
-            var confirmed = planner.Find(item, catalog, map, state.Inventory, Owned(state), allowConstruction: false);
+            var confirmed = ProductionReservations.Current.Contains(drill.Id) || ProductionReservations.Current.Contains(chest.Id)
+                ? FindReservedConnection(item, catalog, map, state, token, drill.Id, chest.Id)
+                : planner.Find(item, catalog, map, state.Inventory, Owned(state), allowConstruction: false);
             if (confirmed?.ExistingDrillId != drill.Id || confirmed.Connection.ReceiverId != chest.Id)
                 throw new InvalidOperationException("The extraction connection or remaining resource changed; reconcile before refuelling.");
             var categories = map.Prototypes[drill.Name].FuelCategories!;
             var fuels = catalog.Items.Where(p => p.Value.FuelValue > 0 && p.Value.FuelCategory is { } category && categories.ContainsKey(category))
                 .OrderByDescending(p => state.Inventory.GetValueOrDefault(p.Key) > 0)
-                .ThenByDescending(p => state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id)).Sum(e => e.Count("output", p.Key)) > 0)
+                .ThenByDescending(p => state.Entities.Where(e => ProductionReservations.Collects(e.Id)).Sum(e => e.Count("output", p.Key)) > 0)
                 .ThenByDescending(p => p.Value.FuelValue).ThenBy(p => p.Key, StringComparer.Ordinal).ToArray();
             var chosen = fuels.FirstOrDefault(p => state.Inventory.GetValueOrDefault(p.Key) > 0
-                || state.Entities.Any(e => !ProductionReservations.Current.Contains(e.Id) && e.Count("output", p.Key) > 0)
+                || state.Entities.Any(e => ProductionReservations.Collects(e.Id) && e.Count("output", p.Key) > 0)
                 || catalog.Mining.Values.Any(products => products.Any(p2 => p2.Name == p.Key && p2.DeterministicItem)));
             if (chosen.Key is null) throw new InvalidOperationException("No obtainable native burner fuel.");
             double work = ExtractionPlanner.WorkEnergy(confirmed.Connection, map, plan.Equipment.DrillItem, catalog, item,
@@ -200,7 +225,7 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
             long available = state.Inventory.GetValueOrDefault(chosen.Key);
             if (available == 0)
             {
-                long stored = state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id)).Sum(e => e.Count("output", chosen.Key));
+                long stored = state.Entities.Where(e => ProductionReservations.Collects(e.Id)).Sum(e => e.Count("output", chosen.Key));
                 // A cold burner needs one starter item; its own coal can then sustain further extraction.
                 await BootstrapAsync(chosen.Key, stored > 0 ? checked((int)Math.Min(reserve, stored)) : 1);
             }
@@ -241,6 +266,7 @@ internal sealed class StoredResourceExtractionController(IGameClient game, ICont
         Dictionary<string, KnownProductionMachine> Owned(ProductionState state) => state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id))
             .ToDictionary(e => e.Id, e => e.AsMachine(), StringComparer.Ordinal);
         Task<ResourceExtractionPlan?> PlanAsync(ProductionState state) => ControllerPlanning.RunAsync(
-            cancellation => planner.Find(item, catalog, map, state.Inventory, Owned(state), token: cancellation), controller, TimeSpan.FromMinutes(5), token);
+            cancellation => FindReservedConnection(item, catalog, map, state, cancellation)
+                ?? planner.Find(item, catalog, map, state.Inventory, Owned(state), token: cancellation), controller, TimeSpan.FromMinutes(5), token);
     }
 }

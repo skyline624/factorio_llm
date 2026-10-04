@@ -7,7 +7,7 @@ namespace Factorio.Agent.Host;
 /// <summary>PowerStarved: a boiler stayed below a quarter stack of fuel after this round's distribution.</summary>
 public sealed record LogisticsResult(IReadOnlyDictionary<string, long> Collected, IReadOnlyDictionary<string, long> Supplied,
     IReadOnlyDictionary<string, long> Shortfall, int Actions, long Tick, bool PowerStarved = false, MaintenanceResult? Maintenance = null,
-    IReadOnlyList<DegradedCell>? Degraded = null);
+    IReadOnlyList<DegradedCell>? Degraded = null, long FuelShortfall = 0);
 
 /// <summary>
 /// Maintains native bus controls, then uses the actor for uncovered input demand, finished outputs, laboratories and fuel.
@@ -221,6 +221,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         }
         const string fuel = Fuel;
         long stack = catalog.Items[fuel].StackSize;
+        long fuelShortfall = 0; // Burner restart demand, separate from coal consumed as a recipe ingredient.
         // Laboratory transfers can take minutes. Read current feeder stocks and carried fuel before allocation.
         snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
@@ -247,6 +248,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             }
             ignitionReserve = Math.Max(0, ignitionReserve - Math.Min(moved, Math.Max(0, stack / 4 - inChest.GetValueOrDefault(fuel) - burning)));
             long powerShort = PowerFuelShortfall(need, inChest.GetValueOrDefault(fuel) + moved + burning, stack);
+            fuelShortfall += powerShort;
             if (powerShort > 0) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + powerShort;
         }
         // Steam supply, cell furnaces and burner drills stop without fuel. Refill production burners below half a stack;
@@ -272,7 +274,9 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 supplied[fuel] = supplied.GetValueOrDefault(fuel) + give;
             }
             if (loaded + give >= stack / 4) continue;
-            shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + FuelShortfall(loaded, give, stack);
+            long burnerShort = FuelShortfall(loaded, give, stack);
+            fuelShortfall += burnerShort;
+            shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + burnerShort;
             powerStarved |= power;
         }
         // Band furnaces burn from their input chest, whose inserter loads the fuel slot; they come after power and burners.
@@ -285,13 +289,14 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             long moved = await RefillAsync(chest, fuel, reserve - inChest, reportShort: false);
             long burning = cell.Entities.TryGetValue("machine", out var furnace) ? Items(snapshot, furnace).GetValueOrDefault(fuel) : 0;
             long furnaceShort = PowerFuelShortfall(Math.Max(0, reserve - inChest - moved), inChest + moved + burning, stack);
+            fuelShortfall += furnaceShort;
             if (furnaceShort > 0) shortfall[fuel] = shortfall.GetValueOrDefault(fuel) + furnaceShort;
         }
         // The completion tick belongs after the final native transfer, rather than to the photograph before refills.
         snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
         state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
-        var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, powerStarved, upkeep, degraded);
+        var result = new LogisticsResult(collected, supplied, shortfall, actions, snapshot.CollectedTick, powerStarved, upkeep, degraded, fuelShortfall);
         if (targetCellIds is not null)
         {
             await journal.AppendAsync("factory-stage-logistics", new { targetCellIds, result }, token);
@@ -301,7 +306,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         try
         {
             await new FactoryLogisticsCompletionStore(directory).RecordAsync(catalog.Scope, result.Tick, state, bufferCrafts,
-                powerStarved || FuelReserve(snapshot, state.Cells.Where(c => c.Status == "ready").ToArray(), catalog.Items[Fuel].StackSize) > 0,
+                powerStarved || fuelShortfall > 0 || FuelReserve(snapshot, state.Cells.Where(c => c.Status == "ready").ToArray(), catalog.Items[Fuel].StackSize) > 0,
                 token);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException && !token.IsCancellationRequested)
@@ -604,10 +609,10 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
 
     /// <summary>
     /// Coal worth a procurement trip for a feeder or band furnace chest. Chests are topped up to their target whenever coal is
-    /// carried, but only a supply below a quarter stack, chest and burner together, is reported short: small refills must not
-    /// make the actor a coal miner.
+    /// carried, but procurement requests only the gap to a quarter stack, chest and burner together. Reporting the whole
+    /// four-stack buffer left normal producers dry while the actor waited for 225 coal on 2026-10-04 (seed 20261072).
     /// </summary>
-    internal static long PowerFuelShortfall(long need, long supply, long stack) => supply < stack / 4 ? need : 0;
+    internal static long PowerFuelShortfall(long need, long supply, long stack) => Math.Min(need, Math.Max(0, stack / 4 - supply));
 
     /// <summary>Coal collected and reserved for feeder targets and one stack per direct burner; no procurement demand.</summary>
     internal static long FuelRefillNeed(FactorySnapshot snapshot, IReadOnlyList<FactoryCell> cells, long stack)
