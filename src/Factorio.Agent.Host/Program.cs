@@ -84,6 +84,7 @@ try
           verify-native|verify-defense|verify-factory|verify-spatial|verify-crafting --session FILE
           verify-navigation-flow --session FILE
           verify-exploration-frontier --session FILE [--corner]
+          verify-chunk-generation --session FILE [--expect-ungenerated]
           verify-belt-navigation --session FILE
           verify-pilot --session FILE --phase manual|ai|standalone
           stop --session FILE
@@ -752,6 +753,12 @@ try
                 Print(new { result.Position, result.Plans, operations = result.Receipts.Count, journalPath });
             }
             else Print(await controller.BuildAsync(Required("item"), target, shutdown.Token));
+            break;
+        }
+        case "verify-chunk-generation":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new ChunkGenerationQualification(session, !options.ContainsKey("expect-ungenerated")).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-exploration-frontier":
