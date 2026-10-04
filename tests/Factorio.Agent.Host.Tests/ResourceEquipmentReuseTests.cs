@@ -114,6 +114,82 @@ public sealed class ResourceEquipmentReuseTests
         Assert.Equal("drill", Assert.Single(ResourceEquipmentReuse.Candidates(state, quality, catalog, Needed)).Role);
     }
 
+    [Fact]
+    public void FuelAndEquipmentMustJointlyFitRatherThanSharingTheSameLastFreeSlot()
+    {
+        var (_, snapshot, catalog) = Fixture();
+        var part = new ReusableResourceEquipment("cell", "furnace", "steel-furnace", "furnace", new(1, 0));
+        var incoming = ResourceEquipmentReuse.Incoming(snapshot, part);
+        Assert.Equal(48, incoming["coal"]);
+        Assert.Equal(1, incoming["steel-furnace"]);
+        var hints = incoming.Keys.ToDictionary(item => item, _ => new { insertable = 50, canInsertOne = true, certainty = "native-estimate" });
+        snapshot = Change(snapshot, "main", new { items = new Dictionary<string, int>(), slots = 1, usableSlots = 1,
+            stacks = Array.Empty<object>(), filters = new { }, capacityHints = hints });
+        Assert.False(FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, incoming));
+        snapshot = Change(snapshot, "main", new { items = new Dictionary<string, int>(), slots = 2, usableSlots = 2,
+            stacks = Array.Empty<object>(), filters = new { }, capacityHints = hints });
+        Assert.True(FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, incoming));
+    }
+
+    [Fact]
+    public void AFullNearestChestDoesNotHideAnAvailableProducerChestAndNeededStockIsKept()
+    {
+        var (state, snapshot, catalog) = Fixture();
+        state = state.With(state.Cells[0] with { Id = "other", Entities = new Dictionary<string, string> { ["output-chest"] = "other-chest" } });
+        snapshot = Change(snapshot, "main", new { items = new Dictionary<string, long> { ["iron-plate"] = 900, ["coal"] = 100 } });
+        snapshot = snapshot with { Records = [.. snapshot.Records,
+            new("chest", "entity", "chest", "iron-chest", Protocol.ToElement(new { role = "factory", position = new MapPosition(0, 0) })),
+            new("other-chest", "entity", "other-chest", "iron-chest", Protocol.ToElement(new { role = "factory", position = new MapPosition(8, 0) })),
+            new("other-stock", "inventory", "other-chest", "chest", Protocol.ToElement(new { items = new { }, capacityHints =
+                new Dictionary<string, object> { ["iron-plate"] = new { insertable = 800, canInsertOne = true, certainty = "native-estimate" } } }))] };
+        snapshot = Change(snapshot, "chest-stock", new { items = new { }, capacityHints =
+            new Dictionary<string, object> { ["iron-plate"] = new { insertable = 0, canInsertOne = false, certainty = "native-estimate" } } });
+        var home = Assert.Single(ResourceEquipmentReuse.DepositOptions(state, snapshot, catalog,
+            new Dictionary<string, int> { ["iron-plate"] = 450 }));
+        Assert.Equal("other-chest", home.EntityId);
+        Assert.Equal(450, home.Count);
+        Assert.Empty(ResourceEquipmentReuse.DepositOptions(state, snapshot, catalog,
+            new Dictionary<string, int> { ["iron-plate"] = 900 }));
+        Assert.Throws<InvalidDataException>(() => ResourceEquipmentReuse.DepositOptions(state,
+            snapshot with { Scope = snapshot.Scope with { Generation = 20 } }, catalog, Needed));
+    }
+
+    [Theory]
+    [InlineData("completed", 28, null)]
+    [InlineData("partial", 20, null)]
+    [InlineData("failed", 0, "transfer_blocked")]
+    public void TerminalMatchingTransfersAreMeasuredWithoutReplayingTheRemainder(string status, long moved, string? error)
+    {
+        var receipt = Receipt(status, moved, error);
+        Assert.Equal(moved, ResourceEquipmentReuse.Transfer(receipt, "furnace", "coal", 28, "to_actor"));
+    }
+
+    [Theory]
+    [InlineData("accepted", 0, null)]
+    [InlineData("running", 20, null)]
+    [InlineData("completed", 20, null)]
+    [InlineData("partial", 28, null)]
+    [InlineData("failed", 20, "transfer_blocked")]
+    [InlineData("failed", 0, "target_lost")]
+    public void UnknownOrInconsistentTransfersStillRequireReconciliation(string status, long moved, string? error)
+    {
+        Assert.Throws<InvalidDataException>(() => ResourceEquipmentReuse.Transfer(Receipt(status, moved, error), "furnace", "coal", 28, "to_actor"));
+    }
+
+    [Fact]
+    public void ForeignTransferTargetItemDirectionAndRequestCannotCountAsRecovery()
+    {
+        var receipt = Receipt("completed", 28, null);
+        Assert.Throws<InvalidDataException>(() => ResourceEquipmentReuse.Transfer(receipt, "other", "coal", 28, "to_actor"));
+        Assert.Throws<InvalidDataException>(() => ResourceEquipmentReuse.Transfer(receipt, "furnace", "wood", 28, "to_actor"));
+        Assert.Throws<InvalidDataException>(() => ResourceEquipmentReuse.Transfer(receipt, "furnace", "coal", 29, "to_actor"));
+        Assert.Throws<InvalidDataException>(() => ResourceEquipmentReuse.Transfer(receipt, "furnace", "coal", 28, "from_actor"));
+    }
+
+    private static OperationReceipt Receipt(string status, long moved, string? error) => new("receipt", "take", status, 100, 100,
+        Protocol.ToElement(new { targetId = "furnace", item = "coal", requested = 28, transferred = moved, direction = "to_actor" }),
+        error is null ? null : new(error, "native refusal"), Protocol.ToElement(new { }));
+
     private static FactorySnapshot Change(FactorySnapshot snapshot, string id, object data) => snapshot with
     { Records = snapshot.Records.Select(r => r.Id == id ? r with { Data = Protocol.ToElement(data) } : r).ToArray() };
 

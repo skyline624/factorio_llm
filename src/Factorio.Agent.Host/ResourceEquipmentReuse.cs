@@ -5,12 +5,14 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 internal sealed record ReusableResourceEquipment(string CellId, string Role, string Item, string EntityId, MapPosition Position);
+internal sealed record ResourceRecoveryDeposit(string EntityId, MapPosition Position, string Item, int Count);
 
 /// <summary>Recovers needed drills and idle furnaces from exhausted cells, leaving chests, arms and the power network standing.</summary>
 internal sealed class ResourceEquipmentReuse(IGameClient game, IControllerJournal journal)
 {
     internal const int MaximumParts = 4;
     internal const double MaximumDistance = 96;
+    internal const int MaximumDeposits = 6;
 
     public async Task RecoverAsync(FactoryRegistry registry, ProductionCatalog catalog, IReadOnlyDictionary<string, int> needed,
         CancellationToken token)
@@ -27,10 +29,48 @@ internal sealed class ResourceEquipmentReuse(IGameClient game, IControllerJourna
                 ? await danger.ReadActiveDeathsAsync(catalog.Scope, 1, snapshot.CollectedTick, token) : [];
             var part = candidates.FirstOrDefault(p => ResourceCellBuilder.Safe(state.Cells.Single(c => c.Id == p.CellId), zones));
             if (part is null) return;
+            snapshot = await CaptureAsync(Incoming(snapshot, part).Keys.ToArray());
+            for (int deposit = 0; !FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, Incoming(snapshot, part))
+                && deposit < MaximumDeposits; deposit++)
+            {
+                state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+                var items = FactoryLogistics.Surplus(FactoryLogistics.Carried(snapshot),
+                    item => Math.Max(needed.GetValueOrDefault(item), FactoryLogistics.CollectCap(0, catalog.Items[item].StackSize)),
+                    item => catalog.Items[item].StackSize);
+                ResourceRecoveryDeposit? home = null;
+                foreach (var (item, _) in items)
+                {
+                    snapshot = await CaptureAsync(Incoming(snapshot, part).Keys.Append(item).Distinct(StringComparer.Ordinal).ToArray());
+                    home = DepositOptions(state, snapshot, catalog, needed).FirstOrDefault(p => p.Item == item);
+                    if (home is not null) break;
+                }
+                if (home is null) break;
+                await controller.ApproachEntityAsync(home.EntityId, home.Position, catalog, token);
+                snapshot = await CaptureAsync(Incoming(snapshot, part).Keys.Append(home.Item).Distinct(StringComparer.Ordinal).ToArray());
+                state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+                home = DepositOptions(state, snapshot, catalog, needed).FirstOrDefault(p => p.EntityId == home.EntityId && p.Item == home.Item);
+                if (home is null) break;
+                var deposited = await controller.WorkAsync("insert", new { entityId = home.EntityId, inventory = "chest", item = home.Item, count = home.Count },
+                    600, token: token);
+                long moved = Transfer(deposited, home.EntityId, home.Item, home.Count, "from_actor");
+                await journal.AppendAsync("resource-equipment-room-deposit", new { home, moved, deposited }, token);
+                snapshot = await CaptureAsync(Incoming(snapshot, part).Keys.ToArray());
+                if (moved == 0) break;
+            }
+            if (!FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, Incoming(snapshot, part)))
+            {
+                await journal.AppendAsync("resource-equipment-recovery-deferred", new { part, snapshot.CollectedTick, reason = "joint-native-inventory-capacity" }, token);
+                return;
+            }
             await controller.ApproachEntityAsync(part.EntityId, part.Position, catalog, token);
-            snapshot = await CaptureAsync();
+            snapshot = await CaptureAsync(Incoming(snapshot, part).Keys.ToArray());
             state = await registry.LoadAsync(catalog.Scope.WorldId, token);
             if (!Candidates(state, snapshot, catalog, needed).Contains(part)) continue;
+            if (!FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, Incoming(snapshot, part)))
+            {
+                await journal.AppendAsync("resource-equipment-recovery-deferred", new { part, snapshot.CollectedTick, reason = "capacity-changed-during-travel" }, token);
+                return;
+            }
             var map = await new SpatialClient(game).CaptureAsync(radius: 32, cancellationToken: token);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed before resource equipment recovery.");
             var cell = state.Cells.Single(c => c.Id == part.CellId);
@@ -44,11 +84,12 @@ internal sealed class ResourceEquipmentReuse(IGameClient game, IControllerJourna
             {
                 var taken = await controller.WorkAsync("take", new { entityId = part.EntityId, inventory = "fuel", item = fuel.Key, count = fuel.Value },
                     600, token: token);
-                if (taken.Status != "completed" || taken.Effects.GetProperty("targetId").GetString() != part.EntityId
-                    || taken.Effects.GetProperty("item").GetString() != fuel.Key
-                    || taken.Effects.GetProperty("transferred").GetInt64() != fuel.Value
-                    || taken.Effects.GetProperty("direction").GetString() != "to_actor")
-                    throw new InvalidDataException("Resource fuel recovery lacks a completed matching native receipt.");
+                long moved = Transfer(taken, part.EntityId, fuel.Key, fuel.Value, "to_actor");
+                if (moved != fuel.Value)
+                {
+                    await journal.AppendAsync("resource-equipment-recovery-deferred", new { part, reason = "fuel-transfer-terminal-shortfall", moved, taken }, token);
+                    return;
+                }
             }
             snapshot = await CaptureAsync();
             state = await registry.LoadAsync(catalog.Scope.WorldId, token);
@@ -56,6 +97,15 @@ internal sealed class ResourceEquipmentReuse(IGameClient game, IControllerJourna
             long carriedBefore = FactoryLogistics.Carried(snapshot).GetValueOrDefault(part.Item);
             var receipt = await controller.WorkAsync("mine", new { entityId = part.EntityId, count = 1 }, 1800, token: token);
             var after = await CaptureAsync();
+            if (receipt.Status == "failed" && receipt.Error?.Code == "inventory_full" && receipt.Kind == "mine"
+                && receipt.Effects.GetProperty("targetId").GetString() == part.EntityId
+                && receipt.Effects.GetProperty("product").GetString() == part.Item && receipt.Effects.GetProperty("produced").GetInt64() == 0
+                && after.Records.Any(r => r.Kind == "entity" && r.EntityId == part.EntityId)
+                && FactoryLogistics.Carried(after).GetValueOrDefault(part.Item) == carriedBefore)
+            {
+                await journal.AppendAsync("resource-equipment-recovery-deferred", new { part, reason = "terminal-inventory-full", receipt }, token);
+                return;
+            }
             if (receipt.Status != "completed" || receipt.Effects.GetProperty("targetId").GetString() != part.EntityId
                 || receipt.Effects.GetProperty("product").GetString() != part.Item || receipt.Effects.GetProperty("produced").GetInt64() != 1
                 || after.Records.Any(r => r.Kind == "entity" && r.EntityId == part.EntityId)
@@ -71,12 +121,67 @@ internal sealed class ResourceEquipmentReuse(IGameClient game, IControllerJourna
             await journal.AppendAsync("resource-equipment-recovered", new { part, after.Scope, after.CollectedTick, receipt }, token);
         }
 
-        async Task<FactorySnapshot> CaptureAsync()
+        async Task<FactorySnapshot> CaptureAsync(IReadOnlyList<string>? capacityItems = null)
         {
-            var snapshot = await reader.CaptureAsync(cancellationToken: token);
+            var snapshot = await reader.CaptureAsync(capacityItems, cancellationToken: token);
             if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during resource equipment recovery.");
             return snapshot;
         }
+    }
+
+    internal static IReadOnlyDictionary<string, long> Incoming(FactorySnapshot snapshot, ReusableResourceEquipment part)
+    {
+        var incoming = Fuel(snapshot, part.EntityId);
+        incoming[part.Item] = checked(incoming.GetValueOrDefault(part.Item) + 1);
+        // Leave one of the eight native probes available for a candidate surplus item.
+        if (incoming.Count > 7 || incoming.Any(p => p.Value < 1)) throw new InvalidDataException("Unbounded resource equipment recovery stock.");
+        return incoming;
+    }
+
+    /// <summary>Returns only observed, compatible producer chests with native room; a full nearest chest cannot hide another.</summary>
+    internal static IReadOnlyList<ResourceRecoveryDeposit> DepositOptions(FactoryState state, FactorySnapshot snapshot,
+        ProductionCatalog catalog, IReadOnlyDictionary<string, int> needed)
+    {
+        if (snapshot.Scope != catalog.Scope || snapshot.Scope.WorldId != state.WorldId)
+            throw new InvalidDataException("Resource recovery deposits require one observed world and actor.");
+        var actor = snapshot.Records.Single(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "actor");
+        var at = actor.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+        var bag = FactoryLogistics.Carried(snapshot);
+        var result = new List<ResourceRecoveryDeposit>();
+        foreach (var (item, amount) in bag)
+        {
+            if (!catalog.Items.TryGetValue(item, out var native)) continue;
+            long surplus = amount - Math.Max(needed.GetValueOrDefault(item), FactoryLogistics.CollectCap(0, native.StackSize));
+            if (surplus <= 0) continue;
+            foreach (var cell in state.Cells.Where(c => c.Recipe is not null && c.Entities.ContainsKey("output-chest")
+                && (catalog.Recipes.FirstOrDefault(r => r.Name == c.Recipe)?.Products[0].Name ?? c.Recipe) == item))
+            {
+                string id = cell.Entities["output-chest"];
+                var entity = snapshot.Records.SingleOrDefault(r => r.Kind == "entity" && r.EntityId == id);
+                var inventory = snapshot.Records.SingleOrDefault(r => r.Kind == "inventory" && r.EntityId == id && r.Name == "chest");
+                if (entity is null || entity.Data.GetProperty("role").GetString() != "factory" || inventory is null
+                    || !inventory.Data.TryGetProperty("capacityHints", out var hints) || !hints.TryGetProperty(item, out var hint)) continue;
+                if (hint.GetProperty("certainty").GetString() != "native-estimate" || !hint.GetProperty("insertable").TryGetInt64(out long capacity)
+                    || capacity < 0) throw new InvalidDataException("Invalid native surplus storage capacity.");
+                var position = entity.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+                if (capacity == 0 || !hint.GetProperty("canInsertOne").GetBoolean() || position.DistanceTo(at) > MaximumDistance) continue;
+                result.Add(new(id, position, item, checked((int)Math.Min(1000, Math.Min(surplus, capacity)))));
+            }
+        }
+        return result.Distinct().OrderByDescending(p => (double)p.Count / catalog.Items[p.Item].StackSize)
+            .ThenBy(p => p.Position.DistanceTo(at)).ThenBy(p => p.EntityId, StringComparer.Ordinal).ToArray();
+    }
+
+    internal static long Transfer(OperationReceipt receipt, string id, string item, long requested, string direction)
+    {
+        if (receipt.Kind != (direction == "to_actor" ? "take" : "insert")
+            || receipt.Effects.GetProperty("targetId").GetString() != id || receipt.Effects.GetProperty("item").GetString() != item
+            || receipt.Effects.GetProperty("requested").GetInt64() != requested || receipt.Effects.GetProperty("direction").GetString() != direction)
+            throw new InvalidDataException("Resource recovery transfer lacks matching native effects.");
+        long moved = receipt.Effects.GetProperty("transferred").GetInt64();
+        if (receipt.Status == "completed" && moved == requested || receipt.Status == "partial" && moved > 0 && moved < requested
+            || receipt.Status == "failed" && receipt.Error?.Code == "transfer_blocked" && moved == 0) return moved;
+        throw new InvalidDataException("Resource recovery transfer is unconfirmed; reconcile before continuing.");
     }
 
     internal static IReadOnlyList<ReusableResourceEquipment> Candidates(FactoryState state, FactorySnapshot snapshot,

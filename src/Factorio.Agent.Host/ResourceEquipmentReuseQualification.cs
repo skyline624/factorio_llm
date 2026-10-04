@@ -25,7 +25,7 @@ public sealed class ResourceEquipmentReuseQualification(RuntimeSession session)
         try
         {
             var marked = await game.ExecuteAsync(GameRequest.Create("mark_fixture", new
-                { reason = "Prepared reuse: injected ore, power, research and kit; exhausted ore and circuit fault. Not a campaign." }), token);
+                { reason = "Prepared reuse: ore, power, research, kit, iron and storage injected; exhausted ore, full bag and circuit fault." }), token);
             if (!marked.Ok) throw new GameRpcException(marked.Error ?? new("invalid_response", "Fixture marker rejected."));
             const string preparation = """
                 /silent-command local s=game.surfaces.nauvis;local f=game.forces.factorio_agent;local c=s.find_entities_filtered{type='character',force=f}[1];assert(c and c.crafting_queue_size==0 and #game.connected_players==0);game.speed=1;for _,e in pairs(s.find_entities_filtered{area={{-64,-64},{64,64}}}) do if e~=c then e.destroy() end end;local tiles={};for x=-64,64 do for y=-64,64 do tiles[#tiles+1]={name='grass-1',position={x,y}} end end;s.set_tiles(tiles);assert(c.teleport({0,0}));c.health=c.max_health;c.get_main_inventory().clear();for _,t in pairs{'steam-power','electronics','electric-mining-drill','advanced-material-processing'} do f.technologies[t].researched=true end;for name,count in pairs{['electric-mining-drill']=1,['steel-furnace']=1,inserter=2,['iron-chest']=2,['small-electric-pole']=30,coal=48} do assert(c.insert{name=name,count=count}==count) end;local source=s.create_entity{name='electric-energy-interface',position={-20,0},force=f};assert(source);source.electric_buffer_size=1000000000;source.power_production=2000000;source.energy=1000000000;assert(s.create_entity{name='small-electric-pole',position={-18.5,0.5},force=f});for x=4,15 do for y=-6,5 do assert(s.create_entity{name='iron-ore',position={x+0.5,y+0.5},amount=5000}) end end;for x=28,39 do for y=-6,5 do assert(s.create_entity{name='iron-ore',position={x+0.5,y+0.5},amount=5000}) end end;rcon.print(helpers.table_to_json{tick=game.tick,fixture=true,players=#game.connected_players,providedDrills=1,providedSteelFurnaces=1,providedCoal=48})
@@ -72,18 +72,45 @@ public sealed class ResourceEquipmentReuseQualification(RuntimeSession session)
             using var disconnected = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(
                 $"/silent-command local d;for _,e in pairs(game.surfaces.nauvis.find_entities_filtered{{type='mining-drill',force='factorio_agent'}}) do if e.unit_number=={old.Entities["drill"]} then d=e end end;assert(d);assert(d.get_wire_connector(defines.wire_connector_id.circuit_green,false).disconnect_all(defines.wire_origin.player));rcon.print(helpers.table_to_json{{fixture=true,tick=game.tick}})", token));
             var needed = new Dictionary<string, int> { ["electric-mining-drill"] = 1, ["steel-furnace"] = 1 };
+            using var filled = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(
+                $"/silent-command local s=game.surfaces.nauvis;local c=s.find_entities_filtered{{type='character',force='factorio_agent'}}[1];local b;for _,e in pairs(s.find_entities_filtered{{type='container',force='factorio_agent'}}) do if e.unit_number=={old.Entities["output-chest"]} then b=e end end;assert(c and b);local main=c.get_main_inventory();local chest=b.get_inventory(defines.inventory.chest);local injectedActor=main.insert{{name='iron-plate',count=10000}};local injectedChest=chest.insert{{name='iron-plate',count=10000}};assert(not main.can_insert{{name='electric-mining-drill',count=1}} and not chest.can_insert{{name='iron-plate',count=1}});rcon.print(helpers.table_to_json{{fixture=true,tick=game.tick,injectedActorIron=injectedActor,injectedChestIron=injectedChest}})", token));
+            var full = await CaptureAsync("full-bag-and-producer-chest");
+            retainedIron = FactoryLogistics.Items(full, old.Entities["output-chest"]).GetValueOrDefault("iron-plate");
+            long ironBeforeRecovery = full.SummarizeStocks().InventoryItems.GetValueOrDefault("iron-plate");
+            await recovery.RecoverAsync(registry, catalog, needed, token);
+            var deferred = await CaptureAsync("no-room-deferred");
+            Require(old.Entities.Where(p => p.Key is "furnace" or "drill").All(p => deferred.Records.Any(r => r.Kind == "entity" && r.EntityId == p.Value))
+                && FactoryLogistics.Carried(deferred).GetValueOrDefault("steel-furnace") == 0
+                && FactoryLogistics.Carried(deferred).GetValueOrDefault("electric-mining-drill") == 0
+                && deferred.SummarizeStocks().InventoryItems.GetValueOrDefault("coal") == fuelBefore
+                && deferred.SummarizeStocks().InventoryItems.GetValueOrDefault("iron-plate") == ironBeforeRecovery,
+                "Full-bag deferral mutated equipment, fuel or iron stock.");
+            evidence.Add(new { check = "joint-capacity-defers-without-mutating-full-bag", native = filled.RootElement.Clone(), deferred.CollectedTick, fuelBefore, ironBeforeRecovery });
+            using var spare = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(
+                "/silent-command local e=game.surfaces.nauvis.create_entity{name='iron-chest',position={-8.5,6.5},force='factorio_agent'};assert(e);rcon.print(helpers.table_to_json{fixture=true,tick=game.tick,chestId=tostring(e.unit_number),injectedChest=1})", token));
+            string spareId = spare.RootElement.GetProperty("chestId").GetString()!;
+            await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 32, limit = 200 }), token);
+            var withStorage = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            await registry.SaveAsync(withStorage.With(new FactoryCell("fixture-recovery-storage", 0, new(-9, 6, true), "smelter",
+                "electric-mining-drill", "iron-plate", new Dictionary<string, string> { ["output-chest"] = spareId }, ResourceCellHealth.Depleted, 0)), token);
             await recovery.RecoverAsync(registry, catalog, needed, token);
             var recovered = await CaptureAsync("recovered");
             var retired = (await registry.LoadAsync(catalog.Scope.WorldId, token)).Cells.Single(c => c.Id == old.Id);
             Require(FactoryLogistics.Carried(recovered).GetValueOrDefault("electric-mining-drill") == 1
                 && FactoryLogistics.Carried(recovered).GetValueOrDefault("steel-furnace") == 1
                 && recovered.SummarizeStocks().InventoryItems.GetValueOrDefault("coal") == fuelBefore
+                && recovered.SummarizeStocks().InventoryItems.GetValueOrDefault("iron-plate") == ironBeforeRecovery
+                && FactoryLogistics.Items(recovered, spareId).GetValueOrDefault("iron-plate") > 0
+                && FactoryLogistics.Carried(recovered).GetValueOrDefault("iron-plate") >= 2L * catalog.Items["iron-plate"].StackSize
                 && FactoryLogistics.Items(recovered, old.Entities["output-chest"]).GetValueOrDefault("iron-plate") == retainedIron,
                 "Equipment, coal or retained plates were lost during recovery.");
             Require(retired.Status == ResourceCellHealth.Depleted && !retired.Entities.ContainsKey("drill") && !retired.Entities.ContainsKey("furnace")
                 && old.Entities.Where(p => p.Key is not ("drill" or "furnace")).All(p => retired.Entities.GetValueOrDefault(p.Key) == p.Value
                     && recovered.Records.Any(r => r.Kind == "entity" && r.EntityId == p.Value)), "Recovery changed retained stock, arms or grid entities.");
             evidence.Add(new { check = "two-native-parts-and-fuel-recovered", recovered.CollectedTick, fuelBefore, retainedIron, retired });
+            evidence.Add(new { check = "full-nearest-chest-bypassed-with-native-surplus-deposit", native = spare.RootElement.Clone(), spareId,
+                stored = FactoryLogistics.Items(recovered, spareId), ironBeforeRecovery,
+                carriedIron = FactoryLogistics.Carried(recovered).GetValueOrDefault("iron-plate"), recovered.CollectedTick });
             await recovery.RecoverAsync(registry, catalog, needed, token);
             var replacement = await builder.BuildNextAsync("iron-plate", 30, token, explorationBudget: 0);
             await WaitAsync(1800);
