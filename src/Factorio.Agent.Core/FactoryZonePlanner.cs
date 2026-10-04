@@ -11,6 +11,16 @@ public sealed class FactoryZonePlanner
     public static readonly HashSet<string> Removable = new(StringComparer.Ordinal) { "tree", "simple-entity" };
     private static readonly CollisionMask Floor = new(["item", "object", "water_tile"], false, false, false);
 
+    /// <summary>Fits the largest observed band up to the requested capacity before giving up its protected surroundings.</summary>
+    public FactoryZoneSite? FindLargest(SpatialSnapshot map, EntityGeometry machine, MapPosition preferred, int maximumSlots,
+        CancellationToken token = default, bool transportAccess = false)
+    {
+        if (maximumSlots is < 1 or > 32) throw new ArgumentOutOfRangeException(nameof(maximumSlots));
+        for (int slots = maximumSlots; slots > 0; slots--)
+            if (Find(map, machine, preferred, slots, token, transportAccess) is { } site) return site;
+        return null;
+    }
+
     public FactoryZoneSite? Find(SpatialSnapshot map, EntityGeometry machine, MapPosition preferred, int slots,
         CancellationToken token = default, bool transportAccess = false)
     {

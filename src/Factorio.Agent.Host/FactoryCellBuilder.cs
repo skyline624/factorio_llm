@@ -133,12 +133,12 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             // Empty slots still belong to their old zone. A new geometry must not allocate a second band over them.
             var ground = map;
             foreach (var existing in current.Zones) ground = ReserveZone(ground, existing, equipment.Pole);
-            var site = new FactoryZonePlanner().Find(KeepSteamGrowth(ground, current.Zones), machine, powered.Position, Slots(kind), token, transportAccess);
+            var site = new FactoryZonePlanner().FindLargest(KeepSteamGrowth(ground, current.Zones), machine, powered.Position, Slots(kind), token, transportAccess);
             if (site is null && steam is not null)
             {
                 // A band that blocks steam growth is still better than no factory; the journal keeps the trade-off visible.
                 await journal.AppendAsync("factory-zone-steam-growth-blocked", new { map.CollectedTick }, token);
-                site = new FactoryZonePlanner().Find(ground, machine, powered.Position, Slots(kind), token, transportAccess);
+                site = new FactoryZonePlanner().FindLargest(ground, machine, powered.Position, Slots(kind), token, transportAccess);
             }
             if (site is null) throw new InvalidOperationException("No dry, deposit-free rectangle for a factory band near the power network.");
             var created = new FactoryZone(current.Zones.Count == 0 ? 1 : current.Zones.Max(z => z.Id) + 1, site.Origin, site.Slots,

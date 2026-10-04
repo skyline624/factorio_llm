@@ -95,6 +95,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                     return plan;
                 }
                 await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
+                await ExpandPowerAsync(catalog.Scope, token);
             }
             await StartStageAsync(stage, catalog, existing, token, isObjectiveComplete);
         }
@@ -176,7 +177,10 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         }
         await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync("lab", count - existing, false, token);
         for (int built = existing; built < count; built++)
+        {
             await new FactoryCellBuilder(game, journal, directory).BuildAsync("lab", "lab", null, token);
+            await ExpandPowerAsync(catalog.Scope, token);
+        }
         return Math.Max(existing, count);
     }
 
@@ -319,6 +323,9 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     {
         // Capacity includes an idle ready cell: start retained suppliers before deciding that no raw growth is needed.
         var registry = new FactoryRegistry(directory);
+        // A connected electric drill is idle when retained boiler feeders ran dry during the previous long goal.
+        // Restore their paid fuel before starting or extending raw suppliers.
+        await ExpandPowerAsync(catalog.Scope, token);
         await using (var controller = new SpatialController(game, journal))
             foreach (var producer in RawStartupCells(catalog, await registry.LoadAsync(catalog.Scope.WorldId, token), raw))
             {

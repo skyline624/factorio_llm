@@ -203,6 +203,37 @@ public sealed class PowerExpansionPlannerTests
     }
 
     [Fact]
+    public void SmallerTransportBandKeepsAllEightFutureSteamUnits()
+    {
+        var map = FactoryMaps.Grass(40, CompleteSupply(), (_, y) => y < 0 ? "water" : "grass");
+        var machine = map.Prototypes["assembling-machine-1"];
+        var pole = map.Entities.Single(e => e.Id == "pole").Position;
+        var steam = new PowerExpansionController.SteamItems("boiler", "steam-engine", "small-electric-pole", "iron-chest", "inserter");
+        var reserved = PowerExpansionController.ReserveGrowth(map, steam, [], Force);
+        var planner = new FactoryZonePlanner();
+        Assert.Null(planner.Find(reserved, machine, pole, FactoryCellBuilder.ZoneSlots, transportAccess: true));
+        var site = planner.FindLargest(reserved, machine, pole, FactoryCellBuilder.ZoneSlots, transportAccess: true)!;
+        Assert.InRange(site.Slots, 1, FactoryCellBuilder.ZoneSlots - 1);
+        Assert.Null(planner.Find(reserved, machine, pole, site.Slots + 1, transportAccess: true));
+        var zone = new FactoryZone(1, site.Origin, site.Slots, FactoryBandPlanner.Pitch(machine, true), FactoryBandPlanner.BandHeight(machine, true), true);
+        for (int unit = 0; unit < PowerExpansionController.ReservedUnits; unit++)
+        {
+            var plan = new PowerExpansionPlanner().Next(FactoryCellBuilder.ReserveZone(map, zone, steam.Pole), "boiler", "steam-engine", Force);
+            Assert.Equal("unit", plan?.Kind);
+            map = Build(map, plan!, $"adaptive-unit-{unit}");
+        }
+    }
+
+    [Fact]
+    public void TransportBandKeepsFullCapacityWhenTheObservedSpaceAllowsIt()
+    {
+        var map = FactoryMaps.Grass(60);
+        var site = new FactoryZonePlanner().FindLargest(map, map.Prototypes["assembling-machine-1"], map.Actor.Position,
+            FactoryCellBuilder.ZoneSlots, transportAccess: true);
+        Assert.Equal(FactoryCellBuilder.ZoneSlots, site?.Slots);
+    }
+
+    [Fact]
     public void GrowthReservedOverAnAlreadyReservedBandCountsTheBandOnce()
     {
         // A band's power link reserves its own band, then the steam growth planned with every registered band.

@@ -24,3 +24,11 @@ Le 4 octobre 2026, avec Factorio **2.0.77 headless**, sans client connecté, gra
 Les **1 562 tests offline** passent également, sans jeu ni cloud. Le premier essai natif refusait une raison de fixture trop longue ; le second révélait l'absence des champs de circuit vert dans le contrat spatial C#. Ces défauts ont été corrigés et les échecs conservés dans les données privées.
 
 Ce résultat qualifie le composant sur une préparation explicite. Il ne mesure pas encore le gain de durée dans une partie normale et ne prouve aucune progression jusqu'à la fusée. Les cellules éloignées, les fours encore chargés et les équipements raccordés à un circuit restent exclus de ce chemin. Les coffres, bras et poteaux d'un ancien site ne sont pas réemployés ici.
+
+## Observation dans une partie normale
+
+Le 4 octobre 2026, sur la graine normale **20261072**, sans préparation de ressources ni pilote connecté, les reçus natifs confirment la récupération d'un four en acier au tick **2379806**, puis d'une foreuse électrique au tick **2380187**. Les **1 264 plaques de fer** de l'ancien coffre restent présentes après cette récupération.
+
+Le kit est réinstallé dans une cellule de cuivre sans fabriquer de four ou de foreuse de remplacement dans la séquence de récupération et de construction. Le premier relevé trouve la foreuse sans courant ; après reprise de l'alimentation, le relevé natif au tick **2450444** constate **105 fabrications terminées** par le four et **105 plaques de cuivre** dans le nouveau coffre. Les objets sont fongibles : les reçus, le bilan de stock et l'absence de fabrication de remplacement établissent le réemploi, sans numéro de série par objet.
+
+Cette observation établit un réemploi productif dans le monde normal. Elle ne mesure pas encore un gain de temps, un débit durable ni un lancement de fusée. Les captures et le préfixe du journal ayant servi à la vérification restent dans les données privées `.runtime/`.

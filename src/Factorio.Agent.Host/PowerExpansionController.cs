@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Factorio.Agent.Core;
 using Factorio.Agent.Infrastructure;
 
@@ -211,14 +212,14 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         Completed(await controller.WorkAsync("insert", new { entityId = boilerId, inventory = "fuel", item = Fuel, count = missing }, 600, token: token), "insert");
     }
 
-    /// <summary>A new feeder starts with its boiler lit and one stack in its chest; logistics keeps it stocked afterwards.</summary>
+    /// <summary>Starts a cold boiler and restores its feeder reserve using observed stock and paid native transfers.</summary>
     private async Task PrimeAsync(string boilerId, MapPosition boilerPosition, string chestId, MapPosition chestPosition, ProductionCatalog catalog,
-        SpatialController controller, CancellationToken token)
+        SpatialController controller, CancellationToken token, int reserveStacks = 1)
     {
         await StartBoilerAsync(boilerId, boilerPosition, catalog, controller, token);
         var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
-        long need = FactoryLogistics.PowerFuelNeed(FactoryLogistics.Items(snapshot, chestId), Fuel, catalog.Items[Fuel].StackSize);
+        long need = FactoryLogistics.PowerFuelNeed(FactoryLogistics.Items(snapshot, chestId), Fuel, reserveStacks * catalog.Items[Fuel].StackSize);
         if (need == 0) return;
         await EnsureItemsAsync(Fuel, (int)need, token);
         await controller.ApproachEntityAsync(chestId, chestPosition, catalog, token);
@@ -227,8 +228,8 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
 
     /// <summary>
     /// Gives every boiler of the network a chest and inserter feeder, reusing an observed feeder, and records it as a power cell.
-    /// Registered boilers are not revisited while their feeder is observed, so this costs a trip only for new, migrated or
-    /// damaged feeders; a destroyed chest or inserter is rebuilt and the cell registered again under the same id.
+    /// Retained feeders also restart a cold grid and refill low reserves before lengthy construction. A destroyed chest or
+    /// inserter is rebuilt and the cell registered again under the same id.
     /// </summary>
     private async Task<IReadOnlyList<FactoryCell>> EnsureFeedersAsync(PowerState state, ElectricNetworkState network, ProductionCatalog catalog,
         SpatialController controller, CancellationToken token)
@@ -243,7 +244,23 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
             if (known.Cells.FirstOrDefault(c => c.Kind == "power" && c.Status == "ready" && c.Entities.GetValueOrDefault("boiler") == boiler.Id) is { } registered)
             {
                 var missing = FactoryLogistics.Missing(snapshot, registered);
-                if (missing.Length == 0) continue;
+                if (missing.Length == 0)
+                {
+                    if (NeedsPriming(snapshot, registered, catalog.Items[Fuel].StackSize))
+                    {
+                        ValidateRegisteredFeeder(snapshot, registered);
+                        string retainedChestId = registered.Entities["input-chest"];
+                        var retainedChest = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == retainedChestId);
+                        var position = retainedChest.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+                        await journal.AppendAsync("power-cell-fuel-recovery", new { cellId = registered.Id, boilerId = boiler.Id, chestId = retainedChestId,
+                            snapshot.CollectedTick, reserveStacks = FactoryLogistics.PowerChestStacks }, token);
+                        await PrimeAsync(boiler.Id, boiler.Position, retainedChestId, position, catalog, controller, token,
+                            reserveStacks: FactoryLogistics.PowerChestStacks);
+                        snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+                        Require(snapshot.Scope, catalog);
+                    }
+                    continue;
+                }
                 await journal.AppendAsync("power-cell-missing", new { registered.Id, missing, snapshot.CollectedTick }, token);
             }
             await controller.TravelAsync(boiler.Position, 6, catalog, token);
@@ -295,6 +312,30 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
             await journal.AppendAsync("power-cell-ready", cell, token);
         }
         return (await registry.LoadAsync(catalog.Scope.WorldId, token)).Cells.Where(c => c.Kind == "power").ToArray();
+    }
+
+    internal static bool NeedsPriming(FactorySnapshot snapshot, FactoryCell cell, long stack)
+    {
+        if (stack < 1) throw new ArgumentOutOfRangeException(nameof(stack));
+        var chest = FactoryLogistics.Items(snapshot, cell.Entities["input-chest"]);
+        if (chest.Any(p => p.Key != Fuel && p.Value > 0))
+            throw new InvalidDataException("A registered power feeder contains foreign materials.");
+        if (chest.GetValueOrDefault(Fuel) < stack) return true;
+        string boilerId = cell.Entities["boiler"];
+        if (FactoryLogistics.Items(snapshot, boilerId).Values.Any(count => count > 0)) return false;
+        var boiler = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == boilerId);
+        if (!boiler.Data.TryGetProperty("burnerRemainingJoules", out var remaining))
+            throw new InvalidDataException("The retained boiler's native burning reserve is missing.");
+        return remaining.GetDouble() <= 0;
+    }
+
+    internal static void ValidateRegisteredFeeder(FactorySnapshot snapshot, FactoryCell cell)
+    {
+        var arm = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == cell.Entities["input-inserter"]);
+        if (!arm.Data.TryGetProperty("transport", out var transport)
+            || !transport.TryGetProperty("pickupTargetId", out var pickup) || pickup.GetString() != cell.Entities["input-chest"]
+            || !transport.TryGetProperty("dropTargetId", out var drop) || drop.GetString() != cell.Entities["boiler"])
+            throw new InvalidDataException("The retained power feeder no longer targets its registered chest and boiler.");
     }
 
     private async Task<SpatialSnapshot> PlanningAsync(SpatialSnapshot map, SteamItems items, ProductionCatalog catalog, CancellationToken token) =>
