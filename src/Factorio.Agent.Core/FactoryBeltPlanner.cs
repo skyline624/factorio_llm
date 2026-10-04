@@ -7,7 +7,7 @@ public sealed record FactoryBeltExtension(PlacementCandidate TargetInserter, IRe
 public sealed class FactoryBeltPlanner
 {
     public FactoryBeltExtension? Extend(SpatialSnapshot map, BeltTransportEquipment equipment, IReadOnlyList<string> beltIds,
-        string targetId, CancellationToken token = default)
+        string targetId, CancellationToken token = default, IReadOnlySet<string>? retainedBelts = null)
     {
         if (beltIds.Count == 0) throw new ArgumentException("A bus extension requires its native ordered belts.");
         var tail = map.Entities.Single(e => e.Id == beltIds[^1]);
@@ -49,7 +49,7 @@ public sealed class FactoryBeltPlanner
             };
             var route = new BeltRoutePlanner().Find(projected, equipment.Belt, tail.Position, BeltRoutePlanner.Cell(At(candidate, arm.InserterPickup)),
                 cancellationToken: token, inletBeltId: beltIds.Count > 1 ? beltIds[^2] : null,
-                existingBusBelts: beltIds.ToHashSet(StringComparer.Ordinal));
+                existingBusBelts: beltIds.Concat(retainedBelts ?? new HashSet<string>()).ToHashSet(StringComparer.Ordinal));
             if (route.Status == BeltRouteStatus.Found && beltIds.Count + route.Belts.Count - 1 <= 200)
                 return new(candidate, route.Belts, poles);
             if (route.Status == BeltRouteStatus.BudgetExceeded) throw new TimeoutException("The bus extension exhausted its route budget.");

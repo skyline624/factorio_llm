@@ -31,6 +31,38 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var pausedCells = FactoryLogistics.PausedCells(state.Cells.Where(c => c.Status == "ready"), catalog,
             FactoryLogistics.StockCaps(catalog, state), FactoryLogistics.AvailableStock(stockSnapshot))
             .Select(p => p.Cell.Id).ToHashSet(StringComparer.Ordinal);
+        if (maximumLinks - connected >= 2 && FactoryDirector.Enabled(catalog, "splitter"))
+        {
+            var covered = FactoryTransportCoverage.Connected(state, stockSnapshot, catalog, shares);
+            var needs = state.Cells.Where(c => c.Status == "ready" && c.Recipe is not null && c.Entities.ContainsKey("input-chest")
+                && !pausedCells.Contains(c.Id) && (targetCellIds is null || targetCellIds.Contains(c.Id)))
+                .SelectMany(c => catalog.Recipes.FirstOrDefault(r => r.Name == c.Recipe)?.Ingredients
+                    .Where(i => i.DeterministicItem && !covered.Contains((c.Entities["input-chest"], i.Name)))
+                    .Select(i => (Target: c, Ingredient: i)) ?? []).ToArray();
+            foreach (var group in needs.GroupBy(n => n.Ingredient.Name))
+            {
+                foreach (var source in state.Cells.Where(c => c.Status == "ready" && c.Entities.ContainsKey("output-chest")
+                    && Product(catalog, c) == group.Key && !(state.Transports ?? []).Any(b => b.SourceCellId == c.Id)))
+                {
+                    var from = Position(stockSnapshot, source.Entities["output-chest"]);
+                    if (from is null) continue;
+                    var targets = group.Where(n => n.Target.Id != source.Id && Position(stockSnapshot, n.Target.Entities["input-chest"]) is not null)
+                        .OrderBy(n => Position(stockSnapshot, n.Target.Entities["input-chest"])!.DistanceTo(from)).Take(2).ToArray();
+                    if (targets.Length != 2 || PlanningCenter(stockSnapshot,
+                        [source.Entities["output-chest"], .. targets.Select(n => n.Target.Entities["input-chest"])]) is null) continue;
+                    if (++considered > 8) return connected;
+                    int Limit(int index) => checked((int)Math.Clamp(targets[index].Ingredient.Amount!.Value
+                        * FactoryLogistics.CellBufferCrafts(targets[index].Target, shares, 40), 1, 10000));
+                    if (!await LinkPairAsync(source.Id, targets[0].Target.Id, targets[1].Target.Id, group.Key,
+                        Limit(0), Limit(1), catalog, controller, token)) continue;
+                    connected += 2;
+                    if (connected == maximumLinks) return connected;
+                    state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+                    break;
+                }
+                if (maximumLinks - connected < 2) break;
+            }
+        }
         foreach (var target in state.Cells.Where(c => c.Status == "ready" && c.Recipe is not null && c.Entities.ContainsKey("input-chest")
             && (targetCellIds is null || targetCellIds.Contains(c.Id))))
         {
@@ -175,6 +207,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             if (state.Cells.Single(c => c.Id == bus.CellId).Status == "building") await FinishAsync(bus, catalog, controller, token);
             return true;
         }
+        // A branched graph has no single ordered tail. Retain it until graph-aware extension is available.
+        if (bus?.Graph is not null) return false;
         var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Factory transport scope changed.");
         if (bus is not null && !FactoryTransportHealth.Healthy(state, snapshot, bus)) return false;
@@ -224,6 +258,80 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         return true;
 
         void Add(string role, string equipment, PlacementCandidate p) => plans[role] = new(role, equipment, p.Position, p.Direction);
+    }
+
+    public async Task<bool> LinkPairAsync(string sourceCellId, string firstCellId, string secondCellId, string item,
+        int firstMaximum, int secondMaximum, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
+    {
+        if (firstMaximum is < 1 or > 10000 || secondMaximum is < 1 or > 10000 || !catalog.Items.ContainsKey(item)
+            || new[] { sourceCellId, firstCellId, secondCellId }.Distinct(StringComparer.Ordinal).Count() != 3)
+            throw new ArgumentException("A balanced bus requires distinct endpoints, a known item and bounded stock limits.");
+        if (Items.Append("splitter").Any(i => !FactoryDirector.Enabled(catalog, i))) return false;
+        var registry = new FactoryRegistry(directory);
+        var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        var source = state.Cells.Single(c => c.Id == sourceCellId);
+        var first = state.Cells.Single(c => c.Id == firstCellId);
+        var second = state.Cells.Single(c => c.Id == secondCellId);
+        if (source.Status != "ready" || Product(catalog, source) != item || !source.Entities.ContainsKey("output-chest")
+            || new[] { first, second }.Any(c => c.Status != "ready" || !c.Entities.ContainsKey("input-chest")
+                || !catalog.Recipes.Any(r => r.Name == c.Recipe && r.Ingredients.Any(i => i.DeterministicItem && i.Name == item))))
+            throw new InvalidOperationException("A balanced bus must connect a registered producer and two native recipe consumers.");
+        if ((state.Transports ?? []).Any(b => b.SourceCellId == sourceCellId)) return false;
+        var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Balanced transport actor scope changed.");
+        string[] endpoints = [source.Entities["output-chest"], first.Entities["input-chest"], second.Entities["input-chest"]];
+        if (PlanningCenter(snapshot, endpoints) is not { } center) return false;
+        await controller.TravelAsync(center, 4, catalog, token);
+        var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
+        var map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam).Append("splitter").Distinct(StringComparer.Ordinal).ToArray(), 48, token);
+        if (map.Scope != catalog.Scope) throw new InvalidDataException("Balanced transport planning scope changed.");
+        if (endpoints.Any(id => !map.Entities.Any(e => e.Id == id))
+            || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0) return false;
+        map = ProtectBands(map, state, steam);
+        var plan = await ControllerPlanning.RunAsync(t => new BalancedBeltPlanner().Find(map, Equipment, "splitter",
+            endpoints[0], endpoints[1], endpoints[2], t), controller, TimeSpan.FromSeconds(45), token);
+        await journal.AppendAsync("factory-balanced-transport-search", new { map.Scope, map.CollectedTick, sourceCellId,
+            firstCellId, secondCellId, found = plan is not null }, token);
+        if (plan is null) return false;
+        var record = NewBalancedBus(sourceCellId, firstCellId, secondCellId, item, firstMaximum, secondMaximum, plan, map.CollectedTick);
+        await registry.SaveAsync(state.With(record.Cell).With(record.Bus), token);
+        await journal.AppendAsync("factory-transport-plan", new { bus = record.Bus, record.Cell.Plan, map.CollectedTick }, token);
+        await FinishAsync(record.Bus, catalog, controller, token);
+        return true;
+    }
+
+    internal static (FactoryCell Cell, FactoryTransportBus Bus) NewBalancedBus(string sourceCellId, string firstCellId,
+        string secondCellId, string item, int firstMaximum, int secondMaximum, BalancedBeltPlan plan, long tick)
+    {
+        var entities = new Dictionary<string, PlannedEntity>(StringComparer.Ordinal);
+        Add("source-inserter", Equipment.Inserter, plan.First.SourceInserter);
+        Add("target-inserter-0", Equipment.Inserter, plan.First.TargetInserter);
+        Add("target-inserter-1", Equipment.Inserter, plan.Second.TargetInserter);
+        Add("splitter-0", "splitter", plan.Splitter);
+        for (int i = 0; i < plan.First.Belts.Count; i++)
+            if (i != plan.ReplacedBelt) Add($"belt-{i}", Equipment.Belt, plan.First.Belts[i]);
+        for (int i = 0; i < plan.Second.Belts.Count; i++) Add($"belt-{plan.First.Belts.Count + i}", Equipment.Belt, plan.Second.Belts[i]);
+        var poles = plan.First.Poles.Concat(plan.Second.Poles).DistinctBy(p => p.Position).ToArray();
+        for (int i = 0; i < poles.Length; i++) Add($"pole-{i}", Equipment.Pole, poles[i]);
+        var inputs = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var outputs = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        string FirstRole(int index) => index == plan.ReplacedBelt ? "splitter-0" : $"belt-{index}";
+        string SecondRole(int index) => $"belt-{plan.First.Belts.Count + index}";
+        foreach (var role in Enumerable.Range(0, plan.First.Belts.Count).Select(FirstRole)
+            .Concat(Enumerable.Range(0, plan.Second.Belts.Count).Select(SecondRole)))
+        { inputs[role] = []; outputs[role] = []; }
+        void Edge(string from, string to) { outputs[from].Add(to); inputs[to].Add(from); }
+        for (int i = 1; i < plan.First.Belts.Count; i++) Edge(FirstRole(i - 1), FirstRole(i));
+        Edge("splitter-0", SecondRole(0));
+        for (int i = 1; i < plan.Second.Belts.Count; i++) Edge(SecondRole(i - 1), SecondRole(i));
+        var graph = inputs.ToDictionary(p => p.Key, p => new FactoryConveyorEdges(p.Value, outputs[p.Key]), StringComparer.Ordinal);
+        string cellId = $"transport-{Guid.NewGuid():N}";
+        var cell = new FactoryCell(cellId, 0, new(0, 0, true), "transport", Equipment.Belt, null,
+            new Dictionary<string, string>(), "building", tick, Plan: entities);
+        var bus = new FactoryTransportBus($"bus-{Guid.NewGuid():N}", sourceCellId, item, cellId,
+            [new(firstCellId, "target-inserter-0", firstMaximum), new(secondCellId, "target-inserter-1", secondMaximum)], Graph: graph);
+        return (cell, bus);
+        void Add(string role, string equipment, PlacementCandidate p) => entities[role] = new(role, equipment, p.Position, p.Direction);
     }
 
     public async Task RepairControlsAsync(FactoryState state, FactorySnapshot snapshot, ProductionCatalog catalog,
@@ -325,7 +433,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             await controller.ApproachEntityAsync(cell.Entities[consumer.InserterRole], position, catalog, token);
             await control.EnsureAsync(cell.Entities[consumer.InserterRole], bus.Item, catalog, controller, token, chest, consumer.Paused ? 0 : consumer.Maximum);
         }
-        foreach (var role in FactoryTransportHealth.Belts(cell))
+        foreach (var role in bus.Graph?.Keys ?? FactoryTransportHealth.Belts(cell))
         {
             var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
             var record = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == cell.Entities[role]);

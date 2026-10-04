@@ -23,9 +23,11 @@ public sealed record FactoryCell(string Id, int Zone, CellSlot Slot, string Kind
     public bool IsResource => Zone == 0 && Kind is "smelter" or "miner";
 }
 public sealed record FactoryTransportConsumer(string TargetCellId, string InserterRole, int Maximum, bool Paused = false);
+public sealed record FactoryConveyorEdges(IReadOnlyList<string> Inputs, IReadOnlyList<string> Outputs);
 /// <summary>A single-item belt bus owns its transport cell; endpoints refer to producer/consumer cells so rebuilt chests are found by their roles.</summary>
 public sealed record FactoryTransportBus(string Id, string SourceCellId, string Item, string CellId,
-    IReadOnlyList<FactoryTransportConsumer> Consumers, int? ActorReserve = null);
+    IReadOnlyList<FactoryTransportConsumer> Consumers, int? ActorReserve = null,
+    IReadOnlyDictionary<string, FactoryConveyorEdges>? Graph = null);
 /// <summary>Resource cells use zone 0; their slot band is the id of their <see cref="ResourceRow"/>.</summary>
 /// <summary>Targets are the automation rates requested so far, item to items per minute; older registries load without them.</summary>
 public sealed record FactoryState(int Version, string WorldId, IReadOnlyList<FactoryZone> Zones, IReadOnlyList<FactoryCell> Cells,

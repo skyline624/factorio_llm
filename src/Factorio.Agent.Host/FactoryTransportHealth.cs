@@ -60,13 +60,15 @@ public static class FactoryTransportHealth
         {
             var data = records[beltIds[i]];
             var connections = Facts(data)?.BeltConnections;
+            if (bus.Graph is not null) continue;
             string[] input = i == 0 ? [] : [beltIds[i - 1]];
             string[] output = i + 1 == beltIds.Length ? [] : [beltIds[i + 1]];
             if (!Own(data) || data.GetProperty("type").GetString() != "transport-belt"
                 || connections is null || connections.InputsCount != input.Length || connections.OutputsCount != output.Length
                 || !connections.Inputs.SequenceEqual(input) || !connections.Outputs.SequenceEqual(output)) return false;
         }
-        var belts = beltIds.ToHashSet(StringComparer.Ordinal);
+        if (bus.Graph is not null && !GraphMatches()) return false;
+        var belts = (bus.Graph?.Keys.Select(role => cell.Entities[role]) ?? beltIds).ToHashSet(StringComparer.Ordinal);
         if (snapshot.Records.Where(r => r.Kind == "transit" && (belts.Contains(r.EntityId) || arms.Contains(r.EntityId)))
             .Any(r => r.Data.GetProperty("items").EnumerateObject().Any(p => p.Name != bus.Item && p.Value.GetInt64() > 0))) return false;
         // Native counts also include unknown neighbours; no unseen belt branch can be silently accepted.
@@ -75,6 +77,45 @@ public static class FactoryTransportHealth
                 || native.DropTargetId is { } drop && belts.Contains(drop)));
 
         bool Own(JsonElement data) => data.GetProperty("force").GetString() == force && data.GetProperty("surfaceIndex").GetInt32() == surface;
+        bool GraphMatches()
+        {
+            var graph = bus.Graph!;
+            var roles = cell.Plan!.Keys.Where(r => r.StartsWith("belt-", StringComparison.Ordinal) || r.StartsWith("splitter-", StringComparison.Ordinal)).ToHashSet(StringComparer.Ordinal);
+            if (!roles.SetEquals(graph.Keys) || graph.Count > 208 || !graph.Keys.Any(r => r.StartsWith("splitter-", StringComparison.Ordinal))) return false;
+            if (graph.Keys.Any(r => !cell.Entities.ContainsKey(r)) || graph.Keys.Select(r => cell.Entities[r]).Distinct().Count() != graph.Count) return false;
+            foreach (var (role, edges) in graph)
+            {
+                if (!cell.Entities.TryGetValue(role, out var id) || !records.TryGetValue(id, out var data) || !Own(data)
+                    || edges.Inputs.Distinct().Count() != edges.Inputs.Count || edges.Outputs.Distinct().Count() != edges.Outputs.Count
+                    || edges.Inputs.Concat(edges.Outputs).Any(r => r == role || !graph.ContainsKey(r))) return false;
+                foreach (var other in edges.Inputs) if (!graph[other].Outputs.Contains(role)) return false;
+                foreach (var other in edges.Outputs) if (!graph[other].Inputs.Contains(role)) return false;
+                var native = Facts(data);
+                bool split = role.StartsWith("splitter-", StringComparison.Ordinal);
+                if (data.GetProperty("type").GetString() != (split ? "splitter" : "transport-belt")
+                    || split && native?.SplitterControl is not { InputPriority: "none", OutputPriority: "none", Filter: null }
+                    || edges.Inputs.Count > (split ? 2 : 1) || edges.Outputs.Count > (split ? 2 : 1)
+                    || native?.BeltConnections is not { } connections
+                    || connections.InputsCount != edges.Inputs.Count || connections.OutputsCount != edges.Outputs.Count
+                    || !connections.Inputs.SequenceEqual(edges.Inputs.Select(r => cell.Entities[r]).Order(StringComparer.Ordinal))
+                    || !connections.Outputs.SequenceEqual(edges.Outputs.Select(r => cell.Entities[r]).Order(StringComparer.Ordinal))) return false;
+            }
+            var terminals = graph.Where(p => p.Value.Outputs.Count == 0).Select(p => cell.Entities[p.Key]).ToHashSet(StringComparer.Ordinal);
+            var pickups = bus.Consumers.Select(c => Facts(records[cell.Entities[c.InserterRole]])?.PickupTargetId).OfType<string>().ToArray();
+            if (pickups.Length != bus.Consumers.Count || pickups.Distinct().Count() != pickups.Length || !terminals.SetEquals(pickups)) return false;
+            // Every declared conveyor must be reachable from the source, and the plan must be acyclic.
+            var visiting = new HashSet<string>(StringComparer.Ordinal);
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            bool Visit(string role)
+            {
+                if (visiting.Contains(role)) return false;
+                if (visited.Contains(role)) return true;
+                visiting.Add(role);
+                foreach (var next in graph[role].Outputs) if (!Visit(next)) return false;
+                visiting.Remove(role); visited.Add(role); return true;
+            }
+            return graph.TryGetValue(ordered[0], out var root) && root.Inputs.Count == 0 && Visit(ordered[0]) && visited.Count == graph.Count;
+        }
         bool Arm(string id, string pickup, string drop, string? chest, int? maximum, string comparator = "<")
         {
             if (!records.TryGetValue(id, out var data) || !Own(data) || data.GetProperty("type").GetString() != "inserter"
@@ -95,5 +136,6 @@ public static class FactoryTransportHealth
     private sealed record TransportFacts(string? PickupTargetId = null, string? DropTargetId = null,
         ObservedBeltConnections? BeltConnections = null, ObservedInserterControl? InserterControl = null,
         [property: System.Text.Json.Serialization.JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? RedNeighbours = null,
-        int? RedNeighbourCount = null, MapPosition? PickupPosition = null, MapPosition? DropPosition = null);
+        int? RedNeighbourCount = null, MapPosition? PickupPosition = null, MapPosition? DropPosition = null,
+        ObservedSplitterControl? SplitterControl = null);
 }

@@ -43,7 +43,7 @@ local function prototype(value)
     result.inserterPickup = pickup and {x = pickup[1], y = pickup[2]}
     result.inserterDrop = drop and {x = drop[1], y = drop[2]}
   end
-  if value.type == "transport-belt" then result.beltSpeed = value.belt_speed end
+  if value.type == "transport-belt" or value.type == "splitter" then result.beltSpeed = value.belt_speed end
   if #value.fluidbox_prototypes > 0 then
     result.fluidBoxes = {}
     for _, fluidbox in ipairs(value.fluidbox_prototypes) do

@@ -75,7 +75,9 @@ public sealed record SpatialEntity(string Id, string Name, MapPosition Position,
     [property: JsonConverter(typeof(NativeArrayConverter<ObservedFluidConnection>))] IReadOnlyList<ObservedFluidConnection>? FluidConnections = null,
     ObservedPower? Power = null, double BoundsOrientation = 0, MapPosition? PickupPosition = null, string? PickupTargetId = null,
     ObservedBeltConnections? BeltConnections = null, string? Status = null, ObservedInserterControl? InserterControl = null,
-    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? RedNeighbours = null, int? RedNeighbourCount = null);
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? RedNeighbours = null, int? RedNeighbourCount = null,
+    ObservedSplitterControl? SplitterControl = null);
+public sealed record ObservedSplitterControl(string InputPriority, string OutputPriority, string? Filter = null);
 public sealed record ObservedInserterControl(bool UseFilters, string? FilterMode,
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Filters,
     bool CircuitEnabled = false, string? CircuitItem = null, string? Comparator = null, int? Maximum = null,
