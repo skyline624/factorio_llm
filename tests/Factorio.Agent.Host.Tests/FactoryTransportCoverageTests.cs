@@ -109,7 +109,7 @@ public sealed class FactoryTransportCoverageTests
     private static HashSet<(string Chest, string Item)> Covered(FactoryState state, FactorySnapshot snapshot,
         IReadOnlyDictionary<string, double>? shares) => FactoryTransportCoverage.Connected(state, snapshot, Catalogs.Early(), shares);
 
-    private static (FactoryState State, FactorySnapshot Snapshot, IReadOnlyDictionary<string, double> Shares) Fixture(
+    internal static (FactoryState State, FactorySnapshot Snapshot, IReadOnlyDictionary<string, double> Shares) Fixture(
         double[] sourceRates, int targets = 1, double crafts = 12, string item = "iron-plate", bool pausedSecond = false)
     {
         bool raw = item == "iron-plate";

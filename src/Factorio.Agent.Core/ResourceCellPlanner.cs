@@ -69,11 +69,11 @@ public sealed class ResourceCellPlanner
     public static WorldBox Walkway(SpatialSnapshot map, ResourceRow row) => Checked(map, row).Walkway(row.Cells, ends: true).Translate(row.Origin);
 
     /// <summary>Tiles of every planned entity plus the row walkway; power links and later rows must leave them free.</summary>
-    public static IReadOnlyList<WorldBox> Reservation(SpatialSnapshot map, ResourceRow row)
+    public static IReadOnlyList<WorldBox> Reservation(SpatialSnapshot map, ResourceRow row, bool reserveWalkway = true)
     {
         Template template = Checked(map, row);
-        return Enumerable.Range(0, row.Cells).SelectMany(i => template.Parts.Select(p => template.Tiles(p).Translate(template.Corner(row.Origin, i))))
-            .Append(template.Walkway(row.Cells, ends: true).Translate(row.Origin)).ToArray();
+        var parts = Enumerable.Range(0, row.Cells).SelectMany(i => template.Parts.Select(p => template.Tiles(p).Translate(template.Corner(row.Origin, i))));
+        return (reserveWalkway ? parts.Append(template.Walkway(row.Cells, ends: true).Translate(row.Origin)) : parts).ToArray();
     }
 
     /// <summary>

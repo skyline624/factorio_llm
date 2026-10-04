@@ -118,6 +118,7 @@ function M.observe(args)
     result.boilers[#result.boilers + 1] = {id = U.entity_id(boiler), name = boiler.name, position = U.copy(boiler.position),
       direction = boiler.direction, energyPerTick = boiler.prototype.get_max_energy_usage(boiler.quality),
       effectivity = boiler.prototype.burner_prototype and boiler.prototype.burner_prototype.effectivity or 1,
+      fuelCategories = boiler.prototype.burner_prototype and boiler.prototype.burner_prototype.fuel_categories,
       fuel = U.inventory(boiler.get_fuel_inventory()), generatorIds = generators,
       status = boiler.status and status_names[boiler.status]}
   end

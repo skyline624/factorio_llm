@@ -2,6 +2,7 @@ namespace Factorio.Agent.Core;
 
 public sealed record PlannedBeltLink(string SourceId, string TargetId, BeltTransportPlan Plan);
 public sealed record BeltTransportBatchPlan(IReadOnlyList<PlannedBeltLink> Links, int Searches, bool BudgetExhausted);
+public sealed record BeltTransportRequest(string TargetId, IReadOnlyList<string> SourceIds);
 
 /// <summary>Compares bounded route orders before one ingredient bus consumes another's chest port or passage.</summary>
 public sealed class BeltTransportBatchPlanner
@@ -11,15 +12,27 @@ public sealed class BeltTransportBatchPlanner
     {
         if (sourceIds.Count is < 1 or > 8 || sourceIds.Distinct(StringComparer.Ordinal).Count() != sourceIds.Count)
             throw new ArgumentException("A transport batch requires one to eight distinct sources.", nameof(sourceIds));
+        return Find(map, equipment, sourceIds.Select(source => new BeltTransportRequest(targetId, [source])).ToArray(), maximumSearches, token);
+    }
+
+    /// <summary>Plans assignments and route order for several consumers without promising one source twice.</summary>
+    public BeltTransportBatchPlan Find(SpatialSnapshot map, BeltTransportEquipment equipment, IReadOnlyList<BeltTransportRequest> requests,
+        int maximumSearches = 48, CancellationToken token = default)
+    {
+        if (requests.Count is < 1 or > 8 || requests.Any(r => string.IsNullOrWhiteSpace(r.TargetId)
+            || r.SourceIds.Count is < 1 or > 8 || r.SourceIds.Any(s => string.IsNullOrWhiteSpace(s) || s == r.TargetId)
+            || r.SourceIds.Distinct(StringComparer.Ordinal).Count() != r.SourceIds.Count))
+            throw new ArgumentException("A batch requires one to eight valid requests with distinct candidate sources.", nameof(requests));
         if (maximumSearches is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(maximumSearches));
         var best = new List<PlannedBeltLink>();
         var selected = new List<PlannedBeltLink>();
         int searches = 0, bestBelts = int.MaxValue, bestPoles = int.MaxValue;
         bool exhausted = false;
-        Search(map, sourceIds);
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        Search(map, Enumerable.Range(0, requests.Count).ToArray());
         return new(best.AsReadOnly(), searches, exhausted);
 
-        void Search(SpatialSnapshot current, IReadOnlyList<string> remaining)
+        void Search(SpatialSnapshot current, IReadOnlyList<int> remaining)
         {
             token.ThrowIfCancellationRequested();
             int belts = selected.Sum(l => l.Plan.Belts.Count), poles = selected.Sum(l => l.Plan.Poles.Count);
@@ -30,15 +43,19 @@ public sealed class BeltTransportBatchPlanner
                 bestBelts = belts;
                 bestPoles = poles;
             }
-            foreach (string sourceId in remaining)
+            foreach (int requestIndex in remaining)
+            foreach (string sourceId in requests[requestIndex].SourceIds.Where(s => !used.Contains(s)))
             {
                 if (searches == maximumSearches) { exhausted = true; return; }
                 int identity = ++searches;
+                string targetId = requests[requestIndex].TargetId;
                 var plan = new BeltTransportPlanner().Find(current, equipment, sourceId, targetId, token);
                 if (plan is null) continue;
                 var link = new PlannedBeltLink(sourceId, targetId, plan);
                 selected.Add(link);
-                Search(Project(current, equipment, link, identity), remaining.Where(s => s != sourceId).ToArray());
+                used.Add(sourceId);
+                Search(Project(current, equipment, link, identity), remaining.Where(i => i != requestIndex).ToArray());
+                used.Remove(sourceId);
                 selected.RemoveAt(selected.Count - 1);
             }
         }

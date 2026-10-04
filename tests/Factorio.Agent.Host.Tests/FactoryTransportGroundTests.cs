@@ -40,6 +40,26 @@ public sealed class FactoryTransportGroundTests
         Assert.True(field.PlacementClear(belt, new(-10.5, -10.5), 0));
     }
 
+    [Fact]
+    public void FuelExportsCanUseTheirSourceWalkwayWhileEveryMachineSlotStaysReserved()
+    {
+        var map = FactoryMaps.Grass(24);
+        var belt = map.Prototypes["inserter"] with { Name = "transport-belt", Type = "transport-belt" };
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { [belt.Name] = belt },
+            Items = new Dictionary<string, PlaceableItem>(map.Items) { [belt.Name] = new(belt.Name, 100) } };
+        var equipment = new ResourceCellEquipment("electric-mining-drill", "iron-chest", Pole: "small-electric-pole");
+        var row = new ResourceRow(1, "miner", "coal", "coal", equipment, new(4, 4), 12,
+            ResourceCellPlanner.Pitch(map, equipment, 12) ?? throw new InvalidDataException("No row geometry."), 3, 30);
+        var state = new FactoryState(1, "world", [], [], [row]);
+        var boxes = ResourceCellPlanner.Reservation(map, row);
+        var closed = new SpatialCollisionField(FactoryTransportBuilder.ProtectBands(map, state));
+        var exported = new SpatialCollisionField(FactoryTransportBuilder.ProtectBands(map, state, sourceTransportRows: new HashSet<int> { 1 }));
+        MapPosition Tile(WorldBox box) => new(Math.Floor(box.Min.X) + .5, Math.Floor(box.Min.Y) + .5);
+        Assert.False(closed.PlacementClear(belt, Tile(boxes[^1]), 0));
+        Assert.True(exported.PlacementClear(belt, Tile(boxes[^1]), 0));
+        Assert.All(boxes.Take(boxes.Count - 1), box => Assert.False(exported.PlacementClear(belt, Tile(box), 0)));
+    }
+
     private static FactoryCell Cell(string id, string status, string kind, PlannedEntity part) =>
         new(id, 0, new(0, 0, true), kind, part.Item, null, new Dictionary<string, string>(), status, 100,
             Plan: new Dictionary<string, PlannedEntity> { [part.Role] = part });

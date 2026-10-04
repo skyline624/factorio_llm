@@ -298,8 +298,9 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     /// within minutes, so it is built first; a pocket of plates still lets the assemblers start at once.
     /// </summary>
     internal static IReadOnlyList<(string Item, double PerMinute)> RawSeeds(ProductionCatalog catalog, FactoryState state,
-        IReadOnlyDictionary<string, double> raw, IReadOnlyDictionary<string, long> carried)
+        IReadOnlyDictionary<string, double> raw, IReadOnlyDictionary<string, long> carried, double powerFuelPerMinute = 0)
     {
+        if (!double.IsFinite(powerFuelPerMinute) || powerFuelPerMinute < 0) throw new ArgumentOutOfRangeException(nameof(powerFuelPerMinute));
         bool Unsupplied(string item, double perMinute) => ResourceCellPlanner.Supply(catalog, item) is not null
             && RawCapacity(state, item).PerMinute < perMinute - 1e-9
             && (state.Targets?.ContainsKey(item) == true || carried.GetValueOrDefault(item) < perMinute * SeedHorizonMinutes);
@@ -311,6 +312,15 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         if (!raw.ContainsKey(FactoryLogistics.Fuel) && Unsupplied(FactoryLogistics.Fuel, RawCapacityGrowth.DefaultPerMinute)
             && smelting)
             seeds.Add((FactoryLogistics.Fuel, RawCapacityGrowth.DefaultPerMinute));
+        if (powerFuelPerMinute > 0)
+        {
+            double fuelRate = powerFuelPerMinute + Math.Max(raw.GetValueOrDefault(FactoryLogistics.Fuel),
+                smelting ? RawCapacityGrowth.DefaultPerMinute : 0);
+            seeds.RemoveAll(s => s.Item1 == FactoryLogistics.Fuel);
+            // Carried coal can start equipment, but cannot replace sustained boiler supply capacity.
+            if (RawCapacity(state, FactoryLogistics.Fuel).PerMinute < fuelRate - 1e-9)
+                seeds.Add((FactoryLogistics.Fuel, fuelRate));
+        }
         return seeds.OrderBy(s => s.Item1, StringComparer.Ordinal).ToArray();
     }
 
@@ -326,14 +336,20 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         // A connected electric drill is idle when retained boiler feeders ran dry during the previous long goal.
         // Restore their paid fuel before starting or extending raw suppliers.
         await ExpandPowerAsync(catalog.Scope, token);
+        var current = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        PowerState? power = current.Cells.Any(c => c.Kind == "power" && c.Status == "ready")
+            ? await new PowerExpansionController(game, journal, directory).ObserveAsync(token) : null;
+        double powerFuel = current.Cells.Sum(c => PowerFuelPolicy.Demand(catalog, c, FactoryLogistics.Fuel, power) ?? 0);
+        var startupRaw = new Dictionary<string, double>(raw, StringComparer.Ordinal);
+        if (powerFuel > 0) startupRaw[FactoryLogistics.Fuel] = startupRaw.GetValueOrDefault(FactoryLogistics.Fuel) + powerFuel;
         await using (var controller = new SpatialController(game, journal))
-            foreach (var producer in RawStartupCells(catalog, await registry.LoadAsync(catalog.Scope.WorldId, token), raw))
+            foreach (var producer in RawStartupCells(catalog, await registry.LoadAsync(catalog.Scope.WorldId, token), startupRaw))
             {
                 if (isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
                 await new ResourceCellStartup(game, journal).StartAsync(producer, catalog, controller, token);
             }
         var carried = FactoryLogistics.Carried(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token));
-        foreach (var (item, perMinute) in RawSeeds(catalog, await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token), raw, carried))
+        foreach (var (item, perMinute) in RawSeeds(catalog, await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token), raw, carried, powerFuel))
         {
             if (isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
             try
@@ -347,6 +363,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 await journal.AppendAsync("factory-raw-seed-failed", new { item, perMinute, error = error.GetType().Name, error.Message }, token);
             }
         }
+        await new PowerFuelTransport(game, journal, directory).ConnectAsync(catalog, token);
     }
 
     internal static IReadOnlyList<FactoryCell> RawStartupCells(ProductionCatalog catalog, FactoryState state,

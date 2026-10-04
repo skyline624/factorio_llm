@@ -6,7 +6,7 @@ namespace Factorio.Agent.Host;
 internal static class FactoryTransportCoverage
 {
     public static HashSet<(string Chest, string Item)> Connected(FactoryState state, FactorySnapshot snapshot,
-        ProductionCatalog catalog, IReadOnlyDictionary<string, double>? shares)
+        ProductionCatalog catalog, IReadOnlyDictionary<string, double>? shares, PowerState? power = null)
     {
         var buses = (state.Transports ?? []).Where(b => FactoryTransportHealth.Healthy(state, snapshot, b)).ToArray();
         var connected = new HashSet<(string, string)>();
@@ -14,6 +14,7 @@ internal static class FactoryTransportCoverage
         {
             var target = state.Cells.Single(c => c.Id == flow.TargetCellId);
             double? demand = Demand(target, flow.Item);
+            if (target.Kind == "power" && demand is null) continue;
             if (demand is null || Supply(target.Id, flow.Item) + 1e-9 >= demand)
                 connected.Add((target.Entities["input-chest"], flow.Item));
         }
@@ -21,10 +22,7 @@ internal static class FactoryTransportCoverage
 
         double? Demand(FactoryCell cell, string item)
         {
-            if (cell.Recipe is null || shares is null || !shares.TryGetValue(cell.Recipe, out double crafts)) return null;
-            var recipe = catalog.Recipes.SingleOrDefault(r => r.Name == cell.Recipe);
-            double amount = recipe?.Ingredients.Where(i => i.DeterministicItem && i.Name == item).Sum(i => i.Amount!.Value) ?? 0;
-            return amount > 0 ? amount * crafts : null;
+            return FactoryTransportCoverage.Demand(catalog, shares, cell, item, power);
         }
 
         double Supply(string targetId, string item) => buses.Where(b => b.Item == item
@@ -45,19 +43,38 @@ internal static class FactoryTransportCoverage
 
         double Capacity(FactoryCell source, string item)
         {
-            double perMinute;
-            if (source.IsResource)
-                perMinute = (state.Rows ?? []).SingleOrDefault(r => r.Id == source.Slot.Band && r.Product == item)?.CellPerMinute ?? 0;
-            else
-            {
-                if (source.Recipe is null || shares is null || !shares.TryGetValue(source.Recipe, out double crafts)) return 0;
-                var recipe = catalog.Recipes.SingleOrDefault(r => r.Name == source.Recipe);
-                if (recipe is null) return 0;
-                perMinute = Math.Min(crafts, AutomationPlanner.CellCraftsPerMinute(catalog, recipe, source.MachineItem))
-                    * recipe.Products.Where(p => p.DeterministicItem && p.Name == item).Sum(p => p.Amount!.Value);
-            }
-            return Math.Min(perMinute, 60 * AutomationPlanner.InserterItemsPerSecond);
+            return FactoryTransportCoverage.Capacity(state, catalog, shares, source, item, snapshot);
         }
+    }
+
+    internal static double? Demand(ProductionCatalog catalog, IReadOnlyDictionary<string, double>? shares,
+        FactoryCell cell, string item, PowerState? power)
+    {
+        if (cell.Kind == "power") return PowerFuelPolicy.Demand(catalog, cell, item, power);
+        if (cell.Recipe is null || shares is null || !shares.TryGetValue(cell.Recipe, out double crafts)) return null;
+        var recipe = catalog.Recipes.SingleOrDefault(r => r.Name == cell.Recipe);
+        double amount = recipe?.Ingredients.Where(i => i.DeterministicItem && i.Name == item).Sum(i => i.Amount!.Value) ?? 0;
+        return amount > 0 ? amount * crafts : null;
+    }
+
+    internal static double Capacity(FactoryState state, ProductionCatalog catalog, IReadOnlyDictionary<string, double>? shares,
+        FactoryCell source, string item, FactorySnapshot snapshot)
+    {
+        if (item == FactoryLogistics.Fuel && !PowerFuelPolicy.ProducerActive(source, snapshot)) return 0;
+        if (item == FactoryLogistics.Fuel && (state.Transports ?? []).Any(b => b.SourceCellId == source.Id && b.ActorReserve is > 0
+            && FactoryLogistics.Items(snapshot, source.Entities["output-chest"]).GetValueOrDefault(item) <= b.ActorReserve.Value)) return 0;
+        double perMinute;
+        if (source.IsResource)
+            perMinute = (state.Rows ?? []).SingleOrDefault(r => r.Id == source.Slot.Band && r.Product == item)?.CellPerMinute ?? 0;
+        else
+        {
+            if (source.Recipe is null || shares is null || !shares.TryGetValue(source.Recipe, out double crafts)) return 0;
+            var recipe = catalog.Recipes.SingleOrDefault(r => r.Name == source.Recipe);
+            if (recipe is null) return 0;
+            perMinute = Math.Min(crafts, AutomationPlanner.CellCraftsPerMinute(catalog, recipe, source.MachineItem))
+                * recipe.Products.Where(p => p.DeterministicItem && p.Name == item).Sum(p => p.Amount!.Value);
+        }
+        return Math.Min(perMinute, 60 * AutomationPlanner.InserterItemsPerSecond);
     }
 
     internal static double BranchAllocation(FactoryState state, FactorySnapshot snapshot, FactoryTransportBus bus, string targetId)

@@ -59,6 +59,54 @@ public sealed class FactoryBandTransportTests
             sources, "consumer:input-chest", token: cancelled.Token));
     }
 
+    [Fact]
+    public void SeveralConsumersReceiveDifferentSourcesWhenTheirCandidatesOverlap()
+    {
+        var map = SeveralConsumers();
+        BeltTransportRequest[] requests = [new("first-target", ["first-source", "second-source"]),
+            new("second-target", ["first-source", "second-source"])];
+
+        var batch = new BeltTransportBatchPlanner().Find(map,
+            new("transport-belt", "inserter", "small-electric-pole"), requests);
+
+        Assert.Equal(2, batch.Links.Count);
+        Assert.Equal(2, batch.Links.Select(l => l.SourceId).Distinct().Count());
+        Assert.Equal(requests.Select(r => r.TargetId).Order(), batch.Links.Select(l => l.TargetId).Order());
+        var projected = map;
+        foreach (var link in batch.Links)
+        {
+            var field = new SpatialCollisionField(projected);
+            foreach (var part in link.Plan.Belts)
+                Assert.True(field.PlacementClear(map.Prototypes["transport-belt"], part.Position, part.Direction));
+            projected = ProjectBus(projected, link.SourceId, link.Plan);
+        }
+    }
+
+    [Fact]
+    public void ASharedCandidateCannotBePromisedToTwoConsumers()
+    {
+        BeltTransportRequest[] requests = [new("first-target", ["first-source"]), new("second-target", ["first-source"])];
+        var batch = new BeltTransportBatchPlanner().Find(SeveralConsumers(),
+            new("transport-belt", "inserter", "small-electric-pole"), requests);
+
+        Assert.Single(batch.Links);
+        Assert.Equal("first-source", batch.Links[0].SourceId);
+        Assert.False(batch.BudgetExhausted);
+    }
+
+    [Fact]
+    public void MultiConsumerSearchHonorsCancellationAndRejectsAnEmptyCandidateSet()
+    {
+        var map = SeveralConsumers();
+        var equipment = new BeltTransportEquipment("transport-belt", "inserter", "small-electric-pole");
+        Assert.Throws<ArgumentException>(() => new BeltTransportBatchPlanner().Find(map, equipment,
+            new BeltTransportRequest[] { new("first-target", []) }));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() => new BeltTransportBatchPlanner().Find(map, equipment,
+            new BeltTransportRequest[] { new("first-target", ["first-source"]) }, token: cancelled.Token));
+    }
+
     [Theory]
     [InlineData("assembling-machine-1")]
     [InlineData("stone-furnace")]
@@ -149,6 +197,18 @@ public sealed class FactoryBandTransportTests
             Items = new Dictionary<string, PlaceableItem>(map.Items) { [belt.Name] = new(belt.Name, 100) },
             Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { [belt.Name] = belt }
         };
+    }
+
+    private static SpatialSnapshot SeveralConsumers()
+    {
+        // Synthetic powered chest pairs. Real feeder construction is qualified separately in Factorio.
+        var map = Map();
+        var endpoints = new[] { ("first-source", new MapPosition(-6.5, -6.5)), ("second-source", new MapPosition(-6.5, 6.5)),
+            ("first-target", new MapPosition(6.5, -6.5)), ("second-target", new MapPosition(6.5, 6.5)) };
+        return map with { Entities = endpoints.SelectMany(e => new[] {
+            Project(map, e.Item1, new("chest", "iron-chest", e.Item2, 0)),
+            Project(map, e.Item1 + ":pole", new("pole", "small-electric-pole", new(e.Item2.X, e.Item2.Y - 3), 0))
+        }).ToArray() };
     }
 
     private static SpatialSnapshot NativeBandScenario()

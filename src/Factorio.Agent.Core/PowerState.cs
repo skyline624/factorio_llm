@@ -17,7 +17,8 @@ public sealed record ElectricNetworkState(long NetworkId, int Poles,
 /// <summary>A known own boiler and the generators its steam reaches through direct connections and pipes.</summary>
 public sealed record ObservedBoiler(string Id, string Name, MapPosition Position, int Direction, double EnergyPerTick, double Effectivity,
     IReadOnlyDictionary<string, long> Fuel,
-    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> GeneratorIds, string? Status = null);
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> GeneratorIds, string? Status = null,
+    IReadOnlyDictionary<string, bool>? FuelCategories = null);
 
 public sealed record PowerBudget(long NetworkId, double CapacityPerTick, double DemandPerTick)
 {

@@ -246,7 +246,10 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
                 var missing = FactoryLogistics.Missing(snapshot, registered);
                 if (missing.Length == 0)
                 {
-                    if (NeedsPriming(snapshot, registered, catalog.Items[Fuel].StackSize))
+                    var covered = FactoryTransportCoverage.Connected(known, snapshot, catalog,
+                        FactoryLogistics.CellShares(catalog, known), state);
+                    if (!PowerFuelPolicy.AutomatedReserve(snapshot, registered, catalog.Items[Fuel].StackSize, covered)
+                        && NeedsPriming(snapshot, registered, catalog.Items[Fuel].StackSize))
                     {
                         ValidateRegisteredFeeder(snapshot, registered);
                         string retainedChestId = registered.Entities["input-chest"];

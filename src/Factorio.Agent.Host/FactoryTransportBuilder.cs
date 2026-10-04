@@ -185,7 +185,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
 
     }
 
-    private static (FactoryCell Cell, FactoryTransportBus Bus) NewBus(string sourceCellId, string targetCellId, string item,
+    internal static (FactoryCell Cell, FactoryTransportBus Bus) NewBus(string sourceCellId, string targetCellId, string item,
         int maximum, BeltTransportPlan plan, long tick)
     {
         var entities = new Dictionary<string, PlannedEntity>(StringComparer.Ordinal);
@@ -210,10 +210,13 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
         var source = state.Cells.Single(c => c.Id == sourceCellId);
         var target = state.Cells.Single(c => c.Id == targetCellId);
+        var power = target.Kind == "power" ? await new PowerExpansionController(game, journal, directory).ObserveAsync(token) : null;
+        bool consumes = catalog.Recipes.Any(r => r.Name == target.Recipe && r.Ingredients.Any(i => i.DeterministicItem && i.Name == item))
+            || PowerFuelPolicy.Demand(catalog, target, item, power) is > 0;
         if (source.Status != "ready" || target.Status != "ready" || Product(catalog, source) != item
             || !source.Entities.ContainsKey("output-chest") || !target.Entities.ContainsKey("input-chest")
-            || !catalog.Recipes.Any(r => r.Name == target.Recipe && r.Ingredients.Any(i => i.DeterministicItem && i.Name == item)))
-            throw new InvalidOperationException("A bus must connect a registered producer to its native recipe consumer.");
+            || !consumes)
+            throw new InvalidOperationException("A bus must connect a registered producer to its native recipe or fuel consumer.");
         var bus = (state.Transports ?? []).SingleOrDefault(b => b.SourceCellId == sourceCellId && b.Item == item);
         if (bus is not null && bus.Consumers.Any(c => c.TargetCellId == targetCellId))
         {
@@ -224,22 +227,30 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         if (bus?.Graph is not null) return false;
         var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Factory transport scope changed.");
+        if (target.Kind == "power") PowerExpansionController.ValidateRegisteredFeeder(snapshot, target);
         if (bus is not null && !FactoryTransportHealth.Healthy(state, snapshot, bus)) return false;
         var from = Position(snapshot, source.Entities["output-chest"]);
         var to = Position(snapshot, target.Entities["input-chest"]);
         if (from is null || to is null) return false;
         var frameEntities = FrameEntities(state, source, target, bus);
-        var frameCenter = PlanningCenter(snapshot, frameEntities);
+        int approachTiles = target.Kind == "power" ? 1 : 4;
+        var frameCenter = PlanningCenter(snapshot, frameEntities, approachTiles);
         if (frameCenter is null) return false;
-        await controller.TravelAsync(frameCenter, 4, catalog, token);
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
-        var map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
+        SpatialSnapshot? map;
+        if (target.Kind == "power") map = await CaptureFuelFrameAsync(state, snapshot, frameEntities, steam, catalog, controller, token);
+        else
+        {
+            await controller.TravelAsync(frameCenter, approachTiles, catalog, token);
+            map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
+        }
+        if (map is null) return false;
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Transport planning scope changed.");
         if (frameEntities.Any(id => !map.Entities.Any(e => e.Id == id)) || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0)
             return false;
         await journal.AppendAsync("factory-transport-frame", new { map.Scope, map.CollectedTick, sourceCellId, targetCellId,
             requestedCenter = frameCenter, observedCenter = map.Actor.Position, map.Bounds, requiredEntities = frameEntities.Length }, token);
-        map = ProtectBands(map, state, steam);
+        map = ProtectBands(map, state, steam, target.Kind == "power" && source.IsResource ? new HashSet<int> { source.Slot.Band } : null);
         if (bus is null)
         {
             var plan = new BeltTransportPlanner().Find(map, Equipment, source.Entities["output-chest"], target.Entities["input-chest"], token);
@@ -396,7 +407,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     internal static int ActorReserve(long needed, long carried, int stackSize) =>
         checked((int)Math.Min(Math.Max(0, needed - carried), Math.Clamp(stackSize / 4, 1, 10000)));
 
-    private async Task FinishAsync(FactoryTransportBus bus, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
+    internal async Task FinishAsync(FactoryTransportBus bus, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromMinutes(40));
@@ -490,7 +501,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     private static IEnumerable<PlannedEntity> UnfinishedParts(FactoryState state) =>
         state.Cells.Where(c => c.Status == "building" && c.Kind != "transport").SelectMany(c => c.Plan?.Values ?? []);
 
-    internal static SpatialSnapshot ProtectBands(SpatialSnapshot map, FactoryState state, PowerExpansionController.SteamItems? steam = null)
+    internal static SpatialSnapshot ProtectBands(SpatialSnapshot map, FactoryState state, PowerExpansionController.SteamItems? steam = null,
+        IReadOnlySet<int>? sourceTransportRows = null)
     {
         var boxes = new List<WorldBox>();
         foreach (var zone in state.Zones)
@@ -507,7 +519,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         }
         boxes.AddRange(UnfinishedParts(state)
             .Where(p => map.Items.ContainsKey(p.Item)).Select(p => map.Prototypes[map.Items[p.Item].EntityName].CollisionBox.Rotate(p.Direction).Translate(p.Position)));
-        boxes.AddRange((state.Rows ?? []).SelectMany(r => ResourceCellPlanner.Reservation(map, r)));
+        boxes.AddRange((state.Rows ?? []).SelectMany(r => ResourceCellPlanner.Reservation(map, r, reserveWalkway: sourceTransportRows?.Contains(r.Id) != true)));
         if (steam is not null)
             boxes.AddRange(PowerExpansionController.ReserveGrowth(map, steam, state.Zones,
                 map.Entities.Single(e => e.Id == map.Actor.Id).Force).Entities.Skip(map.Entities.Count).Select(e => e.Bounds));
@@ -517,7 +529,60 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     private static string? Product(ProductionCatalog catalog, FactoryCell cell) => cell.Recipe is null ? null
         : catalog.Recipes.FirstOrDefault(r => r.Name == cell.Recipe)?.Products.FirstOrDefault(p => p.DeterministicItem)?.Name
             ?? (cell.IsResource ? cell.Recipe : null);
-    private static MapPosition? Position(FactorySnapshot snapshot, string id) => snapshot.Records.FirstOrDefault(r => r.Kind == "entity" && r.EntityId == id)
+    internal async Task<SpatialSnapshot?> CaptureFuelFrameAsync(FactoryState state, FactorySnapshot snapshot,
+        IReadOnlyList<string> entityIds, PowerExpansionController.SteamItems? steam, ProductionCatalog catalog,
+        SpatialController controller, CancellationToken token)
+    {
+        if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame factory scope changed.");
+        if (PlanningCenter(snapshot, entityIds, 1) is null) return null;
+        var spatial = new SpatialClient(game);
+        var items = GeometryItems(state, steam);
+        var map = await spatial.CaptureAsync(items, 48, token);
+        if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame planning scope changed.");
+        bool moved = false;
+        if (!FrameCovered(map, entityIds))
+        {
+            var stand = PlanningStand(map, snapshot, entityIds);
+            if (stand is null) return null; // No known walkable vantage; keep fuel delivery active.
+            await controller.TravelAsync(stand, 1, catalog, token);
+            map = await spatial.CaptureAsync(items, 48, token);
+            if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame travel scope changed.");
+            if (!FrameCovered(map, entityIds)) return null;
+            moved = true;
+        }
+        await journal.AppendAsync("power-fuel-frame", new { map.Scope, map.CollectedTick, map.Actor.Position,
+            map.Bounds, moved, requiredEntities = entityIds.Count }, token);
+        return map;
+    }
+
+    internal static bool FrameCovered(SpatialSnapshot map, IReadOnlyList<string> entityIds) =>
+        map.Coverage.Atomic && map.Coverage.Complete && entityIds.Count > 0 && entityIds.All(id =>
+            map.Entities.SingleOrDefault(e => e.Id == id) is { } entity
+            && map.Bounds.Contains(new WorldBox(new(entity.Bounds.Min.X - 4, entity.Bounds.Min.Y - 4),
+                new(entity.Bounds.Max.X + 4, entity.Bounds.Max.Y + 4))));
+
+    /// <summary>Choose known walkable ground inside the endpoint frame instead of insisting on its possibly occupied center.</summary>
+    internal static MapPosition? PlanningStand(SpatialSnapshot map, FactorySnapshot snapshot, IReadOnlyList<string> entityIds)
+    {
+        if (map.Scope != snapshot.Scope) throw new InvalidDataException("Fuel vantage observations span actor scopes.");
+        var center = PlanningCenter(snapshot, entityIds, 1);
+        if (center is null) return null;
+        var points = entityIds.Select(id => Position(snapshot, id)!).ToArray();
+        // Radius48 minus four routing tiles and one travel tolerance tile; matches PlanningCenter's span86.
+        var feasible = new WorldBox(new(points.Max(p => p.X) - 43, points.Max(p => p.Y) - 43),
+            new(points.Min(p => p.X) + 43, points.Min(p => p.Y) + 43));
+        var field = new SpatialCollisionField(map);
+        if (field.Walkable(center)) return center;
+        var candidates = new List<MapPosition>();
+        for (int y = (int)Math.Ceiling(Math.Max(feasible.Min.Y, map.Bounds.Min.Y) - .5);
+            y + .5 <= Math.Min(feasible.Max.Y, map.Bounds.Max.Y); y++)
+            for (int x = (int)Math.Ceiling(Math.Max(feasible.Min.X, map.Bounds.Min.X) - .5);
+                x + .5 <= Math.Min(feasible.Max.X, map.Bounds.Max.X); x++)
+                candidates.Add(new(x + .5, y + .5));
+        return candidates.OrderBy(p => p.DistanceTo(center)).ThenBy(p => p.DistanceTo(map.Actor.Position)).FirstOrDefault(p => field.Walkable(p));
+    }
+
+    internal static MapPosition? Position(FactorySnapshot snapshot, string id) => snapshot.Records.FirstOrDefault(r => r.Kind == "entity" && r.EntityId == id)
         ?.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json);
 
     internal static string[] FrameEntities(FactoryState state, FactoryCell source, FactoryCell target, FactoryTransportBus? bus) =>
@@ -527,16 +592,18 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             .Distinct(StringComparer.Ordinal)];
 
     /// <summary>One native radius-48 photograph must cover every endpoint and retained bus part, with room for approaches and routing.</summary>
-    internal static MapPosition? PlanningCenter(FactorySnapshot snapshot, IReadOnlyList<string> entityIds)
+    internal static MapPosition? PlanningCenter(FactorySnapshot snapshot, IReadOnlyList<string> entityIds, int approachTiles = 4)
     {
+        if (approachTiles is < 1 or > 4) throw new ArgumentOutOfRangeException(nameof(approachTiles));
         if (entityIds.Count == 0) return null;
         var positions = entityIds.Distinct(StringComparer.Ordinal).Select(id => Position(snapshot, id)).ToArray();
         if (positions.Any(p => p is null || !double.IsFinite(p.X) || !double.IsFinite(p.Y))) return null;
         double left = positions.Min(p => p!.X), right = positions.Max(p => p!.X);
         double top = positions.Min(p => p!.Y), bottom = positions.Max(p => p!.Y);
-        // Eight tiles on either side retain four tiles even when travel stops four tiles from the requested center.
+        // Keep four routing tiles on either side even when travel stops short of the requested center.
         // This is a bounded local proposal, not a claim that longer connections are impossible.
-        if (right - left > 80 || bottom - top > 80) return null;
+        int maximumSpan = 2 * (48 - 4 - approachTiles);
+        if (right - left > maximumSpan || bottom - top > maximumSpan) return null;
         return new(left + (right - left) / 2, top + (bottom - top) / 2);
     }
 }

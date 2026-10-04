@@ -66,11 +66,12 @@ public sealed class PowerStateTests
                 }
             },
             boilers = new[] { new { id = "b1", name = "boiler", position = new { x = 0.5, y = 0 }, direction = 4, energyPerTick = 30000.0,
-                effectivity = 1.0, fuel = new { coal = 5 }, generatorIds = new[] { "e1" }, status = "working" } }
+                effectivity = 1.0, fuel = new { coal = 5 }, fuelCategories = new { chemical = true }, generatorIds = new[] { "e1" }, status = "working" } }
         };
         var state = PowerState.Parse(Response(data));
         Assert.Empty(state.Networks[0].Consumers);
         Assert.Equal(5, state.Boilers[0].Fuel["coal"]);
+        Assert.True(state.Boilers[0].FuelCategories!["chemical"]);
         Assert.Equal(15000, state.Budget(state.Networks[0]).CapacityPerTick);
     }
 

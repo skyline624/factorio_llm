@@ -42,6 +42,28 @@ public sealed class FactoryTransportFrameTests
         Assert.Null(FactoryTransportBuilder.PlanningCenter(Snapshot(("source", new(0, 0))), ["source", "missing"]));
 
     [Fact]
+    public void CloserApproachCoversTheObservedNormalCoalAndPowerSeparation()
+    {
+        var snapshot = Snapshot(("source", new(-13.5, -17.5)), ("boiler-chest", new(70.5, -2.5)));
+        Assert.Null(FactoryTransportBuilder.PlanningCenter(snapshot, ["source", "boiler-chest"]));
+        Assert.Equal(new MapPosition(28.5, -10), FactoryTransportBuilder.PlanningCenter(snapshot, ["source", "boiler-chest"], 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => FactoryTransportBuilder.PlanningCenter(snapshot, ["source"], 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => FactoryTransportBuilder.PlanningCenter(snapshot, ["source"], 5));
+    }
+
+    [Theory]
+    [InlineData(86, 0, true)]
+    [InlineData(0, 86, true)]
+    [InlineData(87, 0, false)]
+    [InlineData(0, 87, false)]
+    public void CloserApproachStillRetainsTheNativePhotographRoutingMargin(double x, double y, bool fits)
+    {
+        var snapshot = Snapshot(("source", new(0, 0)), ("target", new(x, y)));
+        var center = FactoryTransportBuilder.PlanningCenter(snapshot, ["source", "target"], 1);
+        Assert.Equal(fits ? new MapPosition(x / 2, y / 2) : null, center);
+    }
+
+    [Fact]
     public void EmptyRequestsDoNotChooseAnArbitraryVantage() =>
         Assert.Null(FactoryTransportBuilder.PlanningCenter(Snapshot(), []));
 
@@ -57,6 +79,55 @@ public sealed class FactoryTransportFrameTests
     {
         var snapshot = Snapshot(("source", new(-20, 10)), ("target", new(20, -10)));
         Assert.Equal(new MapPosition(0, 0), FactoryTransportBuilder.PlanningCenter(snapshot, ["source", "source", "target"]));
+    }
+
+    [Fact]
+    public void AnExistingCompletePhotographCoversEndpointsWithoutNeedingTheirCenter()
+    {
+        var map = FrameMap();
+        Assert.True(FactoryTransportBuilder.FrameCovered(map, ["source", "target"]));
+        Assert.False(new SpatialCollisionField(map).Walkable(new(0, 0)));
+    }
+
+    [Fact]
+    public void MissingEndpointsAndInsufficientRoutingMarginCannotUseTheExistingPhotograph()
+    {
+        var map = FrameMap();
+        Assert.False(FactoryTransportBuilder.FrameCovered(map, ["source", "missing"]));
+        Assert.False(FactoryTransportBuilder.FrameCovered(map with { Bounds = new(new(-43, -48), new(48, 48)) }, ["source", "target"]));
+        Assert.False(FactoryTransportBuilder.FrameCovered(map with { Coverage = map.Coverage with { Complete = false } }, ["source", "target"]));
+    }
+
+    [Fact]
+    public void AnOccupiedCenterUsesWalkableGroundWithinTheNativeFrameTolerance()
+    {
+        var snapshot = Snapshot(("source", new(-42, 0)), ("target", new(42, 0)));
+        var map = FrameMap() with { Scope = snapshot.Scope };
+        var stand = FactoryTransportBuilder.PlanningStand(map, snapshot, ["source", "target"]);
+        Assert.NotNull(stand);
+        Assert.NotEqual(new MapPosition(0, 0), stand);
+        Assert.InRange(stand.X, -1, 1);
+        Assert.True(new SpatialCollisionField(map).Walkable(stand));
+    }
+
+    [Fact]
+    public void AFrameWithNoKnownWalkableVantageIsDeferred()
+    {
+        var snapshot = Snapshot(("source", new(-42, 0)), ("target", new(42, 0)));
+        var map = FactoryMaps.Grass(48, tile: (_, _) => "water") with { Scope = snapshot.Scope };
+        Assert.Null(FactoryTransportBuilder.PlanningStand(map, snapshot, ["source", "target"]));
+        Assert.Throws<InvalidDataException>(() => FactoryTransportBuilder.PlanningStand(map with
+            { Scope = map.Scope with { Generation = map.Scope.Generation + 1 } }, snapshot, ["source", "target"]));
+    }
+
+    private static SpatialSnapshot FrameMap()
+    {
+        var map = FactoryMaps.Grass(48);
+        var chest = map.Prototypes["iron-chest"];
+        var tree = map.Prototypes["tree"];
+        return map with { Entities = [new("source", chest.Name, new(-42, 0), chest.CollisionBox.Translate(new(-42, 0)), 0, "own"),
+            new("target", chest.Name, new(42, 0), chest.CollisionBox.Translate(new(42, 0)), 0, "own"),
+            new("obstacle", tree.Name, new(0, 0), tree.CollisionBox, 0, "neutral")] };
     }
 
     private static FactorySnapshot Snapshot(params (string Id, MapPosition Position)[] entities) =>
