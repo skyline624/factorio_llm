@@ -27,7 +27,10 @@ internal sealed class FurnaceFleetController(IGameClient game, IControllerJourna
             .ThenByDescending(m => m.Value.CraftingSpeed).ThenBy(m => m.Key, StringComparer.Ordinal).FirstOrDefault();
         if (option.Key is null) return false;
         int batches = checked((int)Math.Ceiling(missing / recipe.Products[0].Amount!.Value));
-        int desired = FurnaceFleetPlanner.RequiredMachines(recipe, batches, option.Value.CraftingSpeed);
+        // Equipment construction otherwise serializes repeated 15-steel lots for several minutes each.
+        // Ordinary stock goals retain their ten-minute expansion target and all native cost checks.
+        int desired = FurnaceFleetPlanner.RequiredMachines(recipe, batches, option.Value.CraftingSpeed,
+            CarriedStock.IsProcuringConstructionStock ? 120 : 600);
         if (desired < 2) return false;
         Running.Value = true;
         try { await RunCoreAsync(option.Key, option.Value, desired, initial); }

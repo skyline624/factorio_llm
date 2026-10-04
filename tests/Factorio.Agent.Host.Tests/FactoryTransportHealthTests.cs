@@ -8,6 +8,34 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class FactoryTransportHealthTests
 {
+    [Theory]
+    [InlineData("empty-table")]
+    [InlineData("empty-array")]
+    [InlineData("connected")]
+    public void UnrelatedMachineCircuitFactsDoNotBreakKnownTransportHealth(string circuit)
+    {
+        var (state, snapshot, bus) = Fixture();
+        var neighbours = circuit == "empty-table" ? Protocol.ToElement(new { })
+            : Protocol.ToElement(circuit == "connected" ? new[] { "another-machine" } : Array.Empty<string>());
+        var machine = Entity("unrelated-drill", "mining-drill", new
+        {
+            redNeighbours = Array.Empty<string>(), redNeighbourCount = 0,
+            greenNeighbours = neighbours, greenNeighbourCount = circuit == "connected" ? 1 : 0
+        });
+        snapshot = snapshot with { Records = [.. snapshot.Records, machine] };
+        Assert.True(FactoryTransportHealth.Healthy(state, snapshot, bus));
+        Assert.Equal(2, FactoryTransportHealth.Connected(state, snapshot).Count);
+    }
+
+    [Fact]
+    public void UnknownTransportFieldsStillFailTheStrictContract()
+    {
+        var (state, snapshot, bus) = Fixture();
+        snapshot = snapshot with { Records = [.. snapshot.Records,
+            Entity("unrelated-drill", "mining-drill", new { unknownCircuitFact = true })] };
+        Assert.Throws<JsonException>(() => FactoryTransportHealth.Healthy(state, snapshot, bus));
+    }
+
     [Fact]
     public void AGraphWithPendingNativeRetirementsCannotBeReportedAsHealthy()
     {

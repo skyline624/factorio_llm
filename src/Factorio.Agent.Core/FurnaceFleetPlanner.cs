@@ -9,13 +9,14 @@ public static class FurnaceFleetPlanner
 {
     public const int MaximumMachines = 8;
 
-    public static int RequiredMachines(NativeRecipe recipe, int batches, double craftingSpeed)
+    public static int RequiredMachines(NativeRecipe recipe, int batches, double craftingSpeed, double targetGameSeconds = 600)
     {
         ValidateRecipe(recipe);
-        if (batches < 1 || !double.IsFinite(craftingSpeed) || craftingSpeed <= 0)
+        if (batches < 1 || !double.IsFinite(craftingSpeed) || craftingSpeed <= 0
+            || !double.IsFinite(targetGameSeconds) || targetGameSeconds <= 0)
             throw new ArgumentOutOfRangeException(nameof(batches));
-        // Ten game minutes is the expansion target, not an execution deadline or completion claim.
-        return checked((int)Math.Clamp(Math.Ceiling(batches * recipe.EnergySeconds / craftingSpeed / 600), 1, MaximumMachines));
+        // This is the caller's expansion target, not an execution deadline or completion claim.
+        return checked((int)Math.Clamp(Math.Ceiling(batches * recipe.EnergySeconds / craftingSpeed / targetGameSeconds), 1, MaximumMachines));
     }
 
     public static FurnaceFleetPlan Plan(NativeRecipe recipe, int targetStock, long carried, IReadOnlyList<FurnaceFleetMachine> machines)

@@ -137,5 +137,7 @@ public static class FactoryTransportHealth
         ObservedBeltConnections? BeltConnections = null, ObservedInserterControl? InserterControl = null,
         [property: System.Text.Json.Serialization.JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? RedNeighbours = null,
         int? RedNeighbourCount = null, MapPosition? PickupPosition = null, MapPosition? DropPosition = null,
-        ObservedSplitterControl? SplitterControl = null);
+        ObservedSplitterControl? SplitterControl = null,
+        [property: System.Text.Json.Serialization.JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? GreenNeighbours = null,
+        int? GreenNeighbourCount = null);
 }

@@ -2,7 +2,7 @@
 
 Le contrôleur C# peut réutiliser et construire plusieurs fours à combustible pour un objectif de fusion solide. Il alimente les fours avant d'attendre leurs produits. Le LLM choisit l'objectif ; les positions, orientations, approches et accès de sortie sont calculés en C# sur la géométrie observée.
 
-Le nombre souhaité dépend du travail restant, du temps de recette et de la vitesse native du modèle de four, avec une cible de dix minutes de jeu et un plafond de huit machines. Cette estimation guide l'extension ; elle ne garantit aucun délai de livraison. Les fours compatibles existants sont réutilisés avant toute construction.
+Le nombre souhaité dépend du travail restant, du temps de recette et de la vitesse native du modèle de four, avec une cible de dix minutes de jeu pour les objectifs de stock ordinaires et de deux minutes pendant l'approvisionnement d'un kit de construction. Le plafond reste de huit machines. Cette estimation guide l'extension ; elle ne garantit aucun délai de livraison. Les fours compatibles existants sont réutilisés avant toute construction.
 
 ## Stocks et approvisionnement
 
@@ -35,6 +35,23 @@ Le travail natif d'un seul four est de 48 000 ticks pour ces 50 aciers et de 38 
 Les ressources, recherches et terrain de ces scénarios sont préparés artificiellement. Ces preuves qualifient la construction et la répartition de la fusion ; elles ne constituent pas une progression économique normale.
 
 Les 482 tests hors ligne passent, avec un test cloud optionnel ignoré. Ils couvrent notamment les capacités d'insertion, les ingrédients partiels, les productions engagées, la vitesse actuelle, la répartition du combustible et le refus des fixtures sur une campagne normale.
+
+## Lots d'acier pour les kits de construction
+
+`CarriedStock` conserve un contexte d'approvisionnement pendant ses appels imbriqués, puis le restaure même après un échec. Le contrôleur de fours utilise ce contexte pour répartir plus tôt les petits lots qui bloquent la construction d'équipements. Un lot de quinze aciers passe ainsi de la cuisson dans un seul four à deux chargements de sept et huit cycles. Les objectifs de stock ordinaires gardent leur politique précédente ; les capacités, réservations et coûts restent ceux observés dans le jeu.
+
+Comparaison préparée du 4 octobre 2026, Factorio **2.0.77 headless**, graine **20261166**, même programme de test, vitesse de simulation **1**, aucun joueur connecté :
+
+| Version | Durée native du kit | Fours finaux | Fer consommé | Pierre supplémentaire | Minages manuels |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Référence, un four | 15 152 ticks / 252,53 s | 1 | 75 | 0 | 0 |
+| Approvisionnement réparti | 8 706 ticks / 145,10 s | 2 | 75 | 5 | 0 |
+
+Chaque cas commence avec un four froid et fournit explicitement 75 plaques de fer, dix engrenages, dix circuits, dix briques, dix tuyaux, cinq pierres, du charbon et les recherches nécessaires. Aucun acier ni raffinerie n'est fourni. Les compteurs natifs constatent quinze aciers produits puis consommés et une raffinerie portée ; les deux fours de la nouvelle version cuisent simultanément. Les durées incluent la fabrication et la pose du second four, les déplacements, le chargement, la collecte et la fabrication de la raffinerie. Le gain mesuré est de **42,54 %**, avec le coût d'un four supplémentaire. Les deux mondes sont sauvegardés et arrêtés.
+
+Les premières tentatives sont conservées dans les preuves privées : une préparation omettait le déblocage des tuyaux ; une autre déclenchait la construction d'une ligne de briques et dépassait le périmètre du comparatif. Fournir les briques et tuyaux dans le scénario final isole le lot d'acier ; ce choix ne mesure pas leur production autonome ni le gain global d'une partie normale.
+
+Les **1 569 tests offline** passent sans jeu ni cloud. Un essai natif distinct valide les douze contrôles du bus persistant et la lecture des champs de circuit vert d'un four extérieur au bus. Le contrat C# reconnaît ces champs natifs, y compris les listes vides encodées par Lua comme `{}`, et continue de refuser les champs inconnus.
 
 ## Limites
 

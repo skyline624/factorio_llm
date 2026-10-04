@@ -18,6 +18,19 @@ public sealed class FurnaceFleetPlannerTests
         Assert.Equal(count, FurnaceFleetPlanner.RequiredMachines(Steel, batches, speed));
 
     [Fact]
+    public void ConstructionSteelCanStartInParallelWithoutChangingTheOrdinaryStockPolicy()
+    {
+        Assert.Equal(1, FurnaceFleetPlanner.RequiredMachines(Steel, 15, 1));
+        int machines = FurnaceFleetPlanner.RequiredMachines(Steel, 15, 1, targetGameSeconds: 120);
+        var readings = Enumerable.Range(0, machines).Select(i => new FurnaceFleetMachine("f" + i, 0, 0, false, 100, 1)).ToArray();
+        var plan = FurnaceFleetPlanner.Plan(Steel, 15, 0, readings);
+        Assert.Equal(75, plan.Loads.Sum(l => l.InputToInsert));
+        Assert.Equal(15, plan.Loads.Sum(l => l.TotalCycles));
+        Assert.All(plan.Loads, l => Assert.InRange(l.TotalCycles, 7, 8));
+        Assert.Equal(8, FurnaceFleetPlanner.RequiredMachines(Steel, 1000, 1, targetGameSeconds: 120));
+    }
+
+    [Fact]
     public void ColdFurnacesShareTheFirstLoadInsteadOfWaitingForOneToFinish()
     {
         var plan = FurnaceFleetPlanner.Plan(Steel, 50, 0, [new("a", 0, 0, false, 100, 1), new("b", 0, 0, false, 100, 1)]);

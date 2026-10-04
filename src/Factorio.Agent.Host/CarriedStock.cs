@@ -8,6 +8,9 @@ namespace Factorio.Agent.Host;
 /// </summary>
 internal static class CarriedStock
 {
+    private static readonly AsyncLocal<bool> Procuring = new();
+    internal static bool IsProcuringConstructionStock => Procuring.Value;
+
     /// <summary>Items of the layout parts that no recorded native entity stands for yet.</summary>
     public static IReadOnlyDictionary<string, int> Unplaced(CellLayout layout, IReadOnlyDictionary<string, string> recorded) => layout.Entities
         .Where(e => !recorded.ContainsKey(e.Role)).GroupBy(e => e.Item).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
@@ -56,6 +59,10 @@ internal static class CarriedStock
     public static async Task EnsureAsync(IStockGoalExecutor executor, IReadOnlyDictionary<string, long> carried, string item, int count,
         CancellationToken token)
     {
-        if (count > 0 && carried.GetValueOrDefault(item) < count) await executor.RunAsync(item, Math.Min(1000, count), token);
+        if (count <= 0 || carried.GetValueOrDefault(item) >= count) return;
+        bool previous = Procuring.Value;
+        Procuring.Value = true;
+        try { await executor.RunAsync(item, Math.Min(1000, count), token); }
+        finally { Procuring.Value = previous; }
     }
 }
