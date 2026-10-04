@@ -4,17 +4,19 @@ local M = {}
 -- Native transport facts only. Each caller supplies its ordinary visibility/known-own-entity predicate.
 function M.read(entity, known)
   local value = {}
-  local function read_red(into)
-    local connector = entity.get_wire_connector(defines.wire_connector_id.circuit_red, false)
-    into.redNeighbours, into.redNeighbourCount = {}, connector and #connector.connections or 0
+  local function read_circuit(into, colour, connector_id)
+    local connector = entity.get_wire_connector(connector_id, false)
+    local neighbours, count = colour .. "Neighbours", colour .. "NeighbourCount"
+    into[neighbours], into[count] = {}, connector and #connector.connections or 0
     if connector then
       for _, connection in pairs(connector.connections) do
         local owner = connection.target.owner
-        if owner and owner.valid and known(owner) then into.redNeighbours[#into.redNeighbours + 1] = U.entity_id(owner) end
+        if owner and owner.valid and known(owner) then into[neighbours][#into[neighbours] + 1] = U.entity_id(owner) end
       end
-      table.sort(into.redNeighbours)
+      table.sort(into[neighbours])
     end
   end
+  local function read_red(into) read_circuit(into, "red", defines.wire_connector_id.circuit_red) end
   if entity.type == "inserter" then
     value.pickupPosition, value.dropPosition = U.copy(entity.pickup_position), U.copy(entity.drop_position)
     for _, side in ipairs{"pickup", "drop"} do
@@ -60,6 +62,9 @@ function M.read(entity, known)
       table.sort(value.beltConnections[side])
     end
   elseif entity.type == "container" then read_red(value)
+  elseif entity.type == "mining-drill" or entity.type == "furnace" then
+    read_red(value)
+    read_circuit(value, "green", defines.wire_connector_id.circuit_green)
   else return nil end
   return value
 end

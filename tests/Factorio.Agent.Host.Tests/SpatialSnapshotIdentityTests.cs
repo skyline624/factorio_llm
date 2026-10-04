@@ -8,6 +8,28 @@ public sealed class SpatialSnapshotIdentityTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void NativeCircuitNeighboursParseIncludingEmptyLuaTables(bool connected)
+    {
+        var map = SpatialPlannerTests.Map([]);
+        var row = System.Text.Json.Nodes.JsonNode.Parse(Protocol.ToElement(new SpatialEntity(
+            "drill", "wall", new(2, 0), new(new(1.5, -.5), new(2.5, .5)), 0, "own")).GetRawText())!;
+        row["greenNeighbours"] = System.Text.Json.Nodes.JsonNode.Parse(connected ? "[\"pole\"]" : "{}");
+        row["greenNeighbourCount"] = connected ? 1 : 0;
+        row["redNeighbours"] = System.Text.Json.Nodes.JsonNode.Parse("{}");
+        row["redNeighbourCount"] = 0;
+        var data = System.Text.Json.Nodes.JsonNode.Parse(Protocol.ToElement(map).GetRawText())!;
+        data["entities"] = new System.Text.Json.Nodes.JsonArray(row);
+        var response = new GameResponse(1, "synthetic", true, map.CollectedTick,
+            System.Text.Json.JsonSerializer.SerializeToElement(data, Protocol.Json));
+        var observed = Assert.Single(SpatialSnapshot.Parse(response).Entities);
+        Assert.Equal(connected ? 1 : 0, observed.GreenNeighbourCount);
+        Assert.Equal(connected ? new[] { "pole" } : Array.Empty<string>(), observed.GreenNeighbours);
+        Assert.Empty(observed.RedNeighbours!);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void OverlappingBodiesRequireDistinctNativeIdentities(bool duplicate)
     {
         var map = SpatialPlannerTests.Map([]);

@@ -2,6 +2,8 @@
 
 Les cellules de ressources remplacent l'alimentation manuelle de paires foreuse–four isolées. Une cellule `smelter` place une foreuse sur un gisement, un four qui reçoit directement son minerai, un bras qui vide le four dans un coffre et, si nécessaire, un poteau. Une cellule `miner` fait tomber le charbon, la pierre ou un minerai directement dans un coffre ; une foreuse à combustible n'a alors besoin d'aucun poteau.
 
+Les équipements inutilisés d'un gisement épuisé peuvent alimenter le kit d'une nouvelle cellule selon les [conditions de réemploi et leur qualification préparée](resource-equipment-reuse.md).
+
 ## Géométrie calculée en C#
 
 `ResourceCellPlanner` (Core) synthétise chaque cellule à partir de la géométrie native, sans gabarit ni coordonnée fixe :

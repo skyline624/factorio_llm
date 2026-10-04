@@ -76,7 +76,8 @@ public sealed record SpatialEntity(string Id, string Name, MapPosition Position,
     ObservedPower? Power = null, double BoundsOrientation = 0, MapPosition? PickupPosition = null, string? PickupTargetId = null,
     ObservedBeltConnections? BeltConnections = null, string? Status = null, ObservedInserterControl? InserterControl = null,
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? RedNeighbours = null, int? RedNeighbourCount = null,
-    ObservedSplitterControl? SplitterControl = null);
+    ObservedSplitterControl? SplitterControl = null,
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? GreenNeighbours = null, int? GreenNeighbourCount = null);
 public sealed record ObservedSplitterControl(string InputPriority, string OutputPriority, string? Filter = null);
 public sealed record ObservedInserterControl(bool UseFilters, string? FilterMode,
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Filters,

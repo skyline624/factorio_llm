@@ -230,6 +230,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
     internal async Task EnsureCarriedAsync(FactoryRegistry registry, ProductionCatalog catalog, IReadOnlyDictionary<string, int> needed,
         CancellationToken token)
     {
+        await new ResourceEquipmentReuse(game, journal).RecoverAsync(registry, catalog, needed, token);
         using (ProductionReservations.EnterFactory(await registry.LoadAsync(catalog.Scope.WorldId, token)))
             await CarriedStock.EnsureAsync(game, journal, catalog, needed, token);
     }

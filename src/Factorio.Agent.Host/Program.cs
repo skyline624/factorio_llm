@@ -39,6 +39,7 @@ try
           verify-factory-cells|verify-factory-research|verify-resource-cells|verify-power-expansion --session FILE
           verify-factory-cells --session FILE --from-materials
           verify-resource-cells --session FILE [--burner]
+          verify-resource-equipment-reuse --session FILE
           verify-fluid-consumer --session FILE [--item battery|processing-unit] [--from-materials]
           verify-oil-products --session FILE [--item rocket-fuel|electric-engine-unit]
           verify-factory-transport --session FILE
@@ -167,6 +168,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new ResourceCellQualification(session, options.ContainsKey("burner")).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-resource-equipment-reuse":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new ResourceEquipmentReuseQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "power-expand":
