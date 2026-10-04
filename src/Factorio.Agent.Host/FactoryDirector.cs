@@ -286,7 +286,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
 
     /// <summary>
     /// Raw items the plan draws faster than ready resource cells supply and carried stock cannot cover for the horizon, plus coal
-    /// for their furnaces when such plates are smelted. A smelter cell costs about what an assembler cell costs and repays it
+    /// for new or retained active smelters. A smelter cell costs about what an assembler cell costs and repays it
     /// within minutes, so it is built first; a pocket of plates still lets the assemblers start at once.
     /// </summary>
     internal static IReadOnlyList<(string Item, double PerMinute)> RawSeeds(ProductionCatalog catalog, FactoryState state,
@@ -295,8 +295,12 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         bool Unsupplied(string item, double perMinute) => ResourceCellPlanner.Supply(catalog, item) is not null
             && RawCapacity(state, item).PerMinute < perMinute - 1e-9 && carried.GetValueOrDefault(item) < perMinute * SeedHorizonMinutes;
         var seeds = raw.Where(p => p.Value > 0 && Unsupplied(p.Key, p.Value)).Select(p => (p.Key, p.Value)).ToList();
+        // Existing plate capacity still consumes fuel. On normal seed20261072, coal depletion was missed until
+        // another plate cell was needed, leaving preparation to repeated transient coal procurement.
+        bool smelting = seeds.Any(s => ResourceCellPlanner.Supply(catalog, s.Key)?.Kind == "smelter")
+            || RawStartupCells(catalog, state, raw).Any(c => c.Kind == "smelter");
         if (!raw.ContainsKey(FactoryLogistics.Fuel) && Unsupplied(FactoryLogistics.Fuel, RawCapacityGrowth.DefaultPerMinute)
-            && seeds.Any(s => ResourceCellPlanner.Supply(catalog, s.Key)?.Kind == "smelter"))
+            && smelting)
             seeds.Add((FactoryLogistics.Fuel, RawCapacityGrowth.DefaultPerMinute));
         return seeds.OrderBy(s => s.Item1, StringComparer.Ordinal).ToArray();
     }

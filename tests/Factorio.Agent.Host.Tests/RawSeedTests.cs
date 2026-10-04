@@ -45,6 +45,50 @@ public sealed class RawSeedTests
             .Select(s => s.Item).Order(StringComparer.Ordinal));
     }
 
+    [Fact]
+    public void DepletedCoalIsReplacedEvenWhenExistingSmeltersCoverEveryPlannedPlate()
+    {
+        // Normal seed20261072: two electric iron cells and the copper cell covered red science,
+        // but depleted coal was repeatedly procured in temporary21-item lots before green preparation.
+        var seeds = FactoryDirector.RawSeeds(Catalogs.Raw(), CoveredPlates(), ScienceRaw, new Dictionary<string, long>());
+        var coal = Assert.Single(seeds);
+        Assert.Equal("coal", coal.Item);
+        Assert.Equal(RawCapacityGrowth.DefaultPerMinute, coal.PerMinute);
+    }
+
+    [Fact]
+    public void CarriedCoalForTheHorizonDoesNotReplaceItsDepletedProducerDuringPreparation()
+    {
+        var carried = new Dictionary<string, long> { ["coal"] = (long)(RawCapacityGrowth.DefaultPerMinute * FactoryDirector.SeedHorizonMinutes) };
+        Assert.Empty(FactoryDirector.RawSeeds(Catalogs.Raw(), CoveredPlates(), ScienceRaw, carried));
+    }
+
+    [Fact]
+    public void StockOnlyPreparationDoesNotSeedCoalForInactiveSmelters()
+    {
+        var state = CoveredPlates();
+        state = state with { Cells = state.Cells.Select(c => c with { Status = "depleted" }).ToArray() };
+        var carried = ScienceRaw.ToDictionary(p => p.Key, p => (long)(p.Value * FactoryDirector.SeedHorizonMinutes));
+        Assert.Empty(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, carried));
+    }
+
+    private static FactoryState CoveredPlates()
+    {
+        var smelter = new ResourceCellEquipment("electric-mining-drill", "iron-chest", "stone-furnace", "inserter", "small-electric-pole");
+        var miner = new ResourceCellEquipment("burner-mining-drill", "iron-chest");
+        var rows = new ResourceRow[]
+        {
+            new(1, "smelter", "iron-plate", "iron-ore", smelter, new(0, 0), 0, 3, 2, 18.75),
+            new(2, "smelter", "copper-plate", "copper-ore", smelter, new(20, 0), 0, 3, 1, 15),
+            new(3, "miner", "coal", "coal", miner, new(40, 0), 0, 3, 1, 15)
+        };
+        FactoryCell Cell(string id, int row, int index, string kind, string product, string status) =>
+            new(id, 0, new(row, index, true), kind, kind == "smelter" ? "electric-mining-drill" : "burner-mining-drill", product,
+                new Dictionary<string, string>(), status, 1);
+        return State([Cell("iron-a", 1, 0, "smelter", "iron-plate", "ready"), Cell("iron-b", 1, 1, "smelter", "iron-plate", "ready"),
+            Cell("copper", 2, 0, "smelter", "copper-plate", "ready"), Cell("coal", 3, 0, "miner", "coal", "depleted")], rows);
+    }
+
     private static FactoryState State(IReadOnlyList<FactoryCell>? cells = null, IReadOnlyList<ResourceRow>? rows = null) =>
         new(1, "world", [], cells ?? [], rows ?? []);
 }
