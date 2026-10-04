@@ -286,14 +286,16 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
 
     /// <summary>
     /// Raw items the plan draws faster than ready resource cells supply and carried stock cannot cover for the horizon, plus coal
-    /// for new or retained active smelters. A smelter cell costs about what an assembler cell costs and repays it
+    /// for new or retained active smelters. Explicit raw-rate targets require capacity even when carried stock covers the horizon.
+    /// A smelter cell costs about what an assembler cell costs and repays it
     /// within minutes, so it is built first; a pocket of plates still lets the assemblers start at once.
     /// </summary>
     internal static IReadOnlyList<(string Item, double PerMinute)> RawSeeds(ProductionCatalog catalog, FactoryState state,
         IReadOnlyDictionary<string, double> raw, IReadOnlyDictionary<string, long> carried)
     {
         bool Unsupplied(string item, double perMinute) => ResourceCellPlanner.Supply(catalog, item) is not null
-            && RawCapacity(state, item).PerMinute < perMinute - 1e-9 && carried.GetValueOrDefault(item) < perMinute * SeedHorizonMinutes;
+            && RawCapacity(state, item).PerMinute < perMinute - 1e-9
+            && (state.Targets?.ContainsKey(item) == true || carried.GetValueOrDefault(item) < perMinute * SeedHorizonMinutes);
         var seeds = raw.Where(p => p.Value > 0 && Unsupplied(p.Key, p.Value)).Select(p => (p.Key, p.Value)).ToList();
         // Existing plate capacity still consumes fuel. On normal seed20261072, coal depletion was missed until
         // another plate cell was needed, leaving preparation to repeated transient coal procurement.

@@ -72,6 +72,26 @@ public sealed class RawSeedTests
         Assert.Empty(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, carried));
     }
 
+    [Fact]
+    public void ExplicitRawRateBuildsCapacityEvenWhenCarriedStockCoversItsHorizon()
+    {
+        var raw = new Dictionary<string, double> { ["coal"] = 30 };
+        var state = State() with { Targets = raw };
+        var seeds = FactoryDirector.RawSeeds(Catalogs.Raw(), state, raw, new Dictionary<string, long> { ["coal"] = 500 });
+        var coal = Assert.Single(seeds);
+        Assert.Equal("coal", coal.Item);
+        Assert.Equal(30, coal.PerMinute);
+    }
+
+    [Fact]
+    public void ExplicitRawRateKeepsCapacityThatAlreadyCoversTheDemand()
+    {
+        var raw = new Dictionary<string, double> { ["coal"] = 15 };
+        var state = CoveredPlates() with { Targets = raw };
+        state = state with { Cells = state.Cells.Select(c => c.Recipe == "coal" ? c with { Status = "ready" } : c).ToArray() };
+        Assert.Empty(FactoryDirector.RawSeeds(Catalogs.Raw(), state, raw, new Dictionary<string, long>()));
+    }
+
     private static FactoryState CoveredPlates()
     {
         var smelter = new ResourceCellEquipment("electric-mining-drill", "iron-chest", "stone-furnace", "inserter", "small-electric-pole");

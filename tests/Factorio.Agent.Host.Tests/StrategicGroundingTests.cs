@@ -159,6 +159,37 @@ public sealed class StrategicGroundingTests
         Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Target = "iron-plate" }, "observation", Catalogs.Raw(), automation: true));
     }
 
+    [Theory]
+    [InlineData("coal", true)]
+    [InlineData("stone", true)]
+    [InlineData("iron-ore", true)]
+    [InlineData("iron-plate", true)]
+    [InlineData("wood", false)]
+    [InlineData("iron plates", false)]
+    public void RawRateGoalsUseNativeResourceCellsAndRequireTheFactory(string target, bool accepted)
+    {
+        // Normal seed20261072: the planner could request a slow coal stock batch, but could not request
+        // the persistent electric coal capacity already supported by the resource-cell constructor.
+        var catalog = Catalogs.Raw();
+        var goal = Goal() with { Target = target, Unit = GoalUnit.ItemsPerMinute, Quantity = 30 };
+        Assert.Equal(accepted, StrategicProductionController.GroundingFailure(goal, "observation", catalog,
+            automation: true, factory: true) is null);
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog, automation: true));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", catalog, factory: true));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 0 }, "observation", catalog,
+            automation: true, factory: true));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { Quantity = 601 }, "observation", catalog,
+            automation: true, factory: true));
+        Assert.NotNull(StrategicProductionController.GroundingFailure(goal with { ObservationId = "stale" }, "observation", catalog,
+            automation: true, factory: true));
+        if (accepted)
+        {
+            var missingItem = catalog with { Items = catalog.Items.Where(p => p.Key != target).ToDictionary() };
+            Assert.NotNull(StrategicProductionController.GroundingFailure(goal, "observation", missingItem,
+                automation: true, factory: true));
+        }
+    }
+
     private static readonly IReadOnlyDictionary<string, long> Turrets = new Dictionary<string, long> { ["gun-turret"] = 32 };
     private static readonly IReadOnlyDictionary<string, long> WallsAndTurrets = new Dictionary<string, long> { ["gun-turret"] = 32, ["stone-wall"] = 40 };
 
