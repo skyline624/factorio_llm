@@ -21,7 +21,11 @@ public sealed record ResourceRowSearch(ResourceRowSearchStatus Status, ResourceR
 public sealed class ResourceCellPlanner
 {
     public const int MaximumRowCells = 8;
+    public const double MinimumSupplyMinutes = 10;
     private const string ReservationName = "resource-row-reservation";
+
+    private sealed record OreReserve(double Units, double CompetingDrills);
+    private sealed record CellCoverage(int Covered, IReadOnlyDictionary<string, OreReserve> Ore);
 
     // Local cell frame: A runs along the row, B grows away from the drill's output edge (B = 0 touches the drill).
     private sealed record Frame(int Width, int Height, int Fx, int Fy)
@@ -164,11 +168,15 @@ public sealed class ResourceCellPlanner
     {
         if (index < 0 || index >= row.Cells) throw new ArgumentOutOfRangeException(nameof(index));
         Template? template = Build(map, row.Equipment, row.Direction);
-        return template?.Pitch == row.Pitch && new Probe(map, catalog, row.Resource, template).Cell(template.Corner(row.Origin, index)) is not null;
+        var supply = Supply(catalog, row.Product);
+        if (template?.Pitch != row.Pitch || supply?.Resource != row.Resource) return false;
+        var cell = new Probe(map, catalog, row.Resource, template).Cell(template.Corner(row.Origin, index));
+        return cell is not null && SupplyMinutes([cell], OrePerMinute(supply, row.CellPerMinute)) >= MinimumSupplyMinutes;
     }
 
     /// <summary>
-    /// The longest row up to the wanted cell count on observed deposits, then the most covered ore, then the nearest.
+    /// The longest viable row, then the longest observed ore reserve, then coverage and distance.
+    /// Each cell must have ten minutes of planned supply after sharing ore with other planned and observed drills.
     /// Rows are accepted only after an escape proof; the proof budget separates exhaustion from absence.
     /// </summary>
     public ResourceRowSearch Find(SpatialSnapshot map, ProductionCatalog catalog, ResourceSupply supply, ResourceCellEquipment equipment,
@@ -179,30 +187,40 @@ public sealed class ResourceCellPlanner
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Resource row observations span different scopes.");
         if (!Observed(map, catalog, supply.Resource)) return new(ResourceRowSearchStatus.NoSite);
         double rate = CellPerMinute(map, catalog, supply, equipment);
-        var candidates = new List<(ResourceRow Row, Template Template, int Covered, double Distance)>();
+        double orePerMinute = OrePerMinute(supply, rate);
+        var candidates = new List<(ResourceRow Row, Template Template, double Minutes, int Covered, double Distance)>();
         foreach (int direction in new[] { 0, 4, 8, 12 })
         {
             Template? template = Build(map, equipment, direction);
             if (template is null) continue;
             var probe = new Probe(map, catalog, supply.Resource, template);
-            var cache = new Dictionary<MapPosition, int?>();
-            int? Cell(MapPosition corner) => cache.TryGetValue(corner, out var known) ? known : cache[corner] = probe.Cell(corner);
+            var cache = new Dictionary<MapPosition, CellCoverage?>();
+            CellCoverage? Cell(MapPosition corner) => cache.TryGetValue(corner, out var known) ? known : cache[corner] = probe.Cell(corner);
             for (int x = (int)Math.Floor(map.Bounds.Min.X) - template.Pitch; x <= map.Bounds.Max.X; x++)
                 for (int y = (int)Math.Floor(map.Bounds.Min.Y) - template.Pitch; y <= map.Bounds.Max.Y; y++)
                 {
                     token.ThrowIfCancellationRequested();
                     var origin = new MapPosition(x, y);
-                    int count = 0, covered = 0;
-                    while (count < cells && Cell(template.Corner(origin, count)) is { } ore) { covered += ore; count++; }
-                    if (count == 0 || !probe.Walkable(template.Frame.Tiles(template.SpanMin - 1, template.Reach + 1, 1, 2).Translate(origin))
-                        || !probe.Walkable(template.Frame.Tiles(template.SpanMin + count * template.Pitch, template.Reach + 1, 1, 2).Translate(origin)))
-                        continue;
-                    var row = new ResourceRow(0, supply.Kind, supply.Product, supply.Resource, equipment, origin, direction, template.Pitch, count, rate);
-                    candidates.Add((row, template, covered, Center(Area(template, row)).DistanceTo(preferred)));
+                    if (!probe.Walkable(template.Frame.Tiles(template.SpanMin - 1, template.Reach + 1, 1, 2).Translate(origin))) continue;
+                    var coverage = new List<CellCoverage>();
+                    int covered = 0;
+                    while (coverage.Count < cells && Cell(template.Corner(origin, coverage.Count)) is { } ore)
+                    {
+                        coverage.Add(ore);
+                        covered += ore.Covered;
+                        double minutes = SupplyMinutes(coverage, orePerMinute);
+                        if (minutes < MinimumSupplyMinutes) break; // More consumers cannot improve an earlier cell's reserve.
+                        if (!probe.Walkable(template.Frame.Tiles(
+                            template.SpanMin + coverage.Count * template.Pitch, template.Reach + 1, 1, 2).Translate(origin))) continue;
+                        // Keep viable prefixes: the next cell can share too little ore even when the first fits.
+                        var row = new ResourceRow(0, supply.Kind, supply.Product, supply.Resource, equipment, origin, direction, template.Pitch, coverage.Count, rate);
+                        candidates.Add((row, template, minutes, covered, Center(Area(template, row)).DistanceTo(preferred)));
+                    }
                 }
         }
         int proofs = 0;
-        foreach (var candidate in candidates.OrderByDescending(c => c.Row.Cells).ThenByDescending(c => c.Covered).ThenBy(c => c.Distance)
+        foreach (var candidate in candidates.OrderByDescending(c => c.Row.Cells).ThenByDescending(c => c.Minutes)
+            .ThenByDescending(c => c.Covered).ThenBy(c => c.Distance)
             .ThenBy(c => c.Row.Direction).ThenBy(c => c.Row.Origin.Y).ThenBy(c => c.Row.Origin.X))
         {
             token.ThrowIfCancellationRequested();
@@ -213,6 +231,17 @@ public sealed class ResourceCellPlanner
             if (Escapes(map, candidate.Row, candidate.Template, clearance, token)) return new(ResourceRowSearchStatus.Found, candidate.Row, clearance);
         }
         return new(ResourceRowSearchStatus.NoSite);
+    }
+
+    private static double OrePerMinute(ResourceSupply supply, double rate) => supply.Recipe is { } recipe
+        ? rate * recipe.Ingredients[0].Amount!.Value / recipe.Products[0].Amount!.Value : rate;
+
+    private static double SupplyMinutes(IReadOnlyList<CellCoverage> cells, double orePerMinute)
+    {
+        var users = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var cell in cells)
+            foreach (string id in cell.Ore.Keys) users[id] = users.GetValueOrDefault(id) + 1;
+        return cells.Min(c => c.Ore.Sum(p => p.Value.Units / (users[p.Key] + p.Value.CompetingDrills))) / orePerMinute;
     }
 
     private static Template? Build(SpatialSnapshot map, ResourceCellEquipment equipment, int direction)
@@ -332,6 +361,7 @@ public sealed class ResourceCellPlanner
         private readonly Template template;
         private readonly EntityGeometry drill;
         private readonly Dictionary<(int, int), List<(SpatialEntity Deposit, bool Target)>> deposits = [];
+        private readonly Dictionary<string, OreReserve> reserves = new(StringComparer.Ordinal);
 
         public Probe(SpatialSnapshot map, ProductionCatalog catalog, string resource, Template template)
         {
@@ -342,24 +372,34 @@ public sealed class ResourceCellPlanner
             {
                 Entities = map.Entities.Where(e => e.Id != map.Actor.Id && !FactoryZonePlanner.Removable.Contains(map.Prototypes[e.Name].Type)).ToArray()
             });
-            foreach (var e in map.Entities.Where(e => e.Amount is > 0 && map.Prototypes[e.Name].ResourceCategory is { } category
+            var consumers = map.Entities.Where(e => map.Prototypes[e.Name] is { Type: "mining-drill", MiningRadius: > 0 })
+                .Select(e => (Entity: e, Geometry: map.Prototypes[e.Name])).ToArray();
+            foreach (var e in map.Entities.Where(e => e.Amount is > 0 && double.IsFinite(e.Amount.Value)
+                && map.Prototypes[e.Name].ResourceCategory is { } category
                 && drill.ResourceCategories!.ContainsKey(category)))
             {
                 var key = ((int)Math.Floor(e.Position.X), (int)Math.Floor(e.Position.Y));
                 if (!deposits.TryGetValue(key, out var list)) deposits[key] = list = [];
-                list.Add((e, Yields(catalog, e.Name, resource)));
+                bool target = Yields(catalog, e.Name, resource);
+                list.Add((e, target));
+                if (!target) continue;
+                double competing = consumers.Where(c => c.Geometry.ResourceCategories?.ContainsKey(map.Prototypes[e.Name].ResourceCategory!) == true
+                    && MiningArea(c.Entity.Position, c.Geometry.MiningRadius!.Value).Contains(e.Position))
+                    .Sum(c => c.Geometry.MiningSpeed is > 0 && double.IsFinite(c.Geometry.MiningSpeed.Value)
+                        ? c.Geometry.MiningSpeed.Value / drill.MiningSpeed!.Value : double.PositiveInfinity);
+                reserves[e.Id] = new(e.Amount!.Value * catalog.Mining[e.Name][0].Amount!.Value, competing);
             }
         }
 
         /// <summary>Wanted deposits under the drill, or null if the cell cannot stand at this drill corner.</summary>
-        public int? Cell(MapPosition corner)
+        public CellCoverage? Cell(MapPosition corner)
         {
             MapPosition center = Add(template.Parts[0].Entity.Position, corner);
             double radius = drill.MiningRadius!.Value;
-            var area = new WorldBox(new(center.X - radius, center.Y - radius), new(center.X + radius, center.Y + radius));
+            var area = MiningArea(center, radius);
             if (!map.Bounds.Contains(area)) return null;
             int covered = 0;
-            bool inside = false;
+            var ore = new Dictionary<string, OreReserve>(StringComparer.Ordinal);
             for (int x = (int)Math.Floor(area.Min.X) - 1; x <= area.Max.X; x++)
                 for (int y = (int)Math.Floor(area.Min.Y) - 1; y <= area.Max.Y; y++)
                     foreach (var (deposit, target) in deposits.GetValueOrDefault((x, y)) ?? [])
@@ -367,12 +407,12 @@ public sealed class ResourceCellPlanner
                         if (!area.Overlaps(deposit.Bounds)) continue;
                         if (!target) return null; // A foreign deposit would mix into the receiver.
                         covered++;
-                        inside |= area.Contains(deposit.Position);
+                        if (area.Contains(deposit.Position)) ore[deposit.Id] = reserves[deposit.Id];
                     }
-            if (!inside) return null;
+            if (ore.Count == 0) return null;
             foreach (var part in template.Parts)
                 if (!field.PlacementClear(Geometry(map, part.Entity.Item), Add(part.Entity.Position, corner), part.Entity.Direction)) return null;
-            return Walkable(template.Walkway(1, ends: false).Translate(corner)) ? covered : null;
+            return Walkable(template.Walkway(1, ends: false).Translate(corner)) ? new(covered, ore) : null;
         }
 
         public bool Walkable(WorldBox tiles)
@@ -383,6 +423,9 @@ public sealed class ResourceCellPlanner
             return true;
         }
     }
+
+    private static WorldBox MiningArea(MapPosition center, double radius) =>
+        new(new(center.X - radius, center.Y - radius), new(center.X + radius, center.Y + radius));
 
     private static Template Checked(SpatialSnapshot map, ResourceRow row)
     {

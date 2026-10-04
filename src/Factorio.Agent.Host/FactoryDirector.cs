@@ -279,7 +279,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     }
 
     /// <summary>Minutes of the planned rate that carried stock must cover before a raw item can go without a resource cell.</summary>
-    public const double SeedHorizonMinutes = 10;
+    public const double SeedHorizonMinutes = ResourceCellPlanner.MinimumSupplyMinutes;
 
     /// <summary>Resource cells built per raw item and automation call before the assemblers; growth adds the rest later.</summary>
     public const int SeedCellsPerItem = 2;
