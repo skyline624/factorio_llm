@@ -26,6 +26,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         bool automation = factoryDirectory is not null && FactoryDirector.Available(catalog);
         var automationReadiness = FactoryDirector.Readiness(catalog, science.Technologies);
         var factoryState = factoryDirectory is null ? null : await new FactoryRegistry(factoryDirectory).LoadAsync(scope.WorldId, token);
+        var transportReadiness = FactoryTransportConversion.Readiness(factoryState, factory, catalog, science.Technologies);
         var cells = factoryState is null ? [] : factoryState.Cells.Where(c => c.Status == "ready").ToArray();
         JsonElement agent = observation.Data.GetProperty("agent");
         var defenseSituation = await AttackResponseFacts.ReadAsync(factoryDirectory, factoryState, factory, defenses, agent, token);
@@ -94,6 +95,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             {
                 available = automation,
                 prerequisites = automationReadiness,
+                transport = transportReadiness,
                 assemblerCells = cells.Where(c => c.Kind == "assembler").GroupBy(c => c.Recipe!).OrderBy(g => g.Key, StringComparer.Ordinal)
                     .Select(g => new { recipe = g.Key, cells = g.Count() }).ToArray(),
                 furnaceCells = cells.Where(c => c.Kind == FurnaceCellPlanner.Kind).GroupBy(c => c.Recipe!).OrderBy(g => g.Key, StringComparer.Ordinal)

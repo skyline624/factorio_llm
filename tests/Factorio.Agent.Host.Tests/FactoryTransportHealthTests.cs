@@ -8,6 +8,37 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class FactoryTransportHealthTests
 {
+    [Fact]
+    public void AGraphWithPendingNativeRetirementsCannotBeReportedAsHealthy()
+    {
+        var (state, snapshot, bus) = Fixture();
+        Assert.True(FactoryTransportHealth.Healthy(state, snapshot, bus));
+        Assert.False(FactoryTransportHealth.Healthy(state, snapshot, bus with { PendingRetirements =
+            [new("b1", new("belt-1", "belt", new(1, 0), 4))] }));
+    }
+
+    [Theory]
+    [InlineData(false, false, 1)]
+    [InlineData(true, false, 0)]
+    [InlineData(false, true, 0)]
+    public void TransportSupportResearchUsesNativeRecipeUnlocksAndKeepsInstallationUnproven(bool enabled, bool researched, int suggestions)
+    {
+        var (state, snapshot, _) = Fixture();
+        var catalog = new ProductionCatalog(snapshot.Scope, 1,
+            [new("split-recipe-alias", enabled, "crafting", .5, [], [new("splitter", "item", 1)], false)],
+            new Dictionary<string, NativeItem>(), new Dictionary<string, NativeMaterial[]>(),
+            new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>());
+        var technology = new NativeTechnology("distribution-variant", true, researched, true, [], [new("red", 1)], 10, 600,
+            Effects: Protocol.ToElement(new[] { new { type = "unlock-recipe", recipe = "split-recipe-alias" } }));
+        var readiness = FactoryTransportConversion.Readiness(state, snapshot, catalog, new Dictionary<string, NativeTechnology> { [technology.Name] = technology });
+        Assert.Equal(1, readiness.LegacyTwoConsumerBuses);
+        Assert.Equal(enabled, readiness.SplitterEnabled);
+        Assert.Equal(suggestions, readiness.UnlockResearch.Length);
+        if (suggestions > 0) Assert.Equal("distribution-variant", Assert.Single(readiness.UnlockResearch).Technology);
+        Assert.Empty(FactoryTransportConversion.Readiness(null, snapshot, catalog,
+            new Dictionary<string, NativeTechnology> { [technology.Name] = technology }).UnlockResearch);
+    }
+
     [Theory]
     [InlineData("source", "depleted")]
     [InlineData("first", "building")]

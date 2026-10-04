@@ -57,6 +57,85 @@ public sealed class BalancedBeltPlannerTests
             "splitter", "source", "target", "target"));
     }
 
+    [Fact]
+    public void AnExistingNativeLineRetainsItsEndpointsAndCoordinatesUntilAHostRetiresTheReplacedBelt()
+    {
+        var original = OriginalLine();
+        var plan = new BalancedBeltPlanner().FindExisting(original.Map, new("belt", "arm", "pole"), "splitter",
+            "source", "target", "second", "old-source-arm", "old-first-arm", original.Belts, original.Poles,
+            new HashSet<string>(StringComparer.Ordinal));
+        Assert.NotNull(plan);
+        Assert.Equal(original.Plan.SourceInserter.Position, plan.First.SourceInserter.Position);
+        Assert.Equal(original.Plan.TargetInserter.Position, plan.First.TargetInserter.Position);
+        Assert.Equal(original.Plan.Belts.Select(p => p.Position), plan.First.Belts.Select(p => p.Position));
+        Assert.InRange(plan.ReplacedBelt, 1, original.Belts.Length - 2);
+        Assert.Equal(original.Plan.Belts[plan.ReplacedBelt].Position,
+            original.Map.Entities.Single(e => e.Id == original.Belts[plan.ReplacedBelt]).Position);
+    }
+
+    [Theory]
+    [InlineData("foreign")]
+    [InlineData("hidden-input")]
+    [InlineData("wrong-pickup")]
+    [InlineData("foreign-tail")]
+    [InlineData("protected-endpoint")]
+    public void ConversionCannotProjectAwayUnverifiedTransportOrEndpointEntities(string change)
+    {
+        var original = OriginalLine();
+        var map = original.Map;
+        var obsolete = new HashSet<string>(StringComparer.Ordinal);
+        if (change == "protected-endpoint") obsolete.Add("target");
+        map = map with { Entities = map.Entities.Select(e => change switch
+        {
+            "foreign" when e.Id == original.Belts[1] => e with { Force = "foreign" },
+            "hidden-input" when e.Id == original.Belts[1] => e with
+                { BeltConnections = e.BeltConnections! with { InputsCount = 2 } },
+            "wrong-pickup" when e.Id == "old-first-arm" => e with { PickupTargetId = original.Belts[0] },
+            "foreign-tail" when e.Id == original.Belts[^1] => e with
+                { BeltConnections = e.BeltConnections! with { Outputs = ["unknown-native-belt"], OutputsCount = 1 } },
+            _ => e
+        }).ToArray() };
+        Assert.Throws<InvalidDataException>(() => new BalancedBeltPlanner().FindExisting(map,
+            new("belt", "arm", "pole"), "splitter", "source", "target", "second", "old-source-arm", "old-first-arm",
+            original.Belts, original.Poles, obsolete));
+    }
+
+    // Synthetic original native line with exact adjacency and endpoint observations; no mutation is performed by the planner.
+    internal static (SpatialSnapshot Map, BeltTransportPlan Plan, string[] Belts, string[] Poles) OriginalLine(bool extend = false)
+    {
+        var map = Map();
+        var plan = new BeltTransportPlanner().Find(map, new("belt", "arm", "pole"), "source", "target")!;
+        Assert.True(plan.Belts.Count >= 3);
+        string[] ids = Enumerable.Range(0, plan.Belts.Count).Select(i => $"old-belt-{i}").ToArray();
+        SpatialEntity Native(string id, string item, PlacementCandidate piece) => new(id, item, piece.Position,
+            map.Prototypes[item].CollisionBox.Rotate(piece.Direction).Translate(piece.Position), piece.Direction, "own");
+        var belts = plan.Belts.Select((p, i) => Native(ids[i], "belt", p) with { BeltConnections = new(
+            i == 0 ? [] : [ids[i - 1]], i + 1 == ids.Length ? [] : [ids[i + 1]], i == 0 ? 0 : 1, i + 1 == ids.Length ? 0 : 1) });
+        string[] poles = Enumerable.Range(0, plan.Poles.Count).Select(i => $"old-pole-{i}").ToArray();
+        map = map with { Entities = [.. map.Entities, .. belts,
+            Native("old-source-arm", "arm", plan.SourceInserter) with { PickupTargetId = "source", DropTargetId = ids[0] },
+            Native("old-first-arm", "arm", plan.TargetInserter) with { PickupTargetId = ids[^1], DropTargetId = "target" },
+            .. plan.Poles.Select((p, i) => Native(poles[i], "pole", p) with { Power = new(100, 1, 10) })] };
+        if (extend)
+        {
+            var extension = new FactoryBeltPlanner().Extend(map, new("belt", "arm", "pole"), ids, "second");
+            Assert.NotNull(extension);
+            var allIds = ids.Concat(Enumerable.Range(1, extension.Belts.Count - 1).Select(i => $"old-extension-{i}")).ToArray();
+            var positions = plan.Belts.Take(plan.Belts.Count - 1).Concat(extension.Belts).ToArray();
+            var allPoles = poles.Concat(Enumerable.Range(0, extension.Poles.Count).Select(i => $"old-extension-pole-{i}")).ToArray();
+            var beltSet = ids.ToHashSet(StringComparer.Ordinal);
+            map = map with { Entities = [.. map.Entities.Where(e => !beltSet.Contains(e.Id)),
+                .. positions.Select((p, i) => Native(allIds[i], "belt", p) with { BeltConnections = new(
+                    i == 0 ? [] : [allIds[i - 1]], i + 1 == allIds.Length ? [] : [allIds[i + 1]], i == 0 ? 0 : 1, i + 1 == allIds.Length ? 0 : 1) }),
+                Native("old-second-arm", "arm", extension.TargetInserter) with { PickupTargetId = allIds[^1], DropTargetId = "second" },
+                .. extension.Poles.Select((p, i) => Native(allPoles[poles.Length + i], "pole", p) with { Power = new(100, 1, 10) })] };
+            plan = plan with { Belts = positions.Take(ids.Length).ToArray(), Poles = plan.Poles.Concat(extension.Poles).ToArray() };
+            ids = allIds;
+            poles = allPoles;
+        }
+        return (map, plan, ids, poles);
+    }
+
     internal static SpatialSnapshot Map()
     {
         var map = BeltTransportPlannerTests.Map(true);

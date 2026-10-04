@@ -25,15 +25,18 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     public static FactoryAutomationReadiness Readiness(ProductionCatalog catalog, IReadOnlyDictionary<string, NativeTechnology> technologies)
     {
         string[] missing = AutomationEquipment.Where(item => !Enabled(catalog, item)).ToArray();
-        var unlocks = technologies.Values.Where(t => !t.Researched).Select(t =>
+        return new(missing, EquipmentUnlocks(catalog, technologies, missing));
+    }
+
+    internal static FactoryEquipmentUnlock[] EquipmentUnlocks(ProductionCatalog catalog,
+        IReadOnlyDictionary<string, NativeTechnology> technologies, IReadOnlyList<string> missing) =>
+        technologies.Values.Where(t => !t.Researched).Select(t =>
         {
             var recipes = TechnologyPlanner.RecipeUnlocks(t.Effects).ToHashSet(StringComparer.Ordinal);
             string[] equipment = missing.Where(item => catalog.Recipes.Any(r => recipes.Contains(r.Name)
                 && r.Products.Any(p => p.DeterministicItem && p.Name == item))).ToArray();
             return new FactoryEquipmentUnlock(t.Name, t.Enabled, t.Available, equipment);
         }).Where(t => t.Equipment.Length > 0).OrderBy(t => t.Technology, StringComparer.Ordinal).ToArray();
-        return new(missing, unlocks);
-    }
 
     public static bool Enabled(ProductionCatalog catalog, string item) =>
         catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == item));

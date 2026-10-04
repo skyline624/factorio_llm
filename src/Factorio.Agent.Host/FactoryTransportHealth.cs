@@ -18,7 +18,7 @@ public static class FactoryTransportHealth
 
     public static bool Healthy(FactoryState state, FactorySnapshot snapshot, FactoryTransportBus bus)
     {
-        if (snapshot.Scope.WorldId != state.WorldId) return false;
+        if (snapshot.Scope.WorldId != state.WorldId || bus.PendingRetirements is { Count: > 0 }) return false;
         var cell = state.Cells.SingleOrDefault(c => c.Id == bus.CellId);
         var sourceCell = state.Cells.SingleOrDefault(c => c.Id == bus.SourceCellId);
         if (cell is not { Status: "ready", Plan: not null } || sourceCell?.Status != "ready"

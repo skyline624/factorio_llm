@@ -33,6 +33,19 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             .Select(p => p.Cell.Id).ToHashSet(StringComparer.Ordinal);
         if (maximumLinks - connected >= 2 && FactoryDirector.Enabled(catalog, "splitter"))
         {
+            foreach (var bus in (state.Transports ?? []).Where(b => b.Graph is null && b.Consumers.Count == 2
+                && b.Consumers.All(c => !pausedCells.Contains(c.TargetCellId) && (targetCellIds is null || targetCellIds.Contains(c.TargetCellId)))))
+            {
+                if (++considered > 8) return connected;
+                if (!await new FactoryTransportConversion(game, journal, directory).PlanAsync(bus, catalog, controller, token)) continue;
+                state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+                await FinishAsync(state.Transports!.Single(b => b.Id == bus.Id), catalog, controller, token);
+                connected += 2;
+                if (maximumLinks - connected < 2) return connected;
+                state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+                stockSnapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+                if (stockSnapshot.Scope != catalog.Scope) throw new InvalidDataException("Converted transport demand scope changed.");
+            }
             var covered = FactoryTransportCoverage.Connected(state, stockSnapshot, catalog, shares);
             var needs = state.Cells.Where(c => c.Status == "ready" && c.Recipe is not null && c.Entities.ContainsKey("input-chest")
                 && !pausedCells.Contains(c.Id) && (targetCellIds is null || targetCellIds.Contains(c.Id)))
@@ -388,6 +401,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromMinutes(40));
         token = deadline.Token;
+        bus = await new FactoryTransportConversion(game, journal, directory).RetireAsync(bus, catalog, controller, token);
         var registry = new FactoryRegistry(directory);
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
         var cell = state.Cells.Single(c => c.Id == bus.CellId);
@@ -506,7 +520,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     private static MapPosition? Position(FactorySnapshot snapshot, string id) => snapshot.Records.FirstOrDefault(r => r.Kind == "entity" && r.EntityId == id)
         ?.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json);
 
-    private static string[] FrameEntities(FactoryState state, FactoryCell source, FactoryCell target, FactoryTransportBus? bus) =>
+    internal static string[] FrameEntities(FactoryState state, FactoryCell source, FactoryCell target, FactoryTransportBus? bus) =>
         [.. new[] { source.Entities["output-chest"], target.Entities["input-chest"] }
             .Concat(bus is null ? [] : state.Cells.Single(c => c.Id == bus.CellId).Entities.Values)
             .Concat(bus is null ? [] : bus.Consumers.Select(c => state.Cells.Single(t => t.Id == c.TargetCellId).Entities["input-chest"]))
