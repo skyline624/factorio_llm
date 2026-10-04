@@ -12,11 +12,13 @@ public sealed class FactoryZonePlanner
     private static readonly CollisionMask Floor = new(["item", "object", "water_tile"], false, false, false);
 
     public FactoryZoneSite? Find(SpatialSnapshot map, EntityGeometry machine, MapPosition preferred, int slots,
-        CancellationToken token = default)
+        CancellationToken token = default, bool transportAccess = false)
     {
         if (slots is < 1 or > 32) throw new ArgumentOutOfRangeException(nameof(slots));
-        // A one-tile margin keeps band ends open to the walkway and away from unrelated machines.
-        int width = slots * FactoryBandPlanner.Pitch(machine) + 2, height = FactoryBandPlanner.BandHeight(machine) + 2;
+        // Transport cells also keep the external arm and its belt tile clear behind the output chest.
+        int margin = transportAccess ? 3 : 1;
+        int width = slots * FactoryBandPlanner.Pitch(machine, transportAccess) + 2 * margin,
+            height = FactoryBandPlanner.BandHeight(machine, transportAccess) + 2 * margin;
         var grid = new TileGrid(map);
         var candidates = new List<(int X, int Y, double Score)>();
         for (int x = grid.MinX; x + width <= grid.MinX + grid.Width; x++)
@@ -27,7 +29,7 @@ public sealed class FactoryZonePlanner
         if (candidates.Count == 0) return null;
         var (bestX, bestY, _) = candidates.OrderBy(c => c.Score).ThenBy(c => c.Y).ThenBy(c => c.X).First();
         var area = new WorldBox(new(bestX, bestY), new(bestX + width, bestY + height));
-        return new(new(bestX + 1, bestY + 1), slots, grid.Removables(area));
+        return new(new(bestX + margin, bestY + margin), slots, grid.Removables(area));
     }
 
     /// <summary>Removable obstacles inside an area, or null if water, deposits, buildings or unknown terrain block it.</summary>

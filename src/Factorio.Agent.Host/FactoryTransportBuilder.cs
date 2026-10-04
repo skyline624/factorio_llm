@@ -37,6 +37,10 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             if (pausedCells.Contains(target.Id)) continue;
             var recipe = catalog.Recipes.FirstOrDefault(r => r.Name == target.Recipe);
             if (recipe is null) continue;
+            var batch = await PlanNewBatchAsync(target, recipe, catalog, shares, controller, maximumLinks - connected, token);
+            connected += batch.Connected;
+            if (connected == maximumLinks) return connected;
+            if (batch.Handled) continue;
             foreach (var ingredient in recipe.Ingredients.Where(i => i.DeterministicItem))
             {
                 state = await registry.LoadAsync(catalog.Scope.WorldId, token);
@@ -72,6 +76,83 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         return connected;
     }
 
+    private async Task<(int Connected, bool Handled)> PlanNewBatchAsync(FactoryCell target, NativeRecipe recipe,
+        ProductionCatalog catalog, IReadOnlyDictionary<string, double>? shares, SpatialController controller, int maximumLinks,
+        CancellationToken token)
+    {
+        var registry = new FactoryRegistry(directory);
+        var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Transport batch photograph belongs to another actor scope.");
+        var coverage = FactoryTransportCoverage.Connected(state, snapshot, catalog, shares);
+        string targetChest = target.Entities["input-chest"];
+        var needed = recipe.Ingredients.Where(i => i.DeterministicItem && !coverage.Contains((targetChest, i.Name))).ToArray();
+        if (needed.Length is < 2 or > 8 || Position(snapshot, targetChest) is not { } destination) return (0, false);
+        var requests = new List<(FactoryCell Source, string Item, int Maximum)>();
+        foreach (var ingredient in needed)
+        {
+            var source = state.Cells.Where(c => c.Id != target.Id && c.Status == "ready" && c.Entities.ContainsKey("output-chest")
+                && Product(catalog, c) == ingredient.Name && !(state.Transports ?? []).Any(b => b.SourceCellId == c.Id))
+                .Select(c => (Cell: c, Position: Position(snapshot, c.Entities["output-chest"])))
+                .Where(p => p.Position is not null && p.Position.DistanceTo(destination) <= 64)
+                .OrderBy(p => p.Position!.DistanceTo(destination)).Select(p => p.Cell).FirstOrDefault();
+            // Existing buses retain their extension path; a distant/unobserved supply retains actor logistics.
+            if (source is null) return (0, false);
+            int limit = checked((int)Math.Clamp(ingredient.Amount!.Value * FactoryLogistics.CellBufferCrafts(target, shares, 40), 1, 10000));
+            requests.Add((source, ingredient.Name, limit));
+        }
+        await controller.ApproachEntityAsync(targetChest, destination, catalog, token);
+        var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
+        var map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
+        if (map.Scope != catalog.Scope) throw new InvalidDataException("Transport batch planning scope changed.");
+        if (!map.Entities.Any(e => e.Id == targetChest) || requests.Any(r => !map.Entities.Any(e => e.Id == r.Source.Entities["output-chest"]))
+            || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0) return (0, false);
+        map = ProtectBands(map, state, steam);
+        var plan = await ControllerPlanning.RunAsync(t => new BeltTransportBatchPlanner().Find(map, Equipment,
+            requests.Select(r => r.Source.Entities["output-chest"]).ToArray(), targetChest, token: t),
+            controller, TimeSpan.FromSeconds(45), token);
+        await journal.AppendAsync("factory-transport-batch-search", new { map.Scope, map.CollectedTick, targetCellId = target.Id,
+            requested = requests.Count, plan.Searches, plan.BudgetExhausted, connected = plan.Links.Count,
+            belts = plan.Links.Sum(l => l.Plan.Belts.Count) }, token);
+        // Do not materialize an incomplete local proof that already blocks another ingredient.
+        if (plan.Links.Count != requests.Count) return (0, true);
+        var records = plan.Links.Select(link =>
+        {
+            var request = requests.Single(r => r.Source.Entities["output-chest"] == link.SourceId);
+            return NewBus(request.Source.Id, target.Id, request.Item, request.Maximum, link.Plan, map.CollectedTick);
+        }).ToArray();
+        foreach (var record in records) state = state.With(record.Cell).With(record.Bus);
+        // Persist every compared route together before the first build. A bounded run may leave later buses pending;
+        // the existing building-bus loop resumes their recorded coordinates instead of greedily replanning them.
+        await registry.SaveAsync(state, token);
+        await journal.AppendAsync("factory-transport-batch-plan", new { map.Scope, map.CollectedTick,
+            targetCellId = target.Id, buses = records.Select(r => r.Bus), plans = records.Select(r => r.Cell.Plan) }, token);
+        int connected = 0;
+        foreach (var record in records.Take(maximumLinks))
+        {
+            await FinishAsync(record.Bus, catalog, controller, token);
+            connected++;
+        }
+        return (connected, true);
+    }
+
+    private static (FactoryCell Cell, FactoryTransportBus Bus) NewBus(string sourceCellId, string targetCellId, string item,
+        int maximum, BeltTransportPlan plan, long tick)
+    {
+        var entities = new Dictionary<string, PlannedEntity>(StringComparer.Ordinal);
+        Add("source-inserter", Equipment.Inserter, plan.SourceInserter);
+        Add("target-inserter-0", Equipment.Inserter, plan.TargetInserter);
+        for (int i = 0; i < plan.Belts.Count; i++) Add($"belt-{i}", Equipment.Belt, plan.Belts[i]);
+        for (int i = 0; i < plan.Poles.Count; i++) Add($"pole-{i}", Equipment.Pole, plan.Poles[i]);
+        string cellId = $"transport-{Guid.NewGuid():N}";
+        var cell = new FactoryCell(cellId, 0, new(0, 0, true), "transport", Equipment.Belt, null,
+            new Dictionary<string, string>(), "building", tick, Plan: entities);
+        var bus = new FactoryTransportBus($"bus-{Guid.NewGuid():N}", sourceCellId, item, cellId,
+            [new(targetCellId, "target-inserter-0", maximum)]);
+        return (cell, bus);
+        void Add(string role, string equipment, PlacementCandidate p) => entities[role] = new(role, equipment, p.Position, p.Direction);
+    }
+
     public async Task<bool> LinkAsync(string sourceCellId, string targetCellId, string item, int maximum, ProductionCatalog catalog,
         SpatialController controller, CancellationToken token)
     {
@@ -103,37 +184,30 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         if (!map.Entities.Any(e => e.Id == target.Entities["input-chest"]) || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0)
             return false;
         map = ProtectBands(map, state, steam);
-        var plans = bus is null ? new Dictionary<string, PlannedEntity>(StringComparer.Ordinal)
-            : new Dictionary<string, PlannedEntity>(state.Cells.Single(c => c.Id == bus.CellId).Plan!, StringComparer.Ordinal);
-        string consumerRole = $"target-inserter-{bus?.Consumers.Count ?? 0}";
         if (bus is null)
         {
             var plan = new BeltTransportPlanner().Find(map, Equipment, source.Entities["output-chest"], target.Entities["input-chest"], token);
             if (plan is null) return false;
-            Add("source-inserter", Equipment.Inserter, plan.SourceInserter);
-            Add(consumerRole, Equipment.Inserter, plan.TargetInserter);
-            for (int i = 0; i < plan.Belts.Count; i++) Add($"belt-{i}", Equipment.Belt, plan.Belts[i]);
-            for (int i = 0; i < plan.Poles.Count; i++) Add($"pole-{i}", Equipment.Pole, plan.Poles[i]);
+            var record = NewBus(sourceCellId, targetCellId, item, maximum, plan, map.CollectedTick);
+            await registry.SaveAsync(state.With(record.Cell).With(record.Bus), token);
+            await journal.AppendAsync("factory-transport-plan", new { bus = record.Bus, record.Cell.Plan, map.CollectedTick }, token);
+            await FinishAsync(record.Bus, catalog, controller, token);
+            return true;
         }
-        else
-        {
-            var current = state.Cells.Single(c => c.Id == bus.CellId);
-            var roles = FactoryTransportHealth.Belts(current);
-            if (roles.Any(r => !map.Entities.Any(e => e.Id == current.Entities[r]))) return false;
-            var plan = new FactoryBeltPlanner().Extend(map, Equipment, roles.Select(r => current.Entities[r]).ToArray(), target.Entities["input-chest"], token);
-            if (plan is null) return false;
-            Add(consumerRole, Equipment.Inserter, plan.TargetInserter);
-            Add(roles[^1], Equipment.Belt, plan.Belts[0]);
-            for (int i = 1; i < plan.Belts.Count; i++) Add($"belt-{roles.Length + i - 1}", Equipment.Belt, plan.Belts[i]);
-            int poles = plans.Keys.Count(k => k.StartsWith("pole-", StringComparison.Ordinal));
-            for (int i = 0; i < plan.Poles.Count; i++) Add($"pole-{poles + i}", Equipment.Pole, plan.Poles[i]);
-        }
-        string cellId = bus?.CellId ?? $"transport-{Guid.NewGuid():N}";
-        var cell = bus is null ? new FactoryCell(cellId, 0, new(0, 0, true), "transport", Equipment.Belt, null,
-            new Dictionary<string, string>(), "building", map.CollectedTick, Plan: plans)
-            : state.Cells.Single(c => c.Id == cellId) with { Plan = plans, Status = "building" };
-        bus = bus is null ? new FactoryTransportBus($"bus-{Guid.NewGuid():N}", sourceCellId, item, cellId, [new(targetCellId, consumerRole, maximum)])
-            : bus with { Consumers = [.. bus.Consumers, new(targetCellId, consumerRole, maximum)] };
+        var current = state.Cells.Single(c => c.Id == bus.CellId);
+        var plans = new Dictionary<string, PlannedEntity>(current.Plan!, StringComparer.Ordinal);
+        string consumerRole = $"target-inserter-{bus.Consumers.Count}";
+        var roles = FactoryTransportHealth.Belts(current);
+        if (roles.Any(r => !map.Entities.Any(e => e.Id == current.Entities[r]))) return false;
+        var extension = new FactoryBeltPlanner().Extend(map, Equipment, roles.Select(r => current.Entities[r]).ToArray(), target.Entities["input-chest"], token);
+        if (extension is null) return false;
+        Add(consumerRole, Equipment.Inserter, extension.TargetInserter);
+        Add(roles[^1], Equipment.Belt, extension.Belts[0]);
+        for (int i = 1; i < extension.Belts.Count; i++) Add($"belt-{roles.Length + i - 1}", Equipment.Belt, extension.Belts[i]);
+        int poles = plans.Keys.Count(k => k.StartsWith("pole-", StringComparison.Ordinal));
+        for (int i = 0; i < extension.Poles.Count; i++) Add($"pole-{poles + i}", Equipment.Pole, extension.Poles[i]);
+        var cell = current with { Plan = plans, Status = "building" };
+        bus = bus with { Consumers = [.. bus.Consumers, new(targetCellId, consumerRole, maximum)] };
         // Save the complete new graph before its first mutation, including a terminal belt's future direction on extension.
         await registry.SaveAsync(state.With(cell).With(bus), token);
         await journal.AppendAsync("factory-transport-plan", new { bus, cell.Plan, map.CollectedTick }, token);
@@ -290,13 +364,14 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var boxes = new List<WorldBox>();
         foreach (var zone in state.Zones)
         {
-            int h = (zone.BandHeight - 6) / 2;
+            int walkway = FactoryBandPlanner.WalkwayTiles(zone.TransportAccess);
+            int rowHeight = (zone.BandHeight - walkway) / 2;
             for (int i = 0; i < zone.Slots; i++)
                 foreach (bool north in new[] { true, false })
                 {
                     if (state.Cells.Any(c => c.Zone == zone.Id && c.Slot.Index == i && c.Slot.North == north)) continue;
-                    double top = zone.Origin.Y + (north ? 0 : h + 4);
-                    boxes.Add(new(new(zone.Origin.X + i * zone.Pitch, top), new(zone.Origin.X + (i + 1) * zone.Pitch, top + h + 2)));
+                    double top = zone.Origin.Y + (north ? 0 : rowHeight + walkway);
+                    boxes.Add(new(new(zone.Origin.X + i * zone.Pitch, top), new(zone.Origin.X + (i + 1) * zone.Pitch, top + rowHeight)));
                 }
         }
         boxes.AddRange(UnfinishedParts(state)

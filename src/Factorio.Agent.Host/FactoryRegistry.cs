@@ -4,7 +4,7 @@ using Factorio.Agent.Core;
 
 namespace Factorio.Agent.Host;
 
-public sealed record FactoryZone(int Id, MapPosition Origin, int Slots, int Pitch, int BandHeight)
+public sealed record FactoryZone(int Id, MapPosition Origin, int Slots, int Pitch, int BandHeight, bool TransportAccess = false)
 {
     /// <summary>The whole band, including slots not built yet.</summary>
     [System.Text.Json.Serialization.JsonIgnore] public WorldBox Box => new(Origin, new(Origin.X + Slots * Pitch, Origin.Y + BandHeight));

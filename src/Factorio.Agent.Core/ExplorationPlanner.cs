@@ -75,7 +75,9 @@ public sealed class ExplorationPlanner
             {
                 var point = new MapPosition(x * 4, y * 4);
                 double distance = point.DistanceTo(map.Actor.Position);
-                if (distance is < 16 or > 28 || !field.Walkable(point)) continue;
+                // Each exploration step hands control back over the network. Belts can be crossed,
+                // but the endpoint must remain still between its native receipt and the next observation.
+                if (distance is < 16 or > 28 || !PlacementPlanner.CanStop(field, point)) continue;
                 if (exploring && (deaths!.Any(d => Enters(map, point, d.Position, DangerZones.Radius))
                     || towardFrontier && threats.Values.Any(t => Enters(map, point, t.Position, t.Range + ThreatMargin))))
                 {

@@ -17,11 +17,13 @@ public sealed record CellLayout(CellSlot Slot, IReadOnlyList<PlannedEntity> Enti
 /// </summary>
 public sealed class FactoryBandPlanner
 {
-    public static int Pitch(EntityGeometry machine) => Math.Max(machine.TileWidth, 3);
-    public static int BandHeight(EntityGeometry machine) => 2 * machine.TileHeight + 6;
+    public static int Pitch(EntityGeometry machine, bool transportAccess = false) => Math.Max(machine.TileWidth, 3) + (transportAccess ? 4 : 0);
+    public static int WalkwayTiles(bool transportAccess) => transportAccess ? 6 : 2;
+    public static int BandHeight(EntityGeometry machine, bool transportAccess = false) =>
+        2 * (machine.TileHeight + (transportAccess ? 4 : 2)) + WalkwayTiles(transportAccess);
 
     public CellLayout Layout(SpatialSnapshot map, CellEquipment equipment, MapPosition origin, CellSlot slot,
-        bool input = true, bool output = true)
+        bool input = true, bool output = true, bool transportAccess = false)
     {
         EntityGeometry machine = Geometry(map, equipment.Machine);
         EntityGeometry arm = Geometry(map, equipment.Inserter);
@@ -32,17 +34,19 @@ public sealed class FactoryBandPlanner
         if (machine.TileWidth < 2 || machine.TileHeight < 1 || arm.Type != "inserter" || arm.InserterPickup is null || arm.InserterDrop is null
             || chest.TileWidth != 1 || chest.TileHeight != 1 || arm.TileWidth != 1 || pole.Type != "electric-pole" || pole.TileWidth != 1)
             throw new InvalidDataException("Band cells require native multi-tile machines and one-tile inserters, chests and poles.");
-        int w = machine.TileWidth, h = machine.TileHeight, pitch = Pitch(machine);
+        int w = machine.TileWidth, h = machine.TileHeight, pitch = Pitch(machine, transportAccess);
         double left = origin.X + slot.Index * pitch;
         // A machine narrower than the pitch sits east, leaving the pole in the west gap column: like a 3-tile machine's
         // centre pole, the first slot's pole then stays within supply reach of a link from outside the reserved band.
-        double machineLeft = left + pitch - w;
-        double bandTop = origin.Y + slot.Band * BandHeight(machine);
+        double machineLeft = transportAccess ? left + 2 : left + pitch - w;
+        double bandTop = origin.Y + slot.Band * BandHeight(machine, transportAccess);
+        int walkwayTiles = WalkwayTiles(transportAccess);
+        int rowHeight = (BandHeight(machine, transportAccess) - walkwayTiles) / 2;
         // Rows from the machine outward: inserters, chests, then the shared two-tile walkway.
-        double machineTop = slot.North ? bandTop : bandTop + h + 6;
+        double machineTop = slot.North ? bandTop + (transportAccess ? 2 : 0) : bandTop + rowHeight + walkwayTiles + 2;
         double armRow = slot.North ? machineTop + h : machineTop - 1;
         double chestRow = slot.North ? armRow + 1 : armRow - 1;
-        double walkTop = slot.North ? chestRow + 1 : chestRow - 2;
+        double walkTop = bandTop + rowHeight;
         var center = new MapPosition(machineLeft + w / 2.0, machineTop + h / 2.0);
         WorldBox body = machine.CollisionBox.Translate(center);
         var entities = new List<PlannedEntity> { new("machine", equipment.Machine, center, 0) };
@@ -54,14 +58,26 @@ public sealed class FactoryBandPlanner
         }
         if (output)
         {
-            var at = Tile(machineLeft + w - 1, armRow);
-            entities.Add(new("output-inserter", equipment.Inserter, at, Direction(arm, at, from: body, into: Tile(machineLeft + w - 1, chestRow))));
-            entities.Add(new("output-chest", equipment.Chest, Tile(machineLeft + w - 1, chestRow), 0));
+            // A second chest two tiles along the same face occupies a belt port of the first. Put the output
+            // behind the machine; the input then has three external sides for independently filtered buses.
+            double outputColumn = transportAccess ? machineLeft : machineLeft + w - 1;
+            double outputArmRow = transportAccess ? (slot.North ? machineTop - 1 : machineTop + h) : armRow;
+            double outputChestRow = transportAccess ? (slot.North ? outputArmRow - 1 : outputArmRow + 1) : chestRow;
+            var at = Tile(outputColumn, outputArmRow);
+            var to = Tile(outputColumn, outputChestRow);
+            entities.Add(new("output-inserter", equipment.Inserter, at, Direction(arm, at, from: body, into: to)));
+            entities.Add(new("output-chest", equipment.Chest, to, 0));
         }
         double poleColumn = w >= 3 ? left + 1 : left;
-        entities.Add(new("pole", equipment.Pole, Tile(poleColumn, armRow), 0));
-        var footprint = new WorldBox(new(left, Math.Min(machineTop, chestRow)), new(left + pitch, Math.Max(machineTop + h, chestRow + 1)));
-        return new(slot, entities, footprint, new(new(left, walkTop), new(left + pitch, walkTop + 2)));
+        var polePosition = transportAccess ? Tile(machineLeft - 1, machineTop + Math.Floor(h / 2.0)) : Tile(poleColumn, armRow);
+        entities.Add(new("pole", equipment.Pole, polePosition, 0));
+        if (transportAccess && entities.Where(e => e.Role is "machine" or "input-inserter" or "output-inserter")
+            .Any(e => !PowerGridPlanner.Supplies(polePosition, pole, Geometry(map, e.Item).CollisionBox.Rotate(e.Direction).Translate(e.Position))))
+            throw new InvalidDataException("The native pole cannot supply both faces of this transport cell.");
+        double firstChest = entities.Where(e => e.Role.EndsWith("chest", StringComparison.Ordinal)).Select(e => e.Position.Y - .5).DefaultIfEmpty(machineTop).Min();
+        double lastChest = entities.Where(e => e.Role.EndsWith("chest", StringComparison.Ordinal)).Select(e => e.Position.Y + .5).DefaultIfEmpty(machineTop + h).Max();
+        var footprint = new WorldBox(new(left, Math.Min(machineTop, firstChest)), new(left + pitch, Math.Max(machineTop + h, lastChest)));
+        return new(slot, entities, footprint, new(new(left, walkTop), new(left + pitch, walkTop + walkwayTiles)));
     }
 
     private static EntityGeometry Geometry(SpatialSnapshot map, string item) =>

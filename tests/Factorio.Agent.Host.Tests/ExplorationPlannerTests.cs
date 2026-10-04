@@ -5,6 +5,41 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class ExplorationPlannerTests
 {
+    [Theory]
+    [InlineData("transport-belt", false)]
+    [InlineData("transport-belt", true)]
+    [InlineData("underground-belt", false)]
+    [InlineData("underground-belt", true)]
+    [InlineData("splitter", false)]
+    [InlineData("splitter", true)]
+    public void ExplorationAndConstructionTravelStopBesideMovingTransport(string transportType, bool knownDestination)
+    {
+        var map = Map(new(0, 0));
+        MapPosition? destination = knownDestination ? new(0, -60) : null;
+        var catalog = Catalog();
+        var preferred = new ExplorationPlanner().Choose(map, "", catalog, destination);
+        var center = new MapPosition(preferred.X + .5, preferred.Y + .5);
+        var bounds = new WorldBox(new(center.X - .4, center.Y - .4), new(center.X + .4, center.Y + .4));
+        map = map with
+        {
+            Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            {
+                ["moving-transport"] = new("moving-transport", transportType, new(new(-.4, -.4), new(.4, .4)),
+                    new([], false, false, false), 1, 1)
+            },
+            Entities = [new("transport", "moving-transport", center, bounds, 0, "agent")]
+        };
+        var field = new SpatialCollisionField(map);
+        Assert.True(field.Walkable(preferred));
+        Assert.False(PlacementPlanner.CanStop(field, preferred));
+
+        var selected = new ExplorationPlanner().Choose(map, "", catalog, destination);
+
+        Assert.True(PlacementPlanner.CanStop(field, selected), $"The travel handoff at {selected} drifts on transport.");
+        Assert.NotEqual(preferred, selected);
+        Assert.Equal(RouteStatus.Found, new RoutePlanner().Find(field, selected).Status);
+    }
+
     [Fact]
     public void SeeingAFrontierDoesNotReverseTheWalkBeforeApproachingIt()
     {

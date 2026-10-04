@@ -40,9 +40,11 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             var geometryMap = await spatial.CaptureAsync(items, 48, token);
             RequireScope(geometryMap.Scope, catalog);
             EntityGeometry machine = geometryMap.Prototypes[geometryMap.Items[machineItem].EntityName];
-            FactoryZone? open = state.Zones.FirstOrDefault(z => z.Pitch == FactoryBandPlanner.Pitch(machine)
-                && z.BandHeight == FactoryBandPlanner.BandHeight(machine) && FactoryRegistry.NextSlot(state, z) is not null);
-            zone = open ?? await CreateZoneAsync(machine);
+            bool transportAccess = input && output;
+            FactoryZone? open = state.Zones.FirstOrDefault(z => z.TransportAccess == transportAccess
+                && z.Pitch == FactoryBandPlanner.Pitch(machine, transportAccess)
+                && z.BandHeight == FactoryBandPlanner.BandHeight(machine, transportAccess) && FactoryRegistry.NextSlot(state, z) is not null);
+            zone = open ?? await CreateZoneAsync(machine, transportAccess);
             state = await registry.LoadAsync(catalog.Scope.WorldId, token);
             var slot = FactoryRegistry.NextSlot(state, zone)!;
             cell = new($"cell-{Guid.NewGuid():N}", zone.Id, slot, kind, machineItem, recipe, new Dictionary<string, string>(), "building", geometryMap.CollectedTick);
@@ -51,7 +53,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
 
         var planningMap = await spatial.CaptureAsync(items, 48, token);
         RequireScope(planningMap.Scope, catalog);
-        CellLayout layout = new FactoryBandPlanner().Layout(planningMap, equipment, zone.Origin, cell.Slot, input, output);
+        CellLayout layout = new FactoryBandPlanner().Layout(planningMap, equipment, zone.Origin, cell.Slot, input, output, zone.TransportAccess);
         // Recorded roles let maintenance rebuild a destroyed entity exactly where the cell expects it; power links
         // recorded by an interrupted run are kept.
         cell = cell with
@@ -117,7 +119,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         SpatialSnapshot KeepSteamGrowth(SpatialSnapshot map, IReadOnlyList<FactoryZone> zones) => steam is null ? map
             : PowerExpansionController.ReserveGrowth(map, steam, zones, map.Entities.Single(e => e.Id == map.Actor.Id).Force);
 
-        async Task<FactoryZone> CreateZoneAsync(EntityGeometry machine)
+        async Task<FactoryZone> CreateZoneAsync(EntityGeometry machine, bool transportAccess)
         {
             var map = await spatial.CaptureAsync(items, 48, token);
             RequireScope(map.Scope, catalog);
@@ -128,16 +130,19 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
                 .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).FirstOrDefault()
                 ?? throw new InvalidOperationException("A factory zone needs a local pole on a known generator network; build or repair power first.");
             var current = await registry.LoadAsync(catalog.Scope.WorldId, token);
-            var site = new FactoryZonePlanner().Find(KeepSteamGrowth(map, current.Zones), machine, powered.Position, Slots(kind), token);
+            // Empty slots still belong to their old zone. A new geometry must not allocate a second band over them.
+            var ground = map;
+            foreach (var existing in current.Zones) ground = ReserveZone(ground, existing, equipment.Pole);
+            var site = new FactoryZonePlanner().Find(KeepSteamGrowth(ground, current.Zones), machine, powered.Position, Slots(kind), token, transportAccess);
             if (site is null && steam is not null)
             {
                 // A band that blocks steam growth is still better than no factory; the journal keeps the trade-off visible.
                 await journal.AppendAsync("factory-zone-steam-growth-blocked", new { map.CollectedTick }, token);
-                site = new FactoryZonePlanner().Find(map, machine, powered.Position, Slots(kind), token);
+                site = new FactoryZonePlanner().Find(ground, machine, powered.Position, Slots(kind), token, transportAccess);
             }
             if (site is null) throw new InvalidOperationException("No dry, deposit-free rectangle for a factory band near the power network.");
             var created = new FactoryZone(current.Zones.Count == 0 ? 1 : current.Zones.Max(z => z.Id) + 1, site.Origin, site.Slots,
-                FactoryBandPlanner.Pitch(machine), FactoryBandPlanner.BandHeight(machine));
+                FactoryBandPlanner.Pitch(machine, transportAccess), FactoryBandPlanner.BandHeight(machine, transportAccess), transportAccess);
             await registry.SaveAsync(current with { Zones = [.. current.Zones, created] }, token);
             await journal.AppendAsync("factory-zone", new { created, site.Clearance.Count, sourcePole = powered.Id, map.CollectedTick }, token);
             return created;
