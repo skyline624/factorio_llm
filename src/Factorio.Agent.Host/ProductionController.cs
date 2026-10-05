@@ -19,7 +19,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
         RunAsync(item, targetStock, token, null, existingStockOnly: false, expectedScope,
             carriedHandcraftOnly: true, protectedStock);
 
-    /// <summary>Collects existing outputs only; FinalStock may be below the target if a source was depleted.</summary>
+    /// <summary>Collects at most the initially observed finished stock, returning below target for production assessment.</summary>
     public Task<ProductionResult> CollectAvailableAsync(string item, int targetStock, CancellationToken token = default,
         IReadOnlySet<string>? reservedEntityIds = null, ActorScope? expectedScope = null) =>
         RunAsync(item, targetStock, token, reservedEntityIds, existingStockOnly: true, expectedScope);
@@ -41,6 +41,10 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
         ProductionState initial = await ObserveAsync(deadline.Token);
         if (expectedScope is not null && initial.Scope != expectedScope)
             throw new InvalidDataException("Actor changed before stock collection; reconcile before choosing new transfers.");
+        long remainingObservedStock = existingStockOnly ? initial.CollectionStock(item, reservedEntityIds) : long.MaxValue;
+        if (existingStockOnly && remainingObservedStock > 0 && initial.Inventory.GetValueOrDefault(item) < targetStock)
+            await journal.AppendAsync("stock-collection-budget", new { item, targetStock, initial.Scope,
+                initial.Tick, observedStock = remainingObservedStock }, deadline.Token);
         var receipts = new List<OperationReceipt>();
         for (int stepNumber = 0; stepNumber < 256; stepNumber++)
         {
@@ -48,7 +52,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             if (state.Scope != initial.Scope) throw new InvalidOperationException("Production scope changed; reconcile death or pilot transition before resuming.");
             if (state.ControlMode != "ai") throw new InvalidOperationException("The pilot has manual control.");
             ProductionEntity? ready = carriedHandcraftOnly ? null : state.AvailableOutput(item, reservedEntityIds);
-            if (state.Inventory.GetValueOrDefault(item) >= targetStock || (existingStockOnly && ready is null))
+            if (state.Inventory.GetValueOrDefault(item) >= targetStock || (existingStockOnly && (ready is null || remainingObservedStock == 0)))
             {
                 var result = new ProductionResult(item, targetStock, initial.Tick, state.Tick,
                     initial.Inventory.GetValueOrDefault(item), state.Inventory.GetValueOrDefault(item), stepNumber, receipts.AsReadOnly());
@@ -72,16 +76,19 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 long count = ProductionState.CollectionCount(arrived.Entities.FirstOrDefault(e => e.Id == ready.Id)?.Count("output", item) ?? 0,
                     Math.Max(0, targetStock - arrived.Inventory.GetValueOrDefault(item)),
                     catalog.Items.TryGetValue(item, out var native) ? native.StackSize : 1);
+                if (existingStockOnly) count = Math.Min(count, remainingObservedStock);
                 if (count == 0) continue;
                 if (await new CraftInventoryController(game, journal).PrepareCollectionAsync(item, count, catalog, controller, deadline.Token))
                     continue; // A deposit may move the actor and change stocks; select the source again from a fresh frame.
-                await ActAsync("take", new
+                var receipt = await ActAsync("take", new
                 {
                     entityId = ready.Id,
                     inventory = "output",
                     item,
                     count
                 }, 600);
+                if (existingStockOnly)
+                    remainingObservedStock -= ResourceEquipmentReuse.Transfer(receipt, ready.Id, item, count, "to_actor");
                 continue;
             }
             ProductionEntity? engaged = state.Entities.FirstOrDefault(e => !ProductionReservations.Current.Contains(e.Id) && e.InventoryTotal("input") > 0
@@ -344,10 +351,16 @@ public sealed record ProductionResult(string Item, int TargetStock, long StartTi
 internal sealed record ProductionState(ActorScope Scope, long Tick, string ControlMode, IReadOnlyDictionary<string, long> Inventory,
     IReadOnlyList<ProductionEntity> Entities, MapPosition? Position = null)
 {
-    public ProductionEntity? AvailableOutput(string item, IReadOnlySet<string>? reservedEntityIds = null) => Entities
-        .Where(e => ProductionReservations.Collects(e.Id) && reservedEntityIds?.Contains(e.Id) != true && e.Count("output", item) > 0)
+    public ProductionEntity? AvailableOutput(string item, IReadOnlySet<string>? reservedEntityIds = null) => CollectionSources(item, reservedEntityIds)
         .OrderBy(e => Position is { } actor ? e.Position.DistanceTo(actor) : 0).ThenByDescending(e => e.Count("output", item))
         .FirstOrDefault();
+
+    /// <summary>A finite stock pass must not wait for a producer's later output before assessing its supply.</summary>
+    public long CollectionStock(string item, IReadOnlySet<string>? reservedEntityIds = null) => CollectionSources(item, reservedEntityIds)
+        .Sum(e => e.Count("output", item));
+
+    private IEnumerable<ProductionEntity> CollectionSources(string item, IReadOnlySet<string>? reservedEntityIds) => Entities
+        .Where(e => ProductionReservations.Collects(e.Id) && reservedEntityIds?.Contains(e.Id) != true && e.Count("output", item) > 0);
 
     /// <summary>
     /// A visit takes up to a stack even when fewer are missing: recipes ask for their ingredients one at a time, and each
