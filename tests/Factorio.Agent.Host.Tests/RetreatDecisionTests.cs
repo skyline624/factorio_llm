@@ -57,6 +57,35 @@ public sealed class RetreatDecisionTests
     }
 
     [Theory]
+    [InlineData(15, 15, true)]
+    [InlineData(15, 15.01, false)]
+    [InlineData(18, 18, true)]
+    [InlineData(18, 18.01, false)]
+    [InlineData(24, 24, true)]
+    [InlineData(24, 24.01, false)]
+    public void HealthyPreventiveCoverUsesTheEquippedNativeCombatRange(double range, double distance, bool needed)
+    {
+        var (map, state) = Covered();
+        state = state with { Weapon = state.Weapon with { Range = range },
+            Enemies = Enumerable.Range(0, 3).Select(i => new VisibleThreat($"unit-{i}", new(distance, 0), "unit")).ToArray() };
+        Assert.Equal(needed, RetreatPlanner.RepositionsInCover(state));
+        Assert.Equal(needed, RetreatPlanner.SeeksCover(state with { Position = new(0, 0),
+            Defenses = [new("outside-cover", new(-12, 0), 18, 200, state.Tick)] }));
+        if (!needed) Assert.Equal("not-needed", new RetreatPlanner().Find(state, map).Status);
+    }
+
+    [Theory]
+    [InlineData(true, 50)]
+    [InlineData(false, 250)]
+    public void UrgentRetreatStillRespondsToDistantVisibleUnits(bool armed, double health)
+    {
+        var (_, state) = Covered();
+        state = state with { Health = health, Weapon = state.Weapon with { Ready = armed },
+            Enemies = Enumerable.Range(0, 3).Select(i => new VisibleThreat($"unit-{i}", new(25 + i, 0), "unit")).ToArray() };
+        Assert.True(RetreatPlanner.Needed(state));
+    }
+
+    [Theory]
     [InlineData("manual")]
     [InlineData("dead")]
     [InlineData("stop-unconfirmed")]

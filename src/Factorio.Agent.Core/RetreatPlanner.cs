@@ -41,23 +41,29 @@ public sealed class RetreatPlanner
             || !state.Weapon.Ready && EquipmentPolicy.Select(state) is null);
 
     /// <summary>
-    /// Outnumbered but still healthy beside an observed loaded turret it is not yet covered by: reach the turret before fighting.
+    /// Outnumbered within combat range but still healthy beside an observed loaded turret it is not yet covered by: reach the turret before fighting.
     /// On 2026-10-01 (seed 20261002) the pistol-armed actor went from full health to death in about seven seconds against
     /// packs; once hurt, the biters outran its retreat. Only turret refuges are tried in this case: a local escape does not
     /// outrun biters, so without a reachable refuge the actor keeps fighting.
     /// </summary>
     public static bool SeeksCover(SafetyObservation state) => state.Alive && state.ControlMode == "ai" && !state.StopUnconfirmed
-        && state.Health > 0 && state.Position is { } position && state.LocalEnemiesComplete && state.Enemies.Count >= OutnumberedEnemies
+        && state.Health > 0 && state.Position is { } position && state.LocalEnemiesComplete
+        && state.Enemies.Count(e => InCombatRange(state, position, e)) >= OutnumberedEnemies
         && state.Defenses is { Count: > 0 } refuges && !refuges.Any(r => position.DistanceTo(r.Position) <= CoverRadius(r));
 
     /// <summary>Destinations lie in the inner half of a turret's native range, at most twelve tiles from it.</summary>
     public static double CoverRadius(DefensiveRefuge refuge) => Math.Min(refuge.Range * .5, 12);
 
-    /// <summary>Whether an outnumbered actor should gain separation while remaining inside observed loaded coverage.</summary>
+    /// <summary>Whether a mobile pack in combat range requires separation inside observed loaded coverage.</summary>
     public static bool RepositionsInCover(SafetyObservation state) => state.Alive && state.ControlMode == "ai"
         && !state.StopUnconfirmed && state.Health > 0 && state.Position is { } position && state.LocalEnemiesComplete
-        && state.Enemies.Count(e => e.Type == "unit") >= OutnumberedEnemies
+        && state.Enemies.Count(e => e.Type == "unit" && InCombatRange(state, position, e)) >= OutnumberedEnemies
         && state.Defenses?.Any(t => position.DistanceTo(t.Position) <= CoverRadius(t)) == true;
+
+    // A healthy armed actor can pass distant visible units without cycling between navigation and turret cover.
+    // Native weapon range bounds preventive cover only; Needed still handles hurt or unarmed actors using the full frame.
+    private static bool InCombatRange(SafetyObservation state, MapPosition position, VisibleThreat enemy) =>
+        !state.Weapon.Ready || position.DistanceTo(enemy.Position) <= state.Weapon.Range;
 
     public RetreatPlan Find(SafetyObservation state, SpatialSnapshot map, CancellationToken token = default)
     {

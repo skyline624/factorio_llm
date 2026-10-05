@@ -32,12 +32,40 @@ public sealed class DefenseControllerTests
     }
 
     [Fact]
-    public async Task AVisiblePackAtTheOrdinaryObservationBoundaryStillSeeksCover()
+    public async Task AHealthyArmedActorKeepsWorkingWhenThePackIsOutsideCombatRange()
     {
         var game = new GameStub { EnemyCount = 3, Defenses = Refuge(),
-            EnemyPositions = [new(32,0),new(31,1),new(31,-1)] };
+            EnemyPositions = [new(32,0),new(31,1),new(31,-1)], Active = Receipt("navigation", "move", "running") };
+        Assert.Equal("observing", (await new DefenseController(game, new JournalStub(), new ReflexEventLog()).StepAsync()).State);
+        Assert.Equal(["observe"], game.Calls);
+        Assert.Null(game.Submission);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ALoadedTurretDoesNotMakeADistantPackPreemptHealthyNavigation(bool covered)
+    {
+        // Normal seed20261072: stationary visible units25-30tiles away repeatedly interrupted travel to100,60.
+        var game = new GameStub { EnemyCount = 3, EnemyType = "unit",
+            Defenses = covered ? new[] { new { id = "safe", position = new MapPosition(-2, 0), range = 18d,
+                ammoRounds = 200L, collectedTick = 100L } } : Refuge(),
+            EnemyPositions = [new(25,0),new(26,1),new(29,-1)], Active = Receipt("navigation", "move", "running") };
+        Assert.Equal("observing", (await new DefenseController(game, new JournalStub(), new ReflexEventLog()).StepAsync()).State);
+        Assert.Equal(["observe"], game.Calls);
+        Assert.Null(game.Submission);
+        Assert.Equal("navigation", game.Active!.Value.GetProperty("operationId").GetString());
+    }
+
+    [Fact]
+    public async Task OneCloseUnitIsShotWithoutSeekingCoverFromTwoDistantUnits()
+    {
+        var game = new GameStub { EnemyCount = 3, EnemyType = "unit", Defenses = Refuge(),
+            EnemyPositions = [new(4,0),new(25,1),new(29,-1)] };
         await new DefenseController(game, new JournalStub(), new ReflexEventLog()).StepAsync();
-        Assert.Equal("move", game.Submission?.Kind);
+        Assert.Equal("shoot", game.Submission?.Kind);
+        Assert.Equal("near", game.Submission!.Args.GetProperty("entityId").GetString());
+        Assert.DoesNotContain("spatial", game.Calls);
     }
 
     [Theory]
@@ -503,6 +531,7 @@ public sealed class DefenseControllerTests
         public double Health { get; set; } = 250;
         public int EnemyCount { get; set; } = 1;
         public IReadOnlyList<MapPosition>? EnemyPositions { get; init; }
+        public string? EnemyType { get; init; }
         public object? Defenses { get; set; }
         public bool StaleSpatial { get; init; }
         public MapPosition SpatialPosition { get; set; } = new(0, 0);
@@ -539,7 +568,7 @@ public sealed class DefenseControllerTests
                             position = new MapPosition(0, 0), health = Health, maxHealth = 250, weapon = new { ready = Armed, rounds = Armed ? 100 : 0, range = 15 }, loadout = Loadout },
                         ["defenses"] = Defenses ?? new { },
                         ["enemies"] = EnemiesEmptyObject ? new { } : (object)Enumerable.Range(0, EnemyCount).Select(i =>
-                            new { id = i == 0 ? "near" : $"near-{i}", position = EnemyPositions?[i] ?? new MapPosition(Distance + i, 0), collectedTick = ObservationTick }).ToArray()
+                            new { id = i == 0 ? "near" : $"near-{i}", type = EnemyType, position = EnemyPositions?[i] ?? new MapPosition(Distance + i, 0), collectedTick = ObservationTick }).ToArray()
                     };
                     if (Active is not null) observed["operation"] = Active.Value;
                     data = observed;
