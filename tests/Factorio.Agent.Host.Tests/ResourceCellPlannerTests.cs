@@ -213,6 +213,35 @@ public sealed class ResourceCellPlannerTests
         Assert.Null(ResourceCellPlanner.Equipment(unpowered, map, ResourceCellPlanner.Supply(unpowered, "iron-plate")!, none));
     }
 
+    [Fact]
+    public void EquipmentRejectsPumpjackCentreOutletWhenNoOrePrototypeIsObserved()
+    {
+        var map = FactoryMaps.Grass(10);
+        var catalog = Catalogs.Raw();
+        var prototypes = map.Prototypes.Where(p => p.Value.Type != "resource").ToDictionary(p => p.Key, p => p.Value);
+        prototypes["pumpjack"] = map.Prototypes["electric-mining-drill"] with
+        {
+            Name = "pumpjack", MiningOutput = new(0, 0), MiningSpeed = 1,
+            ResourceCategories = new Dictionary<string, bool> { ["basic-fluid"] = true }
+        };
+        var items = new Dictionary<string, PlaceableItem>(map.Items) { ["pumpjack"] = new("pumpjack", 20) };
+        catalog = catalog with { Items = new Dictionary<string, NativeItem>(catalog.Items)
+            { ["pumpjack"] = catalog.Items["electric-mining-drill"] with { PlaceEntity = "pumpjack" } } };
+        var equipment = ResourceCellPlanner.Equipment(catalog, map with { Prototypes = prototypes, Items = items },
+            ResourceCellPlanner.Supply(catalog, "iron-plate")!, new Dictionary<string, long> { ["pumpjack"] = 1 });
+        Assert.Equal(ElectricSmelter, equipment);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(double.NaN, -1.85)]
+    [InlineData(0, double.PositiveInfinity)]
+    public void SolidDrillOutletMustBeFiniteAndOutsideItsOwnCollisionBox(double x, double y)
+    {
+        var drill = FactoryMaps.Grass(10).Prototypes["electric-mining-drill"] with { MiningOutput = new(x, y) };
+        Assert.False(ExtractionPlanner.SupportsSolidOutput(drill));
+    }
+
     private static ResourceRow Row(SpatialSnapshot map, ResourceCellEquipment equipment, int direction, int cells) =>
         new(1, equipment.Furnace is null ? "miner" : "smelter", "product", "ore", equipment, new(0, 0), direction,
             ResourceCellPlanner.Pitch(map, equipment, direction) ?? throw new InvalidDataException("No template."), cells, 1);

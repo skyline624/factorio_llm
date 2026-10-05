@@ -8,7 +8,8 @@ public sealed record InstalledExtraction(string DrillId, ExtractionPlacement Con
 /// <summary>Solves native drill output containment, tile alignment and resource coverage against observed receivers.</summary>
 public sealed class ExtractionPlanner
 {
-    public static bool SupportsSolidOutput(EntityGeometry drill) => drill.Type == "mining-drill" && drill.MiningOutput is not null
+    public static bool SupportsSolidOutput(EntityGeometry drill) => drill.Type == "mining-drill" && drill.MiningOutput is { } output
+        && double.IsFinite(output.X) && double.IsFinite(output.Y) && !drill.CollisionBox.Contains(output)
         && (drill.IsElectric || drill.FuelCategories is { Count: > 0 });
 
     public static bool HasRemainingResources(SpatialSnapshot map, SpatialEntity installed)
