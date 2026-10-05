@@ -89,6 +89,83 @@ public sealed class ResourceCellStartupTests
         Assert.Equal(24, journal.Inspected);
     }
 
+    [Theory]
+    [InlineData(599, false)]
+    [InlineData(600, true)]
+    [InlineData(601, true)]
+    public void RetainedCopperStartupWaitsOnlyWithTenMinutesOfTheCompleteDemand(long copper, bool deferred)
+    {
+        // Normal seed20261072: a cold old copper furnace blocked chemical science despite 52,000 buffered plates.
+        var state = new FactoryState(1, "world", [], [Cell with { Id = "copper", Kind = "smelter", Recipe = "copper-plate" }]);
+        var items = FactoryDirector.DeferredRawStartupItems(Catalogs.Raw(), state,
+            new Dictionary<string, double> { ["copper-plate"] = 60 },
+            new Dictionary<string, long> { ["copper-plate"] = copper }, "chemical-science-pack", 0);
+        Assert.Equal(deferred, items.Contains("copper-plate"));
+    }
+
+    [Theory]
+    [InlineData("chemical-science-pack", true)]
+    [InlineData("copper-plate", false)]
+    public void AnExplicitRawRateStillStartsItsRetainedSuppliersEvenWithBufferedStock(string priority, bool deferred)
+    {
+        var state = new FactoryState(1, "world", [], [Cell with { Kind = "smelter", Recipe = "copper-plate" }])
+            .WithTarget("copper-plate", 60).WithTarget("chemical-science-pack", 30);
+        var items = FactoryDirector.DeferredRawStartupItems(Catalogs.Raw(), state,
+            new Dictionary<string, double> { ["copper-plate"] = 60 },
+            new Dictionary<string, long> { ["copper-plate"] = 52_000 }, priority, 0);
+        Assert.Equal(deferred, items.Contains("copper-plate"));
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(135, false)]
+    public void BoilerFuelCapacityStartsBeforeWorkDespiteBufferedCoal(double powerFuel, bool deferred)
+    {
+        var state = new FactoryState(1, "world", [], [Cell]);
+        var items = FactoryDirector.DeferredRawStartupItems(Catalogs.Raw(), state,
+            new Dictionary<string, double> { ["coal"] = 60 + powerFuel },
+            new Dictionary<string, long> { ["coal"] = 14_000 }, "chemical-science-pack", powerFuel);
+        Assert.Equal(deferred, items.Contains("coal"));
+    }
+
+    [Fact]
+    public void ImplicitSmelterFuelCannotBeDeferredWhenNoCoalWasObserved()
+    {
+        var state = new FactoryState(1, "world", [], [Cell, Cell with { Kind = "smelter", Recipe = "iron-plate" }]);
+        var items = FactoryDirector.DeferredRawStartupItems(Catalogs.Raw(), state,
+            new Dictionary<string, double> { ["iron-plate"] = 12, ["coal"] = 0 },
+            new Dictionary<string, long> { ["iron-plate"] = 500 }, "chemical-science-pack", 0);
+        Assert.Contains("iron-plate", items);
+        Assert.DoesNotContain("coal", items);
+    }
+
+    [Theory]
+    [InlineData(599, "chest", true, 36)]
+    [InlineData(600, "chest", true, 24)]
+    [InlineData(600, "corpse", true, 36)]
+    [InlineData(52_000, "chest", false, 36)]
+    public void StageFuelProcurementExcludesBufferedCopperButKeepsCoalAndBoilerIgnition(long copper, string inventory,
+        bool planned, long expected)
+    {
+        FactoryCell[] cells = [Cell, Cell with { Id = "copper", Kind = "smelter", Recipe = "copper-plate",
+            Entities = new Dictionary<string, string> { ["furnace"] = "furnace" } },
+            Cell with { Id = "power", Kind = "power", Entities = new Dictionary<string, string> { ["boiler"] = "boiler" } }];
+        var records = new List<FactoryRecord>
+        {
+            new("buffer", "inventory", "storage", inventory, Protocol.ToElement(new { items = new Dictionary<string, long>
+                { ["copper-plate"] = copper, ["coal"] = 14_000 } }))
+        };
+        foreach (string id in new[] { "drill", "furnace", "boiler" })
+        {
+            records.Add(new(id, "entity", id, id, Protocol.ToElement(new { role = "factory", type = id,
+                fuelInventoryId = id + "-fuel" })));
+            records.Add(new(id + "-fuel", "inventory", id, "fuel", Protocol.ToElement(new { items = new Dictionary<string, long>() })));
+        }
+        var snapshot = Snapshot(0, 0) with { Records = records.ToArray() };
+        var demand = planned ? new Dictionary<string, double> { ["copper-plate"] = 60, ["coal"] = 195 } : null;
+        Assert.Equal(expected, FactoryLogistics.FuelReserve(snapshot, FactoryLogistics.FuelCells(snapshot, cells, demand), 50));
+    }
+
     [Fact]
     public async Task AProducerThatBecomesLoadedAfterTheCensusIsReobservedWithoutAnotherTransfer()
     {

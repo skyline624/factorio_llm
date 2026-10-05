@@ -84,11 +84,18 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         foreach (var cell in degraded)
             await journal.AppendAsync("factory-cell-degraded", new { cell.Cell, cell.Missing, rebuildable = cell.Missing.All(m => m.Item is not null) }, token);
 
+        IReadOnlyDictionary<string, double>? rawDemand = null;
+        var machines = FactoryDirector.MachineItems(catalog);
+        var fluidMachines = FluidChainDirector.Machines(catalog);
+        if (state.Targets is { Count: > 0 } targets && (machines.Count > 0 || fluidMachines.Count > 0))
+            rawDemand = AutomationPlanner.Plan(catalog, targets, machines, fluidMachineItems: fluidMachines).RawPerMinute;
+        var fuelCells = FuelCells(snapshot, cells, rawDemand);
+
         // A research goal can finish during its last tour. Starting another full tour immediately delayed the next
         // model decision by several minutes. Repairs, rearming and current fuel faults still prevent this reuse.
         if (targetCellIds is null && minimumIntervalTicks > 0 && allCellsPresent && inspected.Count == 0 && upkeep.Actions == 0
             && upkeep.Blocked.Count == 0 && upkeep.Shortfall.Count == 0 && upkeep.Unpowered.Count == 0
-            && FuelReserve(snapshot, cells, catalog.Items[Fuel].StackSize) == 0
+            && FuelReserve(snapshot, fuelCells, catalog.Items[Fuel].StackSize) == 0
             && await new FactoryLogisticsCompletionStore(directory).IsFreshAsync(catalog.Scope, snapshot.CollectedTick,
                 state, bufferCrafts, minimumIntervalTicks, token))
         {
@@ -122,7 +129,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         foreach (string pack in catalog.Items.Keys.Where(IsSciencePack)) needs[pack] = needs.GetValueOrDefault(pack) + labs * StackSize(pack);
         // Collect existing output for the full refill, rather than only its ignition threshold. With ten furnaces,
         // the old allowance ran out while topping up the first burners despite abundant coal in the source chest.
-        needs[Fuel] = needs.GetValueOrDefault(Fuel) + FuelRefillNeed(snapshot, cells, StackSize(Fuel), connected);
+        fuelCells = FuelCells(snapshot, cells, rawDemand);
+        needs[Fuel] = needs.GetValueOrDefault(Fuel) + FuelRefillNeed(snapshot, fuelCells, StackSize(Fuel), connected);
         long Cap(string item) => targetCellIds is not null && needs.GetValueOrDefault(item) == 0 ? 0
             : CollectCap(needs.GetValueOrDefault(item), StackSize(item));
         var bag = Carried(snapshot);
@@ -178,7 +186,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         // Power and burners keep their refill share before recipes consume coal. Procurement still uses the
         // smaller ignition shortfall; this reservation only divides coal already carried or collected.
         connected = FactoryTransportCoverage.Connected(state, snapshot, catalog, shares, powerState);
-        long fuelReserve = FuelRefillNeed(snapshot, cells, catalog.Items[Fuel].StackSize, connected);
+        long fuelReserve = FuelRefillNeed(snapshot, FuelCells(snapshot, cells, rawDemand), catalog.Items[Fuel].StackSize, connected);
         var refills = Refills(snapshot);
         // Scarce items are shared before any chest is filled; transfers still go chest by chest to keep one visit each.
         var allotted = new Dictionary<(string Chest, string Item), long>();
@@ -230,7 +238,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         carried = Carried(snapshot);
         powerState = PowerFuelPolicy.HasLinks(state) ? await new PowerExpansionController(game, journal, directory).ObserveAsync(token) : null;
         connected = FactoryTransportCoverage.Connected(state, snapshot, catalog, shares, powerState);
-        long ignitionReserve = FuelReserve(snapshot, cells, stack);
+        fuelCells = FuelCells(snapshot, cells, rawDemand);
+        long ignitionReserve = FuelReserve(snapshot, fuelCells, stack);
         // Power cells feed their boilers from a chest; keeping several stacks there lets boilers run between actor visits.
         foreach (var cell in cells.Where(c => c.Kind == "power" && c.Entities.ContainsKey("input-chest")))
         {
@@ -267,8 +276,9 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         connected = FactoryTransportCoverage.Connected(state, snapshot, catalog, shares, powerState);
         var automatedBoilers = cells.Where(c => c.Kind == "power" && PowerFuelPolicy.AutomatedReserve(snapshot, c, stack, connected))
             .Select(c => c.Entities["boiler"]).ToHashSet(StringComparer.Ordinal);
-        var burners = FuelOrder(Burners(snapshot, cells).Where(b => !automatedBoilers.Contains(b.EntityId)).Where(b => b.PowerSource
-            ? NeedsDirectFuel(fedBoilers.Contains(b.EntityId), b.Loaded, stack) : b.Loaded < stack / 2).ToArray(), cells);
+        fuelCells = FuelCells(snapshot, cells, rawDemand);
+        var burners = FuelOrder(Burners(snapshot, fuelCells).Where(b => !automatedBoilers.Contains(b.EntityId)).Where(b => b.PowerSource
+            ? NeedsDirectFuel(fedBoilers.Contains(b.EntityId), b.Loaded, stack) : b.Loaded < stack / 2).ToArray(), fuelCells);
         var plan = PlanFuel(burners.Select(b => b.Loaded).ToArray(), carried.GetValueOrDefault(fuel), stack);
         bool powerStarved = false;
         for (int index = 0; index < burners.Count; index++)
@@ -314,7 +324,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         try
         {
             await new FactoryLogisticsCompletionStore(directory).RecordAsync(catalog.Scope, result.Tick, state, bufferCrafts,
-                powerStarved || fuelShortfall > 0 || FuelReserve(snapshot, state.Cells.Where(c => c.Status == "ready").ToArray(), catalog.Items[Fuel].StackSize) > 0,
+                powerStarved || fuelShortfall > 0 || FuelReserve(snapshot,
+                    FuelCells(snapshot, state.Cells.Where(c => c.Status == "ready").ToArray(), rawDemand), catalog.Items[Fuel].StackSize) > 0,
                 token);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException && !token.IsCancellationRequested)
@@ -509,6 +520,17 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             foreach (var item in record.Data.GetProperty("items").EnumerateObject())
                 stock[item.Name] = stock.GetValueOrDefault(item.Name) + item.Value.GetInt64();
         return stock;
+    }
+
+    /// <summary>Do not restart buffered raw suppliers during another stage's tour; coal and power keep their fuel priority.</summary>
+    internal static IReadOnlyList<FactoryCell> FuelCells(FactorySnapshot snapshot, IReadOnlyList<FactoryCell> cells,
+        IReadOnlyDictionary<string, double>? rawDemand)
+    {
+        if (rawDemand is null) return cells;
+        var available = AvailableStock(snapshot);
+        return cells.Where(c => !c.IsResource || c.Recipe is null || c.Recipe == Fuel
+            || !rawDemand.TryGetValue(c.Recipe, out double rate) || rate <= 0
+            || available.GetValueOrDefault(c.Recipe) < rate * FactoryDirector.SeedHorizonMinutes).ToArray();
     }
 
     /// <summary>
