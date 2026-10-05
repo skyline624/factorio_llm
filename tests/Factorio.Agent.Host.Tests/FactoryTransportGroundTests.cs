@@ -29,6 +29,9 @@ public sealed class FactoryTransportGroundTests
         Assert.Contains("boiler", requested);
         Assert.Contains("electric-mining-drill", requested);
         Assert.DoesNotContain(requested, i => i.StartsWith("distant-", StringComparison.Ordinal) || i == "obsolete-bus-equipment");
+        var crossingItems = FactoryTransportBuilder.GeometryItems(state, undergroundBelt: "underground-belt");
+        Assert.Equal(requested.Append("underground-belt"), crossingItems);
+        Assert.InRange(crossingItems.Length, 1, 16);
         // The native photograph holds item mappings only for the request, but all visible entity prototypes.
         map = map with { Items = requested.ToDictionary(i => i, i => i == belt.Name ? new PlaceableItem(belt.Name, 100) : map.Items[i]) };
         var reserved = FactoryTransportBuilder.ProtectBands(map, state);

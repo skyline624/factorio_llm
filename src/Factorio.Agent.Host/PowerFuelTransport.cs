@@ -149,14 +149,16 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         if (requests.Any(r => r.SourceIds.Count == 0)) return (0, true);
         var endpoints = targetIds.Concat(sources.Select(c => c.Entities["output-chest"])).ToArray();
         var steam = await powerController.SteamItemsAsync(catalog, token);
+        var equipment = SelectEquipment(catalog);
         var builder = new FactoryTransportBuilder(game, journal, directory);
-        var map = await builder.CaptureFuelFrameAsync(state, snapshot, endpoints, steam, catalog, controller, token);
+        var map = await builder.CaptureFuelFrameAsync(state, snapshot, endpoints, steam, catalog, controller, token,
+            equipment.UndergroundBelt);
         if (map is null) return (0, true);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel batch planning scope changed.");
         if (endpoints.Any(id => !map.Entities.Any(e => e.Id == id))
             || map.Prototypes[map.Items["inserter"].EntityName].FilterSlots is not > 0) return (0, true);
         var planning = FactoryTransportBuilder.ProtectBands(map, state, steam, sources.Select(c => c.Slot.Band).ToHashSet());
-        var plan = await ControllerPlanning.RunAsync(t => SearchBatch(planning, requests, t, token),
+        var plan = await ControllerPlanning.RunAsync(t => SearchBatch(planning, equipment, requests, t, token),
             controller, TimeSpan.FromSeconds(45), token);
         if (plan is null)
         {
@@ -165,7 +167,8 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
             return (0, true);
         }
         await journal.AppendAsync("power-fuel-batch-search", new { targets = targets.Length, sources = sources.Length,
-            links = plan.Links.Count, plan.Searches, plan.BudgetExhausted, selection = "first-complete-feasible", map.CollectedTick }, token);
+            links = plan.Links.Count, plan.Searches, plan.BudgetExhausted, equipment,
+            selection = "first-complete-feasible", map.CollectedTick }, token);
         if (plan.Links.Count != targets.Length) return (0, true); // Keep actor delivery rather than closing an unfinished consumer's access.
         var records = plan.Links.Select(link => FactoryTransportBuilder.NewBus(
             sources.Single(c => c.Entities["output-chest"] == link.SourceId).Id,
@@ -184,12 +187,19 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         return (connected, true);
     }
 
-    internal static BeltTransportBatchPlan? SearchBatch(SpatialSnapshot planning, IReadOnlyList<BeltTransportRequest> requests,
+    internal static BeltTransportEquipment SelectEquipment(ProductionCatalog catalog) => new("transport-belt", "inserter", "small-electric-pole",
+        catalog.Items.TryGetValue("underground-belt", out var item) && item.PlaceEntityType == "underground-belt"
+            && !string.IsNullOrWhiteSpace(item.PlaceEntity)
+            && catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == "underground-belt" && p.DeterministicItem))
+            ? "underground-belt" : null);
+
+    internal static BeltTransportBatchPlan? SearchBatch(SpatialSnapshot planning, BeltTransportEquipment equipment,
+        IReadOnlyList<BeltTransportRequest> requests,
         CancellationToken planningToken, CancellationToken callerToken)
     {
         try
         {
-            return new BeltTransportBatchPlanner().Find(planning, new("transport-belt", "inserter", "small-electric-pole"),
+            return new BeltTransportBatchPlanner().Find(planning, equipment,
                 requests, maximumSearches: 64, token: planningToken, stopAfterComplete: true,
                 maximumBelts: 512, nodeBudget: 24000);
         }

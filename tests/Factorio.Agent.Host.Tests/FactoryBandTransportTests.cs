@@ -134,10 +134,43 @@ public sealed class FactoryBandTransportTests
     }
 
     [Fact]
+    public void FuelBatchUsesTheSelectedTunnelAndPersistsItsPaidEnds()
+    {
+        var map = SeveralConsumers();
+        var barrier = map.Prototypes["iron-chest"];
+        map = map with
+        {
+            Bounds = new(new(-12, -12), new(13, 13)),
+            Rows = Enumerable.Range(-12, 25).Select(y => new TileRun(-12, y, 25, map.Rows[0].Name)).ToArray(),
+            Items = new Dictionary<string, PlaceableItem>(map.Items) { ["underground-belt"] = new("native-tunnel", 50) },
+            Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            {
+                ["native-tunnel"] = map.Prototypes["transport-belt"] with
+                    { Name = "native-tunnel", Type = "underground-belt", MaxUndergroundDistance = 5 }
+            },
+            Entities = [.. map.Entities, .. Enumerable.Range(-12, 25).Select(y =>
+                new SpatialEntity($"foreign-barrier-{y}", barrier.Name, new(.5, y + .5),
+                    barrier.CollisionBox.Translate(new(.5, y + .5)), 0, "foreign"))]
+        };
+        BeltTransportRequest[] requests = [new("first-target", ["first-source"])];
+        var ordinary = new BeltTransportEquipment("transport-belt", "inserter", "small-electric-pole");
+        Assert.Empty(PowerFuelTransport.SearchBatch(map, ordinary, requests, CancellationToken.None, CancellationToken.None)!.Links);
+        var crossing = PowerFuelTransport.SearchBatch(map, ordinary with { UndergroundBelt = "underground-belt" },
+            requests, CancellationToken.None, CancellationToken.None);
+        var link = Assert.Single(crossing!.Links);
+        Assert.Equal("underground-belt", link.Plan.UndergroundBeltItem);
+        Assert.Contains(link.Plan.Belts, p => p.UndergroundType == "input");
+        Assert.Contains(link.Plan.Belts, p => p.UndergroundType == "output");
+        var record = FactoryTransportBuilder.NewBus("coal-source", "boiler", "coal", 250, link.Plan, map.CollectedTick);
+        Assert.All(record.Cell.Plan!.Values.Where(p => p.UndergroundType is not null),
+            p => Assert.Equal("underground-belt", p.Item));
+    }
+
+    [Fact]
     public void FuelSearchDeadlineLeavesExistingLogisticsAvailable()
     {
         using var expired = new CancellationTokenSource(); expired.Cancel();
-        var plan = PowerFuelTransport.SearchBatch(SeveralConsumers(),
+        var plan = PowerFuelTransport.SearchBatch(SeveralConsumers(), new("transport-belt", "inserter", "small-electric-pole"),
             [new("first-target", ["first-source"])], expired.Token, CancellationToken.None);
         Assert.Null(plan);
     }
@@ -148,7 +181,7 @@ public sealed class FactoryBandTransportTests
         using var caller = new CancellationTokenSource();
         using var planning = CancellationTokenSource.CreateLinkedTokenSource(caller.Token);
         caller.Cancel();
-        Assert.ThrowsAny<OperationCanceledException>(() => PowerFuelTransport.SearchBatch(SeveralConsumers(),
+        Assert.ThrowsAny<OperationCanceledException>(() => PowerFuelTransport.SearchBatch(SeveralConsumers(), new("transport-belt", "inserter", "small-electric-pole"),
             [new("first-target", ["first-source"])], planning.Token, caller.Token));
     }
 

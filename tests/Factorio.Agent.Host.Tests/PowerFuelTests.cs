@@ -8,6 +8,35 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class PowerFuelTests
 {
     [Theory]
+    [InlineData(true, true, "underground-belt", "underground-belt")]
+    [InlineData(false, true, "underground-belt", null)]
+    [InlineData(true, false, "underground-belt", null)]
+    [InlineData(true, true, "transport-belt", null)]
+    [InlineData(true, true, null, null)]
+    public void FuelCrossingsRequireAnUnlockedRecipeAndNativePlaceableItem(bool enabled, bool hasItem,
+        string? nativeType, string? expected)
+    {
+        var catalog = Catalogs.Early();
+        var items = new Dictionary<string, NativeItem>(catalog.Items);
+        if (hasItem) items["underground-belt"] = new(0, 50, PlaceEntity: "native-tunnel", PlaceEntityType: nativeType);
+        catalog = catalog with { Items = items, Recipes = [.. catalog.Recipes,
+            new("native-tunnel-recipe", enabled, "crafting", 1, [], [new("underground-belt", "item", 2)], false)] };
+
+        Assert.Equal(expected, PowerFuelTransport.SelectEquipment(catalog).UndergroundBelt);
+    }
+
+    [Fact]
+    public void AFluidProductCannotUnlockUndergroundConstruction()
+    {
+        var catalog = Catalogs.Early();
+        catalog = catalog with { Items = new Dictionary<string, NativeItem>(catalog.Items)
+            { ["underground-belt"] = new(0, 50, PlaceEntity: "native-tunnel", PlaceEntityType: "underground-belt") },
+            Recipes = [.. catalog.Recipes, new("invalid-tunnel", true, "crafting", 1, [],
+                [new("underground-belt", "fluid", 2)], false)] };
+        Assert.Null(PowerFuelTransport.SelectEquipment(catalog).UndergroundBelt);
+    }
+
+    [Theory]
     [InlineData(30000, 4000000, 1, 27)]
     [InlineData(30000, 4000000, .5, 27)]
     [InlineData(15000, 4000000, 1, 13.5)]

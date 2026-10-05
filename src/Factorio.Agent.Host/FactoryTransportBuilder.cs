@@ -242,8 +242,10 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         bool surveyed = frameCenter is null;
         if (surveyed && (target.Kind == "power" || !TransportCorridorSurvey.CanSurvey(snapshot, frameEntities))) return false;
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
+        var equipment = target.Kind == "power" ? PowerFuelTransport.SelectEquipment(catalog) : Equipment;
         SpatialSnapshot? map;
-        if (target.Kind == "power") map = await CaptureFuelFrameAsync(state, snapshot, frameEntities, steam, catalog, controller, token);
+        if (target.Kind == "power") map = await CaptureFuelFrameAsync(state, snapshot, frameEntities, steam, catalog, controller, token,
+            equipment.UndergroundBelt);
         else if (surveyed)
             map = await new TransportCorridorSurvey(game, journal).CaptureAsync(snapshot, frameEntities, GeometryItems(state, steam), catalog, controller, token);
         else
@@ -256,11 +258,12 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         if (frameEntities.Any(id => !map.Entities.Any(e => e.Id == id)) || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0)
             return false;
         await journal.AppendAsync("factory-transport-frame", new { map.Scope, map.CollectedTick, sourceCellId, targetCellId,
-            requestedCenter = frameCenter, observedCenter = map.Actor.Position, map.Bounds, requiredEntities = frameEntities.Length }, token);
+            requestedCenter = frameCenter, observedCenter = map.Actor.Position, map.Bounds, equipment,
+            requiredEntities = frameEntities.Length }, token);
         map = ProtectBands(map, state, steam, target.Kind == "power" && source.IsResource ? new HashSet<int> { source.Slot.Band } : null);
         if (bus is null)
         {
-            var plan = new BeltTransportPlanner().Find(map, Equipment, source.Entities["output-chest"], target.Entities["input-chest"], token,
+            var plan = new BeltTransportPlanner().Find(map, equipment, source.Entities["output-chest"], target.Entities["input-chest"], token,
                 maximumBelts: surveyed ? TransportCorridorSurvey.MaximumBelts : 200, nodeBudget: surveyed ? 100000 : 12000);
             if (plan is null) return false;
             var record = NewBus(sourceCellId, targetCellId, item, maximum, plan, map.CollectedTick);
@@ -508,9 +511,11 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
 
     // Built entities already export their geometry in the local photograph. Only unfinished non-transport plans need
     // additional item prototypes; retaining every historical plan eventually exceeds the native 16-item request budget.
-    internal static string[] GeometryItems(FactoryState state, PowerExpansionController.SteamItems? steam = null) =>
+    internal static string[] GeometryItems(FactoryState state, PowerExpansionController.SteamItems? steam = null,
+        string? undergroundBelt = null) =>
         [.. Items.Concat(new FactoryGround(state, steam).Items)
-            .Concat(UnfinishedParts(state).Select(p => p.Item)).Distinct(StringComparer.Ordinal)];
+            .Concat(UnfinishedParts(state).Select(p => p.Item))
+            .Concat(undergroundBelt is null ? [] : new[] { undergroundBelt }).Distinct(StringComparer.Ordinal)];
 
     private static IEnumerable<PlannedEntity> UnfinishedParts(FactoryState state) =>
         state.Cells.Where(c => c.Status == "building" && c.Kind != "transport").SelectMany(c => c.Plan?.Values ?? []);
@@ -545,12 +550,12 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             ?? (cell.IsResource ? cell.Recipe : null);
     internal async Task<SpatialSnapshot?> CaptureFuelFrameAsync(FactoryState state, FactorySnapshot snapshot,
         IReadOnlyList<string> entityIds, PowerExpansionController.SteamItems? steam, ProductionCatalog catalog,
-        SpatialController controller, CancellationToken token)
+        SpatialController controller, CancellationToken token, string? undergroundBelt = null)
     {
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame factory scope changed.");
         if (PlanningCenter(snapshot, entityIds, 1, FuelPlanningRadius) is not { } center) return null;
         var spatial = new SpatialClient(game);
-        var items = GeometryItems(state, steam);
+        var items = GeometryItems(state, steam, undergroundBelt);
         var map = await spatial.CaptureAsync(items, FuelPlanningRadius, token);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame planning scope changed.");
         bool moved = false;
