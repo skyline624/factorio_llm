@@ -51,7 +51,7 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
         long lastTick = death.DeathTick;
         for (int step = 0; step < 256; step++)
         {
-            var response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 32, limit = 200, entityLimit = ProductionController.MaximumOwnEntities }), token);
+            var response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = InspectionRadius, limit = 200, entityLimit = ProductionController.MaximumOwnEntities }), token);
             if (!response.Ok) throw new GameRpcException(response.Error!);
             var data = response.Data;
             var actor = data.GetProperty("agent");

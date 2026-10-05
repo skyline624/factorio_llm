@@ -90,6 +90,23 @@ public sealed class CorpseRecoveryDangerTests
         Assert.Equal(["observe"], game.Calls);
     }
 
+    [Theory]
+    [InlineData("unit")]
+    [InlineData("unit-spawner")]
+    public async Task AGuardWithinNormalInspectionSightIsDetectedBeforeTravellingIntoTheSmallerRadius(string type)
+    {
+        // Normal seed20261072: the next recovery started 43 tiles from a guarded body; its initial radius32 missed the pack.
+        var game = new Game { Actor = new(-20, 0), Tick = Death.DeathTick + DangerZones.LifetimeTicks,
+            Enemies = [(type, new(24, 0))], LimitEnemiesToRequestedRadius = true };
+        var result = await new CorpseRecoveryController(game, new Journal()).RunAsync(Death, Scope, default);
+
+        Assert.Equal("unsafe-corpses-deferred", result.Outcome);
+        Assert.Equal(40, result.Remaining["iron-plate"]);
+        Assert.Empty(result.Collected);
+        Assert.Equal(["observe"], game.Calls);
+        Assert.Equal([CorpseRecoveryController.InspectionRadius], game.ObservedRadii);
+    }
+
     [Fact]
     public async Task OlderCorpseBehindAnActiveZoneWaitsToo()
     {
@@ -159,10 +176,12 @@ public sealed class CorpseRecoveryDangerTests
         public long? Lifetime { get; init; } = 0;
         public IReadOnlyList<(string Type, MapPosition Position)> Enemies { get; init; } = [];
         public bool EnemiesTruncated { get; init; }
+        public bool LimitEnemiesToRequestedRadius { get; init; }
         public IReadOnlyList<NativeDeathTransition> Corpses { get; init; } = [Death];
         public DangerZones Zones { get; init; } = DangerZones.Empty("world").Record(Death);
         public ActorScope ObservedScope { get; init; } = Scope;
         public List<string> Calls { get; } = [];
+        public List<int> ObservedRadii { get; } = [];
 
         public Task<IReadOnlyList<NativeDeathTransition>> ReadActiveDeathsAsync(ActorScope scope, int surfaceIndex, long tick,
             CancellationToken token = default) => Task.FromResult(Zones.Active(surfaceIndex, tick));
@@ -174,6 +193,7 @@ public sealed class CorpseRecoveryDangerTests
             if (request.Action != "observe") throw new InvalidOperationException($"Approach requested with {request.Action}.");
             long tick = ++Tick;
             int radius = request.Arguments.GetProperty("radius").GetInt32();
+            ObservedRadii.Add(radius);
             return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(new
             {
                 scope = ObservedScope, collectedTick = tick,
@@ -181,7 +201,8 @@ public sealed class CorpseRecoveryDangerTests
                     enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
                 agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = Actor, health = 250.0,
                     weapon = new { ready = true, rounds = 100, range = 15.0 }, inventory = new { }, reachDistance = 10.0 },
-                enemies = Enemies.Select((e, index) => new { id = $"enemy-{index}", type = e.Type, position = e.Position, collectedTick = tick }),
+                enemies = Enemies.Where(e => !LimitEnemiesToRequestedRadius || e.Position.DistanceTo(Actor) <= radius)
+                    .Select((e, index) => new { id = $"enemy-{index}", type = e.Type, position = e.Position, collectedTick = tick }),
                 recovery = new
                 {
                     knownCorpsesComplete = true,
