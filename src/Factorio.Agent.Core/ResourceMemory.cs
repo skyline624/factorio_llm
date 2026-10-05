@@ -101,9 +101,10 @@ public sealed record ResourceMemorySnapshot(string WorldId, int SurfaceIndex, lo
             .Select(e => new ResourceSearchHint(e.Id, e.Recipe!, e.Position)).FirstOrDefault();
     }
 
-    public ResourceSighting? Nearest(string item, ProductionCatalog catalog, MapPosition from, Func<MapPosition, bool>? allowed = null) => Resources
+    public ResourceSighting? Nearest(string item, ProductionCatalog catalog, MapPosition from, Func<MapPosition, bool>? allowed = null,
+        IReadOnlySet<string>? deferredEntityIds = null) => Resources
         .Where(r => catalog.Mining.TryGetValue(r.Name, out var products) && products.Any(p => p.Name == item && p.DeterministicItem)
-            && (allowed is null || allowed(r.Position)))
+            && (allowed is null || allowed(r.Position)) && deferredEntityIds?.Contains(r.EntityId) != true)
         .OrderBy(r => r.Position.DistanceTo(from)).ThenByDescending(r => r.ObservedTick).FirstOrDefault();
 
     /// <summary>The remembered deposit of one resource nearest to a point, locally observed or charted alike, among allowed ones.</summary>

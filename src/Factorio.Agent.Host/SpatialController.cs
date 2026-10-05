@@ -192,7 +192,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     }
 
     public async Task<ExplorationWaypoint> FindExplorationWaypointAsync(ExplorationPlanner planner, ProductionCatalog catalog,
-        string wanted, MapPosition? destination = null, CancellationToken token = default, bool avoidDestinationDeathZones = false)
+        string wanted, MapPosition? destination = null, CancellationToken token = default, bool avoidDestinationDeathZones = false,
+        IReadOnlySet<string>? deferredResourceIds = null)
     {
         for (int cleared = 0; ; cleared++)
         {
@@ -204,9 +205,10 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 ? await zones.ReadActiveDeathsAsync(map.Scope, map.SurfaceIndex, map.CollectedTick, token) : [];
             bool Safe(MapPosition position) => deaths is null || !deaths.Any(d => DangerZones.Covers(d, position));
             ResourceMemorySnapshot? memory = game is IResourceMemoryReader reader ? await reader.ReadResourceMemoryAsync(map, token) : null;
-            ResourceSighting? remembered = destination is null ? memory?.Nearest(wanted, catalog, map.Actor.Position, Safe) : null;
+            ResourceSighting? remembered = destination is null ? memory?.Nearest(wanted, catalog, map.Actor.Position, Safe, deferredResourceIds) : null;
             ResourceSearchHint? hint = null;
-            if (destination is null && remembered is null && memory is not null && wanted.Length > 0)
+            if (destination is null && remembered is null && memory is not null && wanted.Length > 0
+                && deferredResourceIds is not { Count: > 0 })
             {
                 ProductionState known = await new ProductionController(game, journal).ObserveAsync(token);
                 if (known.Scope != map.Scope) throw new InvalidDataException("Actor changed while reading resource search landmarks.");
@@ -239,7 +241,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             try
             {
                 var point = planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position,
-                    memory?.SurveyedCells, deaths);
+                    memory?.SurveyedCells, deaths, deferredResourceIds);
                 await journal.AppendAsync("exploration-waypoint", new { map.Scope, map.CollectedTick, map.Actor.Position,
                     wanted, destination, planner.Frontier, point }, token);
                 return new(point, map.CollectedTick);

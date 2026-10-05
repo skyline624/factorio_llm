@@ -35,7 +35,8 @@ public sealed class ExplorationPlanner
 
     /// <param name="deaths">Active death zones while exploring; null when <paramref name="destination"/> is the caller's own choice.</param>
     public MapPosition Choose(SpatialSnapshot map, string wanted, ProductionCatalog catalog, MapPosition? destination = null,
-        IReadOnlyList<SurveyedCell>? surveyed = null, IReadOnlyList<NativeDeathTransition>? deaths = null)
+        IReadOnlyList<SurveyedCell>? surveyed = null, IReadOnlyList<NativeDeathTransition>? deaths = null,
+        IReadOnlySet<string>? deferredResourceIds = null)
     {
         origin ??= map.Actor.Position;
         foreach (var cell in surveyed ?? []) observed.Add((cell.X, cell.Y));
@@ -53,7 +54,7 @@ public sealed class ExplorationPlanner
         bool InDeathZone(MapPosition p) => exploring && deaths!.Any(d => DangerZones.Covers(d, p));
         bool NearThreat(MapPosition p) => exploring && threats.Values.Any(t => p.DistanceTo(t.Position) <= t.Range + ThreatMargin);
         MapPosition? known = destination ?? resources.Values.Where(e => catalog.Mining[e.Name].Any(p => p.Name == wanted && p.DeterministicItem)
-                && !InDeathZone(e.Position))
+                && !InDeathZone(e.Position) && deferredResourceIds?.Contains(e.Id) != true)
             .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).Select(e => e.Position).FirstOrDefault();
         var field = new SpatialCollisionField(map);
         if (known is not null) frontierGoal = null;

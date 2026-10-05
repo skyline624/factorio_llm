@@ -144,6 +144,7 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
         {
             var exploration = new ExplorationPlanner();
             var charting = new ChartedResourceSurvey(game, journal);
+            var deferredResources = new HashSet<string>(StringComparer.Ordinal);
             for (int attempt = 0; ; attempt++)
             {
                 var inventory = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
@@ -172,9 +173,15 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
                 }
                 if (attempt >= explorationBudget)
                     throw new TimeoutException($"No observed {supply.Resource} deposit holds a resource row within the exploration budget ({search.Status}).");
+                int deferred = DeferUnusableResources(search.Status, map, supply.Resource, deferredResources);
+                if (deferred > 0)
+                    await journal.AppendAsync("resource-row-search-deferred", new { product, supply.Resource, map.Scope, map.CollectedTick,
+                        added = deferred, total = deferredResources.Count, lifetime = "current-row-search-only",
+                        interpretation = "No row fits this complete local photograph; seek another deposit or frontier, not a claim that the resource is absent." }, token);
                 await new SurvivalKitController(game, journal).BeforeTripAsync("resource-row-exploration", token);
                 await charting.BeforeExplorationAsync(catalog, supply.Resource, "resource-row-exploration", token);
-                var waypoint = await controller.FindExplorationWaypointAsync(exploration, catalog, supply.Resource, token: token);
+                var waypoint = await controller.FindExplorationWaypointAsync(exploration, catalog, supply.Resource, token: token,
+                    deferredResourceIds: deferredResources);
                 await journal.AppendAsync("resource-row-exploration", new { product, supply.Resource, waypoint }, token);
                 await controller.NavigateAsync(waypoint.Position, cancellationToken: token);
             }
@@ -273,6 +280,16 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor identity changed while building a resource cell; reconcile partial construction.");
             return map;
         }
+    }
+
+    /// <summary>Only a complete local NoSite defers its actual resource ids, for this one bounded row search.</summary>
+    internal static int DeferUnusableResources(ResourceRowSearchStatus status, SpatialSnapshot map, string resource, ISet<string> deferred)
+    {
+        if (status != ResourceRowSearchStatus.NoSite || !map.Coverage.Atomic || !map.Coverage.Complete) return 0;
+        int added = 0;
+        foreach (var entity in map.Entities.Where(e => e.Name == resource && e.Amount > 0))
+            if (deferred.Add(entity.Id)) added++;
+        return added;
     }
 
     /// <summary>Recovers the full planned footprint of legacy cells, even when only power links were recorded.</summary>

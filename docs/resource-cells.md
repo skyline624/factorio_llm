@@ -4,6 +4,8 @@ Les cellules de ressources remplacent l'alimentation manuelle de paires foreuse�
 
 Les équipements inutilisés d'un gisement épuisé peuvent alimenter le kit d'une nouvelle cellule selon les [conditions de réemploi et leur qualification préparée](resource-equipment-reuse.md).
 
+Lorsqu'une recherche complète conclut `NoSite`, les ressources effectivement vues dans cette photographie sont différées pour cet appel de recherche uniquement. L'exploration choisit alors un autre gisement mémorisé ou une frontière, au lieu de revenir vers le même minerai dont aucun emplacement utilisable n'a été trouvé. Les observations historiques restent intactes ; ce refus ne prouve pas l'absence de ressources. Une recherche interrompue par son budget ou une photographie incomplète ne produit pas cette exclusion. Les zones de mort récentes restent évitées et les indices de bâtiments ne ramènent pas cette recherche vers les ressources différées.
+
 ### Sélection des sorties solides — développement
 
 Le 5 octobre 2026, la campagne normale de graine 20261072 a proposé un chevalet de pompage pour une rangée de cuivre alors qu'aucun prototype de minerai correspondant n'était présent dans le cadrage local. Factorio 2.0.77 exporte pour ce chevalet un vecteur de sortie `(0, 0)` ; ce vecteur présent et sa vitesse supérieure suffisaient à le classer devant la foreuse électrique avant l'observation du gisement. La lecture native au tick 3642453 confirme que cette sortie reste dans la collision du chevalet, tandis que les sorties des deux foreuses ordinaires se trouvent à l'extérieur.
