@@ -252,7 +252,24 @@ local function transfer(r, c, args, taking)
         if moved >= requested or not stack.valid_for_read then break end
         if destination.can_insert(stack) then
           local before = stack.count
-          destination[j].transfer_stack(stack, math.min(requested - moved, before))
+          local allowance = math.min(requested - moved, before)
+          if before <= allowance then
+            destination[j].transfer_stack(stack)
+          else
+            -- Native partial-magazine merging can consume an extra source item despite transfer_stack's amount.
+            -- Split into an empty native stack first; the destination can never consume more than this allowance.
+            local escrow = game.create_inventory(1)
+            r.work.transferEscrow = escrow
+            local ok, err = pcall(function()
+              escrow[1].transfer_stack(stack, allowance)
+              destination[j].transfer_stack(escrow[1])
+            end)
+            if escrow[1].valid_for_read then stack.transfer_stack(escrow[1]) end
+            U.check(not escrow[1].valid_for_read, "transfer_restore_blocked", "Untransferred items remain in native operation escrow")
+            escrow.destroy()
+            r.work.transferEscrow = nil
+            if not ok then error(err, 0) end
+          end
           local after = stack.valid_for_read and stack.count or 0
           moved = moved + before - after
         end
