@@ -107,7 +107,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (map.CollectedTick < latestObservationTick)
                 throw new InvalidDataException("Navigation observation predates the previous view; reconcile before choosing a route.");
             latestObservationTick = map.CollectedTick;
-            var field = new SpatialCollisionField(map);
+            var field = new SpatialCollisionField(map, ExplorationPlanner.ThreatMargin);
             if (completedMove is { } completed && requireStableArrival
                 && completed.Receipt.Effects.TryGetProperty("position", out var nativePosition)
                 && nativePosition.Deserialize<MapPosition>(Protocol.Json) is { } stopped
@@ -136,7 +136,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 route = route with { Waypoints = Subdivide(map.Actor.Position, route.Waypoints) };
             plans++;
             await journal.AppendAsync("route-plan", new { map.Scope, map.CollectedTick, destination, arrivalDistance, requireStableArrival,
-                map.StationaryThreats, radius = map.Coverage.Radius, reused = reusable, route }, deadline.Token);
+                map.StationaryThreats, stationaryThreatMargin = ExplorationPlanner.ThreatMargin,
+                radius = map.Coverage.Radius, reused = reusable, route }, deadline.Token);
             if (!reusable && route.Status == RouteStatus.BudgetExceeded)
             {
                 // A short search budget is not proof that a known destination is unreachable. Deepen once, with
@@ -476,7 +477,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         leg = path.Count == 1 ? 0 : current.Actor.Movement is { } movement
             && movement.OperationId == operationId && movement.WaypointCount == path.Count ? movement.WaypointIndex - 1 : -1;
         if (current.Scope != scope || current.Actor.ControlMode != "ai" || leg < 0 || leg >= path.Count) return false;
-        var field = new SpatialCollisionField(current);
+        var field = new SpatialCollisionField(current, ExplorationPlanner.ThreatMargin);
         MapPosition from = current.Actor.Position;
         for (int index = leg; index < path.Count; index++)
         {

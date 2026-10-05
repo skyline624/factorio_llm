@@ -11,11 +11,15 @@ public sealed class SpatialCollisionField
     private readonly Dictionary<(int X, int Y), List<Obstacle>> buckets = [];
     private readonly Dictionary<(int X, int Y), string> tiles = [];
     private readonly SpatialCollisionField? basis;
+    private readonly double stationaryThreatMargin;
     public SpatialSnapshot Map { get; }
     public EntityGeometry Character => Map.Prototypes[Map.Actor.Name];
 
-    public SpatialCollisionField(SpatialSnapshot map)
+    public SpatialCollisionField(SpatialSnapshot map, double stationaryThreatMargin = StationaryThreatMargin)
     {
+        if (!double.IsFinite(stationaryThreatMargin) || stationaryThreatMargin < 0)
+            throw new ArgumentOutOfRangeException(nameof(stationaryThreatMargin));
+        this.stationaryThreatMargin = stationaryThreatMargin;
         Map = map;
         var covered = new HashSet<(int X, int Y)>();
         foreach (TileRun row in map.Rows)
@@ -40,6 +44,7 @@ public sealed class SpatialCollisionField
     private SpatialCollisionField(SpatialCollisionField basis, IReadOnlyList<SpatialEntity> additions)
     {
         this.basis = basis;
+        stationaryThreatMargin = basis.stationaryThreatMargin;
         tiles = basis.tiles;
         Map = basis.Map with { Entities = [..basis.Map.Entities,..additions] };
         if (Map.Entities.Select(e=>e.Id).Distinct(StringComparer.Ordinal).Count() != Map.Entities.Count)
@@ -111,9 +116,9 @@ public sealed class SpatialCollisionField
     {
         foreach (var threat in Map.StationaryThreats ?? [])
         {
-            // Two tiles allow for steering and time between observations. This is a planning
-            // margin, not an engine range or a guarantee against moving enemies/projectiles.
-            double radius = threat.Range + StationaryThreatMargin;
+            // The caller's margin is a travel policy, not an engine range or a guarantee
+            // against moving enemies/projectiles. Defense can retain the smaller routing margin.
+            double radius = threat.Range + stationaryThreatMargin;
             double minimum = Math.Min(radius, Math.Max(Map.Actor.Position.DistanceTo(threat.Position), from.DistanceTo(threat.Position)));
             MapPosition closest;
             if (steering)

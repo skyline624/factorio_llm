@@ -4,6 +4,10 @@ Le mod fournit la géométrie native ; C# choisit les trajets, les positions et 
 
 ## Observation du terrain
 
+Les trajets de production et de réparation conservent la marge de prudence de l'exploration : 24 cases au-delà de la portée native des vers observés. Cette politique s'applique aussi aux destinations connues, aux routes conservées et à leur contrôle pendant la marche. Le run normal de la graine 20261072 avait engagé un trajet de réparation dans cette marge avant la mort au tick 6744378 ; les portées natives étaient bien exportées, mais la destination connue désactivait la prudence de l'exploration. Le journal ne prouve pas quel ennemi a porté le coup fatal.
+
+Cette marge C# ne modifie ni la portée native ni la visibilité des ennemis. Un personnage déjà exposé peut sortir sans se rapprocher des menaces. L'arbitre de défense conserve sa propre marge de routage de deux cases pour les replis. Un site peut rester inaccessible ou nécessiter une défense ; ce contrôle ne garantit pas la survie contre les ennemis mobiles.
+
 ### Génération autour du personnage autonome
 
 Un personnage `LuaEntity` sans pilote n'effectue pas toutes les mises à jour d'un joueur. Dans le monde normal **20261072**, la recherche de pétrole a parcouru plusieurs fois la bordure proche de `±320` cases. La lecture native montrait des tuiles `out-of-map` au-delà, des secteurs locaux encore non générés et une carte de deux millions de cases de côté : cette bordure ne représentait pas la limite de la carte. La demande de cartographie de la force ne suffisait pas à terminer leur génération.

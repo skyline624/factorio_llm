@@ -7,8 +7,8 @@ public sealed class ExplorationDangerException(string message) : InvalidOperatio
 
 /// <summary>
 /// Local frontier selection. Only observed terrain, historical solid resources and stationary threats seen during this search
-/// are remembered. When exploring (no caller destination), targets and steps keep away from recent death zones, and frontiers
-/// from worms by <see cref="ThreatMargin"/> beyond their range.
+/// are remembered. Targets, steps and routes keep away from worms by <see cref="ThreatMargin"/> beyond their range,
+/// including travel to a caller's destination. Recent death zones apply when supplied by the caller.
 /// </summary>
 public sealed class ExplorationPlanner
 {
@@ -52,11 +52,11 @@ public sealed class ExplorationPlanner
             for (int y = (int)Math.Ceiling(map.Bounds.Min.Y / 4); y < map.Bounds.Max.Y / 4; y++) observed.Add((x, y));
         bool exploring = deaths is not null;
         bool InDeathZone(MapPosition p) => exploring && deaths!.Any(d => DangerZones.Covers(d, p));
-        bool NearThreat(MapPosition p) => exploring && threats.Values.Any(t => p.DistanceTo(t.Position) <= t.Range + ThreatMargin);
+        bool NearThreat(MapPosition p) => threats.Values.Any(t => p.DistanceTo(t.Position) <= t.Range + ThreatMargin);
         MapPosition? known = destination ?? resources.Values.Where(e => catalog.Mining[e.Name].Any(p => p.Name == wanted && p.DeterministicItem)
                 && !InDeathZone(e.Position) && deferredResourceIds?.Contains(e.Id) != true)
             .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).Select(e => e.Position).FirstOrDefault();
-        var field = new SpatialCollisionField(map);
+        var field = new SpatialCollisionField(map, ThreatMargin);
         if (known is not null) frontierGoal = null;
         else if (frontierGoal is not null)
         {
@@ -79,8 +79,8 @@ public sealed class ExplorationPlanner
                 // Each exploration step hands control back over the network. Belts can be crossed,
                 // but the endpoint must remain still between its native receipt and the next observation.
                 if (distance is < 16 or > 28 || !PlacementPlanner.CanStop(field, point)) continue;
-                if (exploring && (deaths!.Any(d => Enters(map, point, d.Position, DangerZones.Radius))
-                    || towardFrontier && threats.Values.Any(t => Enters(map, point, t.Position, t.Range + ThreatMargin))))
+                if (exploring && deaths!.Any(d => Enters(map, point, d.Position, DangerZones.Radius))
+                    || threats.Values.Any(t => Enters(map, point, t.Position, t.Range + ThreatMargin)))
                 {
                     hazardous++;
                     continue;

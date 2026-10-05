@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Factorio.Agent.Core;
+using Factorio.Agent.Host;
 using Xunit;
 
 namespace Factorio.Agent.Host.Tests;
@@ -52,6 +53,36 @@ public sealed class StationaryThreatRoutingTests
     public void MalformedOrStaleThreatCannotBeAssumedHarmless(double range, long tick)
     {
         Assert.Throws<InvalidDataException>(() => WithThreat(new(5, 0), range, tick));
+    }
+
+    [Fact]
+    public void TravelMarginSurvivesProjectedBuildingsWithoutChangingNativeAttackRange()
+    {
+        var map = WithThreat(new(5, 8), 2);
+        Assert.True(new SpatialCollisionField(map).SegmentClear(new(0, 0), new(8, 0)));
+        var field = new SpatialCollisionField(map, ExplorationPlanner.ThreatMargin);
+        Assert.False(field.SegmentClear(new(0, 0), new(8, 0)));
+        var projected = new SpatialEntity("planned", "chest", new(-8, -8), new(new(-8.4, -8.4), new(-7.6, -7.6)), 0, "agent");
+        Assert.False(field.AppendEntities([projected]).SegmentClear(new(0, 0), new(8, 0)));
+        Assert.Equal(2, map.StationaryThreats![0].Range);
+    }
+
+    [Fact]
+    public void ActiveTravelIsCancelledWhenANewlyObservedWormMakesItsRemainingLegUnsafe()
+    {
+        var map = WithThreat(new(10, 30), 25);
+        Assert.True(new SpatialCollisionField(map).SteeringRegionClear(new(0, 0), new(10, 0)));
+        Assert.False(SpatialController.MovementPathIsClear(map, map.Scope, "move", new(0, 0), [new(10, 0)], out _));
+        Assert.True(SpatialController.MovementPathIsClear(map, map.Scope, "move", new(0, 0), [new(-10, -10)], out _));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void InvalidTravelMarginIsRejected(double margin)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SpatialCollisionField(WithThreat(new(5, 8), 2), margin));
     }
 
     private static SpatialSnapshot WithThreat(MapPosition position, double range, long tick = 100)

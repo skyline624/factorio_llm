@@ -166,8 +166,33 @@ public sealed class ExplorationPlannerTests
         start = start with { StationaryThreats = [new("worm", new(0, 10), 64, start.CollectedTick)] };
         var error = Assert.Throws<ExplorationDangerException>(() => new ExplorationPlanner().Choose(start, "", Catalog(), deaths: []));
         Assert.Contains("does not prove", error.Message);
-        // A caller's own destination remains its choice: only the routing margin of the worm applies.
+        // A caller's destination remains its choice, but an exposed actor must step away from the worm.
         Assert.Equal(new MapPosition(0, -28), new ExplorationPlanner().Choose(start, "", Catalog(), new(0, -60)));
+    }
+
+    [Fact]
+    public void KnownRepairDestinationDoesNotSendAnExposedActorDeeperTowardObservedWorms()
+    {
+        // Native positions from the normal repair trip before death 29, tick 6740751.
+        var start = Map(new(220, 75.95));
+        start = start with { StationaryThreats = [new("2648", new(181.2578125, 104.7890625), 25, start.CollectedTick)] };
+        var selected = new ExplorationPlanner().Choose(start, "", Catalog(), new(16, 76));
+        var threat = start.StationaryThreats[0];
+        Assert.True(selected.DistanceTo(threat.Position) > start.Actor.Position.DistanceTo(threat.Position));
+        var route = new RoutePlanner().Find(new(start, ExplorationPlanner.ThreatMargin), selected);
+        Assert.Equal(RouteStatus.Found, route.Status);
+    }
+
+    [Fact]
+    public void KnownDestinationKeepsTheWormMarginWhenThereAreNoDeathZones()
+    {
+        var start = Map(new(0, 0));
+        start = start with { StationaryThreats = [new("worm", new(24, 34), 25, start.CollectedTick)] };
+        var selected = new ExplorationPlanner().Choose(start, "", Catalog(), new(88, 0));
+        Assert.True(selected.Y < 0, $"{selected} heads toward the observed worm instead of around it.");
+        var field = new SpatialCollisionField(start, ExplorationPlanner.ThreatMargin);
+        Assert.Equal(RouteStatus.Found, new RoutePlanner().Find(field, selected).Status);
+        Assert.False(field.SegmentClear(start.Actor.Position, new(24, 0)));
     }
 
     private static ProductionCatalog Catalog() => new(Map(new(0, 0)).Scope, 1, [], new Dictionary<string, NativeItem>(),
