@@ -8,13 +8,21 @@ public sealed class BeltRoutePlanner
     public BeltRoutePlan Find(SpatialSnapshot map, string beltItem, MapPosition start, MapPosition target,
         int nodeBudget = 12000, CancellationToken cancellationToken = default, string? inletBeltId = null,
         IReadOnlySet<string>? existingBusBelts = null)
+        => FindCore(map,beltItem,start,target,nodeBudget,cancellationToken,inletBeltId,existingBusBelts,null);
+
+    internal BeltRoutePlan FindWithField(SpatialCollisionField field,string beltItem,MapPosition start,MapPosition target,
+        int nodeBudget,CancellationToken token) => FindCore(field.Map,beltItem,start,target,nodeBudget,token,null,null,field);
+
+    private BeltRoutePlan FindCore(SpatialSnapshot map,string beltItem,MapPosition start,MapPosition target,
+        int nodeBudget,CancellationToken cancellationToken,string? inletBeltId,IReadOnlySet<string>? existingBusBelts,
+        SpatialCollisionField? collisionField)
     {
         if (nodeBudget < 1) throw new ArgumentOutOfRangeException(nameof(nodeBudget));
         cancellationToken.ThrowIfCancellationRequested();
         var geometry = map.Prototypes[map.Items[beltItem].EntityName];
         if (geometry.Type != "transport-belt" || geometry.TileWidth != 1 || geometry.TileHeight != 1 || geometry.BeltSpeed is not > 0)
             throw new InvalidDataException("Routing requires native one-tile ordinary belt geometry and speed.");
-        var field = new BeltRoutingField(map, geometry, start, cancellationToken, inletBeltId, existingBusBelts);
+        var field = new BeltRoutingField(map, geometry, start, cancellationToken, inletBeltId, existingBusBelts,collisionField);
         bool Clear(MapPosition p) => field.SurfaceClear(p);
         if (!Clear(start) || !Clear(target)) return new(BeltRouteStatus.NoRouteInSnapshot, [], 0);
         // Break equal A* costs toward the target instead of flooding the whole equal-cost rectangle of a long route.

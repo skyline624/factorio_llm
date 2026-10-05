@@ -8,6 +8,13 @@ public sealed class UndergroundBeltRoutePlanner
 
     public BeltRoutePlan Find(SpatialSnapshot map, string beltItem, string undergroundItem, MapPosition start,
         MapPosition target, int nodeBudget = 12000, CancellationToken token = default)
+        => FindCore(map,beltItem,undergroundItem,start,target,nodeBudget,token,null);
+
+    internal BeltRoutePlan FindWithField(SpatialCollisionField field,string beltItem,string undergroundItem,MapPosition start,
+        MapPosition target,int nodeBudget,CancellationToken token) => FindCore(field.Map,beltItem,undergroundItem,start,target,nodeBudget,token,field);
+
+    private BeltRoutePlan FindCore(SpatialSnapshot map,string beltItem,string undergroundItem,MapPosition start,MapPosition target,
+        int nodeBudget,CancellationToken token,SpatialCollisionField? collisionField)
     {
         if (nodeBudget < 1) throw new ArgumentOutOfRangeException(nameof(nodeBudget));
         token.ThrowIfCancellationRequested();
@@ -19,8 +26,8 @@ public sealed class UndergroundBeltRoutePlanner
             throw new InvalidDataException("Underground routing requires observed compatible one-tile belt prototypes and native range.");
         if (BeltRoutePlanner.Cell(start) != start || BeltRoutePlanner.Cell(target) != target)
             return new(BeltRouteStatus.NoRouteInSnapshot, [], 0);
-        var surface = new BeltRoutingField(map, belt, start, token);
-        var collision = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
+        var collision = collisionField ?? new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
+        var surface = new BeltRoutingField(map, belt, start, token,collisionField:collision);
         var conveyors = map.Entities.Where(e => map.Prototypes[e.Name].Type is "transport-belt" or "underground-belt" or "splitter").ToArray();
         var occupied = conveyors.Select(e => BeltRoutePlanner.Cell(e.Position)).ToHashSet();
         var incoming = conveyors.Where(e => map.Prototypes[e.Name].Type != "underground-belt" || e.Underground?.Type != "input")
@@ -31,6 +38,19 @@ public sealed class UndergroundBeltRoutePlanner
         foreach (var row in map.Rows.Where(row => row.Name != SurveyedTransportFrame.UnknownTile))
             for (int x = row.X; x < row.X + row.Length; x++) knownTiles.Add(new(x + .5, row.Y + .5));
         var endpoints = new Dictionary<(MapPosition, int, bool), bool>();
+        var potential = new Dictionary<(MapPosition,int),bool>();
+        bool NeedsCrossing(MapPosition p,int direction)
+        {
+            if (potential.TryGetValue((p,direction),out bool cached)) return cached;
+            bool needed = !surface.SurfaceClear(p);
+            for (int length = 1; !needed && length <= tunnel.MaxUndergroundDistance.Value; length++)
+            {
+                var point = BeltRoutingField.Front(p,direction,length);
+                if (!knownTiles.Contains(point)) break;
+                needed = !surface.SurfaceClear(point);
+            }
+            return potential[(p,direction)] = needed;
+        }
         bool EndClear(MapPosition p, int direction, bool input)
         {
             var key = (p, direction, input);
@@ -81,15 +101,20 @@ public sealed class UndergroundBeltRoutePlanner
                     var next = BeltRoutingField.Front(current.Position, direction);
                     // An ordinary belt may become the input of a subsequent tunnel.
                     if (surface.SurfaceClear(next) || EndClear(next, direction, true))
-                        Enqueue(new(next, direction, false), direction, false, 1);
+                        Enqueue(new(next, NeedsCrossing(next,direction) ? direction : -2, false), direction, false, 1);
                 }
-                if (current.TunnelExit || current.Incoming != -1 && current.Incoming != direction || !EndClear(current.Position, direction, true)) continue;
+                if (current.TunnelExit || current.Incoming != -1 && current.Incoming != direction
+                    || !NeedsCrossing(current.Position,direction) || !EndClear(current.Position, direction, true)) continue;
+                bool obstruction = !surface.SurfaceClear(current.Position);
                 for (int length = 2; length <= tunnel.MaxUndergroundDistance.Value; length++)
                 {
                     var next = BeltRoutingField.Front(current.Position, direction, length);
                     if (!knownTiles.Contains(next)) break;
-                    if (!knownTiles.Contains(BeltRoutingField.Front(current.Position, direction, length - 1))) break;
-                    if (EndClear(next, direction, false)) Enqueue(new(next, direction, true), direction, true, length + 2);
+                    var buried = BeltRoutingField.Front(current.Position,direction,length-1);
+                    if (!knownTiles.Contains(buried)) break;
+                    obstruction |= !surface.SurfaceClear(buried);
+                    if ((obstruction || !surface.SurfaceClear(next)) && EndClear(next, direction, false))
+                        Enqueue(new(next, direction, true), direction, true, length + 2);
                 }
             }
 

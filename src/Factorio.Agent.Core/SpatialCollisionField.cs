@@ -10,6 +10,7 @@ public sealed class SpatialCollisionField
     }
     private readonly Dictionary<(int X, int Y), List<Obstacle>> buckets = [];
     private readonly Dictionary<(int X, int Y), string> tiles = [];
+    private readonly SpatialCollisionField? basis;
     public SpatialSnapshot Map { get; }
     public EntityGeometry Character => Map.Prototypes[Map.Actor.Name];
 
@@ -36,6 +37,21 @@ public sealed class SpatialCollisionField
             Add(new(entity.Id, new(entity.Bounds, entity.BoundsOrientation), map.Prototypes[entity.Name].Mask, false));
     }
 
+    private SpatialCollisionField(SpatialCollisionField basis, IReadOnlyList<SpatialEntity> additions)
+    {
+        this.basis = basis;
+        tiles = basis.tiles;
+        Map = basis.Map with { Entities = [..basis.Map.Entities,..additions] };
+        if (Map.Entities.Select(e=>e.Id).Distinct(StringComparer.Ordinal).Count() != Map.Entities.Count)
+            throw new InvalidDataException("A projected entity identity already exists.");
+        foreach (var entity in additions)
+            Add(new(entity.Id,new(entity.Bounds,entity.BoundsOrientation),Map.Prototypes[entity.Name].Mask,false));
+    }
+
+    /// <summary>Shares the immutable observed terrain and obstacles; indexes only additional planned entities.</summary>
+    public SpatialCollisionField AppendEntities(IReadOnlyList<SpatialEntity> additions) =>
+        additions.Count == 0 ? this : new(this,additions);
+
     private void Add(Obstacle obstacle)
     {
         if (obstacle.Mask.Layers.Count == 0 || obstacle.Bounds.Width == 0 || obstacle.Bounds.Height == 0) return;
@@ -50,6 +66,9 @@ public sealed class SpatialCollisionField
     private IEnumerable<Obstacle> Query(WorldBox box)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (basis is not null)
+            foreach (var obstacle in basis.Query(box))
+                if (seen.Add(obstacle.Id)) yield return obstacle;
         for (int x = (int)Math.Floor(box.Min.X); x <= Math.Floor(box.Max.X); x++)
             for (int y = (int)Math.Floor(box.Min.Y); y <= Math.Floor(box.Max.Y); y++)
                 if (buckets.TryGetValue((x, y), out List<Obstacle>? list))

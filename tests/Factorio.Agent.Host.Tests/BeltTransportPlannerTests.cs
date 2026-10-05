@@ -74,6 +74,71 @@ public sealed class BeltTransportPlannerTests
             new MapPosition(plan.TargetInserter.Position.X + drop.X, plan.TargetInserter.Position.Y + drop.Y)));
     }
 
+    [Fact]
+    public void AFirstPortRequiringATunnelDoesNotHideALaterOrdinaryLayout()
+    {
+        var map = Map(true);
+        var wall = map.Prototypes["wall"];
+        var pocket = new[] { new MapPosition(2.5, -.5), new(2.5, 1.5), new(3.5, .5) }
+            .Select((p,i) => new SpatialEntity($"pocket-{i}", "wall", p, wall.CollisionBox.Translate(p), 0, "own"));
+        map = map with
+        {
+            Prototypes = new Dictionary<string,EntityGeometry>(map.Prototypes)
+            {
+                ["pole"] = map.Prototypes["pole"] with { SupplyArea = 10 },
+                ["underground"] = map.Prototypes["belt"] with { Name = "underground", Type = "underground-belt", MaxUndergroundDistance = 2 }
+            },
+            Items = new Dictionary<string,PlaceableItem>(map.Items) { ["underground"] = new("underground",50) },
+            Entities = [.. map.Entities, .. pocket]
+        };
+        var ordinary = new BeltTransportPlanner().Find(map,new("belt","arm","pole"),"source","target");
+        var optional = new BeltTransportPlanner().Find(map,new("belt","arm","pole","underground"),"source","target");
+        Assert.NotNull(ordinary);
+        Assert.NotNull(optional);
+        Assert.Equal(ordinary.SourceInserter,optional.SourceInserter);
+        Assert.Equal(ordinary.TargetInserter,optional.TargetInserter);
+        Assert.Equal(ordinary.Belts,optional.Belts);
+        Assert.Null(optional.UndergroundBeltItem);
+    }
+
+    [Fact]
+    public void ANodeExhaustedAssignmentLeavesOtherBoundedBatchSearchesAvailable()
+    {
+        var map = Map(true);
+        MapPosition alternative = new(12.5,.5);
+        map = map with { Entities = [..map.Entities,
+            new("alternative","chest",alternative,map.Prototypes["chest"].CollisionBox.Translate(alternative),0,"own")] };
+        var batch = new BeltTransportBatchPlanner().Find(map,new("belt","arm","pole"),
+            [new BeltTransportRequest("target",["source","alternative"])],maximumSearches:2,nodeBudget:1);
+        Assert.Equal("alternative",Assert.Single(batch.Links).SourceId);
+        Assert.True(batch.BudgetExhausted);
+        Assert.Equal(2,batch.Searches);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void AWholeBatchReservesTheDestinationWithOneNativeMaterialPortFirst(int blockerDistance)
+    {
+        var map = Map(true);
+        var wall = map.Prototypes["wall"];
+        MapPosition secondSource = new(.5,8.5), constrained = new(8.5,8.5);
+        var blockers = new[] { new MapPosition(8.5,8.5-blockerDistance),new(8.5,8.5+blockerDistance),new(8.5+blockerDistance,8.5) }
+            .Select((p,i)=>new SpatialEntity($"tight-{i}","wall",p,wall.CollisionBox.Translate(p),0,"own"));
+        map = map with
+        {
+            Prototypes = new Dictionary<string,EntityGeometry>(map.Prototypes) { ["pole"] = map.Prototypes["pole"] with { SupplyArea = 32 } },
+            Entities = [..map.Entities,
+                new("second-source","chest",secondSource,map.Prototypes["chest"].CollisionBox.Translate(secondSource),0,"own"),
+                new("constrained","chest",constrained,map.Prototypes["chest"].CollisionBox.Translate(constrained),0,"own"),..blockers]
+        };
+        var batch = new BeltTransportBatchPlanner().Find(map,new("belt","arm","pole"),
+            [new BeltTransportRequest("target",["source"]),new("constrained",["second-source"])],stopAfterComplete:true);
+        Assert.Equal(2,batch.Links.Count);
+        Assert.Equal("constrained",batch.Links[0].TargetId);
+        Assert.False(batch.BudgetExhausted);
+    }
+
     internal static SpatialSnapshot Map(bool power)
     {
         var map = BeltRoutePlannerTests.Map();

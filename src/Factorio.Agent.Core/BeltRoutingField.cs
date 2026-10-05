@@ -9,10 +9,11 @@ internal sealed class BeltRoutingField
     private readonly Dictionary<MapPosition, bool> clearance = [];
 
     public BeltRoutingField(SpatialSnapshot map, EntityGeometry geometry, MapPosition start,
-        CancellationToken token, string? inletBeltId = null, IReadOnlySet<string>? existingBusBelts = null)
+        CancellationToken token, string? inletBeltId = null, IReadOnlySet<string>? existingBusBelts = null,
+        SpatialCollisionField? collisionField = null)
     {
         this.geometry = geometry;
-        field = new(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
+        field = collisionField ?? new(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
         foreach (var entity in map.Entities)
         {
             token.ThrowIfCancellationRequested();

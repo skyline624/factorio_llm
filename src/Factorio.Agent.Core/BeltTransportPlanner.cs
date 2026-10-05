@@ -28,15 +28,18 @@ public sealed class BeltTransportPlanner
             eligible: p => target.Bounds.Contains(At(p, arm.InserterDrop)), cancellationToken: cancellationToken);
         var pairs = (from output in outputs from input in inputs select (Output: output, Input: input))
             .OrderBy(p => At(p.Output, arm.InserterDrop).DistanceTo(At(p.Input, arm.InserterPickup)));
+        var crossings = new List<(PlacementCandidate Output, PlacementCandidate Input, SpatialCollisionField Field,
+            IReadOnlyList<PlacementCandidate> Poles, MapPosition Start, MapPosition Finish, int Remaining)>();
         foreach (var pair in pairs)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var start = BeltRoutePlanner.Cell(At(pair.Output, arm.InserterDrop));
             var finish = BeltRoutePlanner.Cell(At(pair.Input, arm.InserterPickup));
             if (equipment.UndergroundBelt is null && Math.Abs(start.X - finish.X) + Math.Abs(start.Y - finish.Y) + 1 > maximumBelts) continue;
-            var projected = clearMap with { Entities = [.. clearMap.Entities, ProjectArm("planned:source-arm", pair.Output)] };
-            if (!new SpatialCollisionField(projected).PlacementClear(arm, pair.Input.Position, pair.Input.Direction)) continue;
-            projected = projected with { Entities = [.. projected.Entities, ProjectArm("planned:target-arm", pair.Input)] };
+            var projectedField = field.AppendEntities([ProjectArm("planned:source-arm", pair.Output)]);
+            if (!projectedField.PlacementClear(arm, pair.Input.Position, pair.Input.Direction)) continue;
+            projectedField = projectedField.AppendEntities([ProjectArm("planned:target-arm", pair.Input)]);
+            var projected = projectedField.Map;
             // Power must leave the native drop/pickup belt tiles free; otherwise its nearest pole blocks our own route.
             WorldBox[] beltPorts = [belt.CollisionBox.Translate(BeltRoutePlanner.Cell(At(pair.Output, arm.InserterDrop))),
                 belt.CollisionBox.Translate(BeltRoutePlanner.Cell(At(pair.Input, arm.InserterPickup)))];
@@ -46,7 +49,7 @@ public sealed class BeltTransportPlanner
             {
                 var box = arm.CollisionBox.Rotate(candidate.Direction).Translate(candidate.Position);
                 if (projected.Entities.Any(e => Covers(e, box))) continue;
-                var extension = placements.FindCandidates(new(projected), equipment.Pole, candidate.Position, requireBuildReach: false,
+                var extension = placements.FindCandidates(projectedField, equipment.Pole, candidate.Position, requireBuildReach: false,
                     eligible: p => Coverage(p.Position, pole.SupplyArea.Value).Overlaps(box)
                         && beltPorts.All(port => !port.Overlaps(pole.CollisionBox.Rotate(p.Direction).Translate(p.Position)))
                         && projected.Entities.Any(e => e.Force == source.Force && e.Power?.NetworkId is not null
@@ -58,25 +61,32 @@ public sealed class BeltTransportPlanner
                     && map.Prototypes[e.Name].MaxWireDistance is > 0
                     && e.Position.DistanceTo(extension.Position) <= Math.Min(pole.MaxWireDistance.Value, map.Prototypes[e.Name].MaxWireDistance!.Value));
                 poles.Add(extension);
-                projected = projected with { Entities = [.. projected.Entities, new($"planned:transport-pole:{poles.Count}", pole.Name,
-                    extension.Position, pole.CollisionBox.Translate(extension.Position), extension.Direction, source.Force, Power: connection.Power)] };
+                projectedField = projectedField.AppendEntities([new($"planned:transport-pole:{poles.Count}", pole.Name,
+                    extension.Position, pole.CollisionBox.Translate(extension.Position), extension.Direction, source.Force, Power: connection.Power)]);
+                projected = projectedField.Map;
             }
             if (!powered) continue;
-            var route = new BeltRoutePlanner().Find(projected, equipment.Belt, start, finish,
-                nodeBudget: nodeBudget, cancellationToken: cancellationToken);
+            var route = new BeltRoutePlanner().FindWithField(projectedField,equipment.Belt,start,finish,nodeBudget,cancellationToken);
             if (route.Status == BeltRouteStatus.BudgetExceeded) throw new TimeoutException("Belt route search exhausted its node budget.");
-            if ((route.Status != BeltRouteStatus.Found || route.Belts.Count > maximumBelts) && equipment.UndergroundBelt is { } underground)
-            {
-                int remaining = nodeBudget - route.ExpandedNodes;
-                if (remaining <= 0) throw new TimeoutException("Belt route search exhausted its shared node budget.");
-                route = new UndergroundBeltRoutePlanner().Find(projected, equipment.Belt, underground, start, finish,
-                    remaining, cancellationToken);
-                if (route.Status == BeltRouteStatus.BudgetExceeded) throw new TimeoutException("Underground belt route search exhausted its shared node budget.");
-            }
             if (route.Status == BeltRouteStatus.Found && route.Belts.Count <= maximumBelts)
-                return new(pair.Output, pair.Input, route.Belts, poles,
+                return new(pair.Output, pair.Input, route.Belts, poles);
+            if (equipment.UndergroundBelt is not null)
+                crossings.Add((pair.Output, pair.Input, projectedField, poles, start, finish, nodeBudget - route.ExpandedNodes));
+        }
+        // Try all native arm/power layouts in surface mode first. A difficult crossing must not hide a later ordinary route.
+        bool crossingBudgetExceeded = false;
+        foreach (var crossing in crossings)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (crossing.Remaining <= 0) { crossingBudgetExceeded = true; continue; }
+            var route = new UndergroundBeltRoutePlanner().FindWithField(crossing.Field, equipment.Belt, equipment.UndergroundBelt!,
+                crossing.Start, crossing.Finish, crossing.Remaining, cancellationToken);
+            if (route.Status == BeltRouteStatus.BudgetExceeded) { crossingBudgetExceeded = true; continue; }
+            if (route.Status == BeltRouteStatus.Found && route.Belts.Count <= maximumBelts)
+                return new(crossing.Output, crossing.Input, route.Belts, crossing.Poles,
                     route.Belts.Any(p => p.UndergroundType is not null) ? equipment.UndergroundBelt : null);
         }
+        if (crossingBudgetExceeded) throw new TimeoutException("Underground belt route search exhausted its shared node budget.");
         return null;
 
         bool Covers(SpatialEntity e, WorldBox box) => e.Force == source.Force && e.Power?.NetworkId is not null

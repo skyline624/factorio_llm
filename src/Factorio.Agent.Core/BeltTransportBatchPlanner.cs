@@ -3,9 +3,10 @@ namespace Factorio.Agent.Core;
 public sealed record PlannedBeltLink(string SourceId, string TargetId, BeltTransportPlan Plan);
 public sealed record BeltTransportBatchPlan(IReadOnlyList<PlannedBeltLink> Links, int Searches, bool BudgetExhausted);
 public sealed record BeltTransportRequest(string TargetId, IReadOnlyList<string> SourceIds);
+public sealed record BeltTransportBatchProgress(int Search, int Selected, string SourceId, string TargetId, string Outcome, int? PhysicalBelts = null);
 
 /// <summary>Compares bounded route orders before one ingredient bus consumes another's chest port or passage.</summary>
-public sealed class BeltTransportBatchPlanner
+public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>? progress = null)
 {
     public BeltTransportBatchPlan Find(SpatialSnapshot map, BeltTransportEquipment equipment, IReadOnlyList<string> sourceIds,
         string targetId, int maximumSearches = 48, CancellationToken token = default)
@@ -46,14 +47,51 @@ public sealed class BeltTransportBatchPlanner
                 bestPoles = poles;
                 if (stopAfterComplete && best.Count == requests.Count) complete = true;
             }
-            foreach (int requestIndex in remaining)
+            var field = new SpatialCollisionField(current with { Entities = current.Entities.Where(e => e.Id != current.Actor.Id).ToArray() });
+            var arm = current.Prototypes[current.Items[equipment.Inserter].EntityName];
+            var belt = current.Prototypes[current.Items[equipment.Belt].EntityName];
+            var tunnel = equipment.UndergroundBelt is null ? null : current.Prototypes[current.Items[equipment.UndergroundBelt].EntityName];
+            var routing = new BeltRoutingField(current,belt,current.Actor.Position,token,collisionField:field);
+            (int Ports,int Region) Access(int index)
+            {
+                var target = current.Entities.Single(e => e.Id == requests[index].TargetId);
+                var candidates = new PlacementPlanner().FindCandidates(field,equipment.Inserter,target.Position,requireBuildReach:false,
+                    eligible:p => target.Bounds.Contains(At(p,arm.InserterDrop ?? throw new InvalidDataException("Missing native inserter drop.")))
+                        && PortClear(BeltRoutePlanner.Cell(At(p,arm.InserterPickup ?? throw new InvalidDataException("Missing native inserter pickup.")))),
+                    cancellationToken:token);
+                return (candidates.Count,candidates.Sum(p=>Region(BeltRoutePlanner.Cell(At(p,arm.InserterPickup!)))));
+            }
+            bool PortClear(MapPosition p) => field.PlacementClear(belt,p,0)
+                || tunnel is not null && new[] {0,4,8,12}.Any(d=>field.PlacementClear(tunnel,p,d));
+            int Region(MapPosition start)
+            {
+                if (!routing.SurfaceClear(start)) return 0;
+                var seen = new HashSet<MapPosition> {start};
+                var queue = new Queue<MapPosition>(); queue.Enqueue(start);
+                while (queue.TryDequeue(out var point) && seen.Count < 64)
+                {
+                    token.ThrowIfCancellationRequested();
+                    foreach (int direction in new[] {0,4,8,12})
+                    {
+                        var next = BeltRoutingField.Front(point,direction);
+                        if (seen.Count < 64 && !seen.Contains(next) && routing.SurfaceClear(next)) { seen.Add(next); queue.Enqueue(next); }
+                    }
+                }
+                return seen.Count;
+            }
+            // Protect the destinations with the fewest native arm positions before other routes consume their access.
+            foreach (int requestIndex in remaining.OrderBy(Access))
             foreach (string sourceId in requests[requestIndex].SourceIds.Where(s => !used.Contains(s)))
             {
                 if (complete) return;
                 if (searches == maximumSearches) { exhausted = true; return; }
                 int identity = ++searches;
                 string targetId = requests[requestIndex].TargetId;
-                var plan = new BeltTransportPlanner().Find(current, equipment, sourceId, targetId, token, maximumBelts, nodeBudget);
+                progress?.Invoke(new(identity,selected.Count,sourceId,targetId,"started"));
+                BeltTransportPlan? plan;
+                try { plan = new BeltTransportPlanner().Find(current, equipment, sourceId, targetId, token, maximumBelts, nodeBudget); }
+                catch (TimeoutException) { exhausted = true; progress?.Invoke(new(identity,selected.Count,sourceId,targetId,"node-budget")); continue; }
+                progress?.Invoke(new(identity,selected.Count,sourceId,targetId,plan is null ? "missing" : "found",plan?.Belts.Count));
                 if (plan is null) continue;
                 var link = new PlannedBeltLink(sourceId, targetId, plan);
                 selected.Add(link);
