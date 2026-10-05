@@ -81,6 +81,8 @@ public sealed class ResourceRowSearchTests
             Catalogs.Raw() with { Scope = map.Scope }, "coal", deferredResourceIds: defer ? new HashSet<string> { "used" } : null);
         Assert.Equal(defer, point.Position.X > 0);
         Assert.Equal(defer ? "new" : "used", journal.RememberedId);
+        Assert.Equal(journal.RememberedId, point.RememberedResource!.EntityId);
+        Assert.Equal(map.Actor.Position, point.Origin);
         Assert.Equal(["spatial"], game.Calls);
     }
 

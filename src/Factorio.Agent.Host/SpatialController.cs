@@ -5,7 +5,8 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
-public sealed record ExplorationWaypoint(MapPosition Position, long CollectedTick);
+public sealed record ExplorationWaypoint(MapPosition Position, long CollectedTick, ResourceSighting? RememberedResource = null,
+    MapPosition? Origin = null);
 
 /// <summary>A known own entity is absent from a complete local view at its known position, for instance destroyed by enemies.</summary>
 public sealed class EntityMissingException(string entityId, MapPosition knownPosition)
@@ -270,7 +271,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                     memory?.SurveyedCells, deaths, deferredResourceIds);
                 await journal.AppendAsync("exploration-waypoint", new { map.Scope, map.CollectedTick, map.Actor.Position,
                     wanted, destination, planner.Frontier, point }, token);
-                return new(point, map.CollectedTick);
+                return new(point, map.CollectedTick, remembered, map.Actor.Position);
             }
             catch (ExplorationBlockedException) when (cleared < 16)
             {

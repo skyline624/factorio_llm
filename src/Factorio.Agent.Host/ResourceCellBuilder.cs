@@ -145,10 +145,12 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
             var exploration = new ExplorationPlanner();
             var charting = new ChartedResourceSurvey(game, journal);
             var deferredResources = new HashSet<string>(StringComparer.Ordinal);
+            var progress = new ResourceSearchProgress(explorationBudget);
             for (int attempt = 0; ; attempt++)
             {
                 var inventory = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
                 var map = await MapAsync(CandidateItems(), 48);
+                progress.ObserveArrival(map.Actor.Position, map.CollectedTick, deferredResources);
                 var candidates = ResourceCellPlanner.EquipmentCandidates(catalog, map, supply, inventory);
                 if (candidates.Count == 0)
                     throw new InvalidOperationException($"No obtainable drill, receiver and power equipment supplies {product}.");
@@ -178,7 +180,7 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
                     await journal.AppendAsync("resource-row", planned, token);
                     return planned;
                 }
-                if (attempt >= explorationBudget)
+                if (progress.Exhausted)
                     throw new TimeoutException($"No observed {supply.Resource} deposit holds a resource row within the exploration budget ({search.Status}).");
                 int deferred = DeferUnusableResources(search.Status, map, supply.Resource, deferredResources);
                 if (deferred > 0)
@@ -189,7 +191,10 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
                 await charting.BeforeExplorationAsync(catalog, supply.Resource, "resource-row-exploration", token);
                 var waypoint = await controller.FindExplorationWaypointAsync(exploration, catalog, supply.Resource, token: token,
                     deferredResourceIds: deferredResources);
-                await journal.AppendAsync("resource-row-exploration", new { product, supply.Resource, waypoint }, token);
+                await journal.AppendAsync("resource-row-exploration", new { product, supply.Resource, waypoint,
+                    progress.ExploratorySteps, progress.ApproachSteps, explorationBudget,
+                    maximumApproachSteps = ResourceSearchProgress.MaximumApproachSteps }, token);
+                progress.BeginStep(waypoint, map.Actor.Position);
                 await controller.NavigateAsync(waypoint.Position, cancellationToken: token);
             }
         }

@@ -157,7 +157,7 @@ Cette fenêtre mesure la production achevée, indépendamment des stocks physiqu
 
 - Seuls les produits minés directement ou issus d'une recette de fusion à un seul minerai sont pris en charge ; l'acier reste hors de ces cellules et passe par les [bandes de fours](furnace-bands.md).
 - Les rangées planifiées ne sont pas encore réservées lors du choix d'une nouvelle bande d'assemblage : une bande peut réduire une allée à une seule case.
-- La croissance pendant la recherche cherche d'abord localement, puis peut avancer jusqu'à six étapes vers les gisements mémorisés, avec observation normale et budget borné. L'essai de remplacement ci-dessus utilise seulement un gisement déjà observé.
+- La recherche d'une rangée garde le budget demandé pour les étapes sans destination connue ou sans progrès. Un déplacement qui se rapproche de plus d'une case d'un gisement mémorisé, confirmé par une observation fraîche, compte dans une borne distincte de trente-deux étapes. Une destination locale refusée ne permet pas cette extension ; les zones de mort et la visibilité restent celles de l'observation normale. L'essai de remplacement ci-dessus utilise seulement un gisement déjà observé.
 - Le raccordement lointain suit la chaîne de poteaux par étapes locales ; il n'a pas encore été qualifié au-delà de la fenêtre observée.
 - Une cellule privée de courant parce que tout le réseau manque de vapeur n'est ni retirée ni raccordée de nouveau : elle cesse de couvrir son produit, que le personnage se procure alors lui-même. Seule une cellule sur un îlot sans générateur est raccordée de nouveau.
 - Le raccordement des îlots est couvert par la compilation et les tests existants ; sa réparation en jeu reste à constater dans une campagne ou une qualification.
