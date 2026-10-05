@@ -88,14 +88,21 @@ public static class FluidChainPlanner
     /// deposit yield (amount over normal amount) when the resource is infinite.
     /// </summary>
     public static double ExtractorPerMinute(EntityGeometry extractor, EntityGeometry resource, double amount, NativeMaterial product)
+        => ExtractorPerMinute(extractor.MiningSpeed ?? 0, resource.MiningTime ?? 0, resource.InfiniteResource,
+            resource.NormalResourceAmount, amount, product);
+
+    public static double ExtractorPerMinute(double miningSpeed, double miningTime, bool infiniteResource,
+        double? normalResourceAmount, double amount, NativeMaterial product)
     {
-        if (extractor.MiningSpeed is not > 0 || resource.MiningTime is not > 0 || product.Amount is not > 0 || !double.IsFinite(amount) || amount <= 0)
+        if (!double.IsFinite(miningSpeed) || miningSpeed <= 0 || !double.IsFinite(miningTime) || miningTime <= 0
+            || product.Amount is not > 0 || !double.IsFinite(product.Amount.Value) || !double.IsFinite(amount) || amount <= 0)
             throw new InvalidDataException("Extraction rate requires native mining speed, mining time, product amount and a positive deposit.");
-        double yield = resource.InfiniteResource
-            ? amount / (resource.NormalResourceAmount is > 0 ? resource.NormalResourceAmount.Value
+        double yield = infiniteResource
+            ? amount / (normalResourceAmount is > 0 && double.IsFinite(normalResourceAmount.Value) ? normalResourceAmount.Value
                 : throw new InvalidDataException("An infinite deposit requires its native normal amount."))
             : 1;
-        return 60 * extractor.MiningSpeed.Value * product.Amount.Value * yield / resource.MiningTime.Value;
+        double rate = 60 * miningSpeed * product.Amount.Value * yield / miningTime;
+        return double.IsFinite(rate) ? rate : throw new InvalidDataException("The native extraction rate is not finite.");
     }
 
     /// <summary>The deposit whose mining yields this fluid, if any.</summary>

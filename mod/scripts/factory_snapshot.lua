@@ -152,10 +152,20 @@ local function capture(args)
     end
     if entity.type == "mining-drill" then
       local target = entity.mining_target
+      -- The deposit already being worked by a known own drill is part of its factory state.
+      -- Export native yield inputs so inspecting its capacity does not require another trip.
+      local extraction
+      if target and target.valid and target.type == "resource" then
+        local resource = target.prototype
+        extraction = {amount = target.amount, miningSpeed = entity.prototype.mining_speed,
+          miningTime = resource.mineable_properties.mining_time, infiniteResource = resource.infinite_resource,
+          normalResourceAmount = resource.normal_resource_amount}
+      end
       add("work:" .. id, "work", id, "native-mining", {progress = entity.mining_progress,
         bonusProgress = entity.bonus_mining_progress, status = entity.status, statusName = status_names[entity.status],
         targetId = target and target.valid and U.entity_id(target),
         targetName = target and target.valid and target.name,
+        extraction = extraction,
         internalOutputBufferObservable = false,
         collection = "native-mining-progress-not-physical-stock"})
     end

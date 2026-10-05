@@ -244,8 +244,8 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
     }
 
     /// <summary>
-    /// Native output rate of every ready extractor cell of a fluid, read from the deposit under its drill. Cells whose drill or
-    /// deposit is not observed after travelling to it count as zero; at most sixteen cells are visited.
+    /// Native capacity of every ready extractor cell, preferably from the current known-factory photograph.
+    /// Missing native yield facts retain local observation; at most sixteen cells are inspected.
     /// </summary>
     public async Task<IReadOnlyDictionary<string, double>> ExtractorRatesAsync(string product, CancellationToken token = default)
     {
@@ -257,17 +257,48 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
             .Where(c => c.Kind == ExtractorKind && c.Status == "ready" && c.Recipe == product && c.Entities.ContainsKey("drill") && c.Plan?.ContainsKey("drill") == true)
             .OrderBy(c => c.Id, StringComparer.Ordinal).Take(16).ToArray();
         var rates = new Dictionary<string, double>(StringComparer.Ordinal);
+        var snapshot = await SnapshotAsync(catalog, token);
+        foreach (var cell in cells)
+            if (Rate(snapshot, catalog, cell) is { } rate) rates[cell.Id] = rate;
+        string[] snapshotCells = rates.Keys.ToArray();
+        var visited = new List<string>();
         foreach (var cell in cells)
         {
             if (rates.ContainsKey(cell.Id)) continue;
+            visited.Add(cell.Id);
             await controller.TravelAsync(cell.Plan!["drill"].Position, 8, catalog, token);
             var map = await CaptureAsync([cell.MachineItem], catalog, token);
             foreach (var other in cells.Where(c => !rates.ContainsKey(c.Id)))
                 if (Rate(map, catalog, other) is { } rate) rates[other.Id] = rate;
             rates.TryAdd(cell.Id, 0);
         }
-        await journal.AppendAsync("fluid-extractor-rates", new { product, rates }, token);
+        await journal.AppendAsync("fluid-extractor-rates", new { product, rates, snapshot.Scope, snapshot.CollectedTick,
+            snapshotCells, visited }, token);
         return rates;
+    }
+
+    /// <summary>Yield of the current native mining target of one known own drill, without exposing surrounding resources.</summary>
+    internal static double? Rate(FactorySnapshot snapshot, ProductionCatalog catalog, FactoryCell cell)
+    {
+        if (snapshot.Scope != catalog.Scope || snapshot.CollectedTick < catalog.CollectedTick)
+            throw new InvalidDataException("Extractor yield requires a current factory photograph of the same actor.");
+        string drillId = cell.Entities["drill"];
+        var drill = snapshot.Records.SingleOrDefault(r => r.Kind == "entity" && r.EntityId == drillId);
+        if (drill is null || drill.Name != catalog.Items[cell.MachineItem].PlaceEntity
+            || drill.Data.GetProperty("role").GetString() != "factory"
+            || drill.Data.GetProperty("type").GetString() != "mining-drill") return null;
+        var work = snapshot.Records.SingleOrDefault(r => r.Kind == "work" && r.EntityId == drillId && r.Name == "native-mining");
+        if (work is null || !work.Data.TryGetProperty("extraction", out var extraction)
+            || extraction.ValueKind != JsonValueKind.Object
+            || !work.Data.TryGetProperty("targetId", out var targetId) || string.IsNullOrEmpty(targetId.GetString())
+            || !work.Data.TryGetProperty("targetName", out var targetName)
+            || !catalog.Mining.TryGetValue(targetName.GetString() ?? "", out var products)) return null;
+        var product = products.SingleOrDefault(p => p.Name == cell.Recipe && p.DeterministicFluid);
+        if (product is null) return null;
+        return FluidChainPlanner.ExtractorPerMinute(extraction.GetProperty("miningSpeed").GetDouble(),
+            extraction.GetProperty("miningTime").GetDouble(), extraction.GetProperty("infiniteResource").GetBoolean(),
+            extraction.TryGetProperty("normalResourceAmount", out var normal) ? normal.GetDouble() : null,
+            extraction.GetProperty("amount").GetDouble(), product);
     }
 
     private async Task AdoptExtractorsAsync(string product, ProductionCatalog catalog, FactoryRegistry registry,

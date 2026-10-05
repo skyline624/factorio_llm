@@ -6,6 +6,8 @@ Le contrôleur sélectionne une recette activée, déterministe, avec des ingré
 
 ## Routes et capacité
 
+Le rendement calculé des extracteurs connus peut être relu depuis une photographie atomique de l'usine. L'API native fournit uniquement la cible actuellement travaillée par chaque foreuse propre connue, sa quantité et les paramètres natifs de minage. C# calcule la capacité pour le produit demandé et vérifie l'identité du personnage et la date ; les ressources voisines et les ennemis ne sont pas ajoutés à cette lecture. Le journal distingue les cellules lues dans cette photographie des cellules visitées. Si ces paramètres manquent, la lecture locale avec déplacement reste nécessaire. Ce rendement théorique ne prouve pas un débit soutenu, notamment lorsqu'une sortie est pleine ou que l'alimentation manque.
+
 `connect-fluid --session FILE --source ID --target ID --fluid crude-oil` calcule un chemin de tuyaux ordinaires sur le terrain observé. Les indices des boîtes fluides, positions, directions de flux et filtres sont lus sur les entités après configuration de la recette. Les indices du prototype ne remplacent pas les indices réels : la recette peut modifier les boîtes exposées par une raffinerie.
 
 Le calcul évite les obstacles et les ports non demandés. Chaque tuyau est construit par une opération native, avec consommation et reçu. Le succès exige un parcours de connexions natives réciproques, compatible avec les filtres et le sens du flux. Un budget épuisé reste distinct d'une absence de route dans la zone observée.
