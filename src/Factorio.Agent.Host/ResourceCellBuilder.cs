@@ -149,19 +149,26 @@ public sealed class ResourceCellBuilder(IGameClient game, IControllerJournal jou
             {
                 var inventory = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
                 var map = await MapAsync(CandidateItems(), 48);
-                var equipment = ResourceCellPlanner.Equipment(catalog, map, supply, inventory)
-                    ?? throw new InvalidOperationException($"No obtainable drill, receiver and power equipment supplies {product}.");
+                var candidates = ResourceCellPlanner.EquipmentCandidates(catalog, map, supply, inventory);
+                if (candidates.Count == 0)
+                    throw new InvalidOperationException($"No obtainable drill, receiver and power equipment supplies {product}.");
                 var search = new ResourceRowSearch(ResourceRowSearchStatus.NoSite);
-                if (ResourceCellPlanner.Observed(map, catalog, supply.Resource))
+                for (int equipmentIndex = 0; equipmentIndex < candidates.Count; equipmentIndex++)
                 {
-                    double rate = ResourceCellPlanner.CellPerMinute(map, catalog, supply, equipment);
-                    int cells = (int)Math.Clamp(Math.Ceiling(perMinute / rate - 1e-9), 1, ResourceCellPlanner.MaximumRowCells);
-                    var reserved = ResourceCellPlanner.Reserve(map, Reserved(map), equipment.Chest);
-                    search = await ControllerPlanning.RunAsync(t => planner.Find(reserved, catalog, supply, equipment, cells, map.Actor.Position, t),
-                        controller, TimeSpan.FromMinutes(2), token);
+                    var equipment = candidates[equipmentIndex];
+                    if (ResourceCellPlanner.Observed(map, catalog, supply.Resource))
+                    {
+                        double rate = ResourceCellPlanner.CellPerMinute(map, catalog, supply, equipment);
+                        int cells = (int)Math.Clamp(Math.Ceiling(perMinute / rate - 1e-9), 1, ResourceCellPlanner.MaximumRowCells);
+                        var reserved = ResourceCellPlanner.Reserve(map, Reserved(map), equipment.Chest);
+                        search = await ControllerPlanning.RunAsync(t => planner.Find(reserved, catalog, supply, equipment, cells, map.Actor.Position, t),
+                            controller, TimeSpan.FromMinutes(2), token);
+                    }
+                    await journal.AppendAsync("resource-row-search", new { product, attempt, equipment, equipmentIndex, search.Status,
+                        search.Row, clearance = search.Clearance?.Select(e => e.Id), map.CollectedTick }, token);
+                    // Only a complete refusal justifies another equipment choice; budget exhaustion stays uncertain.
+                    if (search.Status != ResourceRowSearchStatus.NoSite) break;
                 }
-                await journal.AppendAsync("resource-row-search", new { product, attempt, equipment, search.Status, search.Row,
-                    clearance = search.Clearance?.Select(e => e.Id), map.CollectedTick }, token);
                 if (search.Status == ResourceRowSearchStatus.Found)
                 {
                     state = await registry.LoadAsync(catalog.Scope.WorldId, token);

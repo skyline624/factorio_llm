@@ -10,11 +10,11 @@ public sealed class StableArrivalTests
     {
         var field = new SpatialCollisionField(Map());
         var destination = new MapPosition(.5, .5);
-        var old = new RoutePlanner().Find(field, destination, 7.8);
+        var old = new RoutePlanner().Find(field, destination, 7.8, timeBudget: TimeSpan.FromSeconds(2));
         Assert.Equal(RouteStatus.Found, old.Status);
         Assert.False(PlacementPlanner.CanStop(field, old.Waypoints[^1]));
 
-        var route = new RoutePlanner().Find(field, destination, 7.8, requireStableArrival: true);
+        var route = new RoutePlanner().Find(field, destination, 7.8, timeBudget: TimeSpan.FromSeconds(2), requireStableArrival: true);
         Assert.Equal(RouteStatus.Found, route.Status);
         Assert.InRange(route.Waypoints[^1].DistanceTo(destination), 0, 7.8);
         Assert.True(PlacementPlanner.CanStop(field, route.Waypoints[^1]));
@@ -27,7 +27,7 @@ public sealed class StableArrivalTests
         var map = Map();
         map = map with { Actor = map.Actor with { Position = new(7.5, .5) } };
         var field = new SpatialCollisionField(map);
-        var route = new RoutePlanner().Find(field, new(.5, .5), 7.8, requireStableArrival: true);
+        var route = new RoutePlanner().Find(field, new(.5, .5), 7.8, timeBudget: TimeSpan.FromSeconds(2), requireStableArrival: true);
         Assert.Equal(RouteStatus.Found, route.Status);
         Assert.NotEmpty(route.Waypoints);
         Assert.True(PlacementPlanner.CanStop(field, route.Waypoints[^1]));
@@ -42,7 +42,7 @@ public sealed class StableArrivalTests
         var field = new SpatialCollisionField(map);
         var destination = new MapPosition(.5, .5);
         Assert.True(field.SegmentClear(map.Actor.Position, destination));
-        var route = new RoutePlanner().Find(field, destination, 2, requireStableArrival: true);
+        var route = new RoutePlanner().Find(field, destination, 2, timeBudget: TimeSpan.FromSeconds(2), requireStableArrival: true);
         Assert.Equal(RouteStatus.Found, route.Status);
         Assert.NotEqual(destination, route.Waypoints[^1]);
         Assert.InRange(route.Waypoints[^1].DistanceTo(destination), 0, 2);
@@ -64,7 +64,7 @@ public sealed class StableArrivalTests
     public void AnExactMoveWithoutTheStableArrivalRequirementRetainsItsDestination()
     {
         var field = new SpatialCollisionField(Map());
-        var route = new RoutePlanner().Find(field, new(4.5, .5), .2);
+        var route = new RoutePlanner().Find(field, new(4.5, .5), .2, timeBudget: TimeSpan.FromSeconds(2));
         Assert.Equal(RouteStatus.Found, route.Status);
         Assert.Equal(new MapPosition(4.5, .5), route.Waypoints[^1]);
     }

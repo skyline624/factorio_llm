@@ -4,6 +4,8 @@ Les cellules de ressources remplacent l'alimentation manuelle de paires foreuse�
 
 Les équipements inutilisés d'un gisement épuisé peuvent alimenter le kit d'une nouvelle cellule selon les [conditions de réemploi et leur qualification préparée](resource-equipment-reuse.md).
 
+La recherche essaie d'abord le four compatible le plus rapide et disponible. Après un `NoSite` complet, elle essaie les autres fours compatibles dans la même photographie et avec les mêmes réservations, avant de différer le gisement. Chaque choix conserve son débit natif et l'exigence de dix minutes de minerai partagé : un four plus lent peut rendre viable le reste d'un gisement sans diminuer cette réserve minimale. Un budget épuisé ne déclenche pas ce choix alternatif. La demande de production reste inchangée ; une capacité plus faible demande davantage de cellules et ne vaut pas une preuve de débit soutenu.
+
 Lorsqu'une recherche complète conclut `NoSite`, les ressources effectivement vues dans cette photographie sont différées pour cet appel de recherche uniquement. L'exploration choisit alors un autre gisement mémorisé ou une frontière, au lieu de revenir vers le même minerai dont aucun emplacement utilisable n'a été trouvé. Les observations historiques restent intactes ; ce refus ne prouve pas l'absence de ressources. Une recherche interrompue par son budget ou une photographie incomplète ne produit pas cette exclusion. Les zones de mort récentes restent évitées et les indices de bâtiments ne ramènent pas cette recherche vers les ressources différées.
 
 ### Sélection des sorties solides — développement

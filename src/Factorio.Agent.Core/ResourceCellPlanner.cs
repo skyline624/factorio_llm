@@ -117,17 +117,15 @@ public sealed class ResourceCellPlanner
     public static ResourceCellEquipment? Equipment(ProductionCatalog catalog, SpatialSnapshot map, ResourceSupply supply,
         IReadOnlyDictionary<string, long> carried)
     {
-        bool Available(string item) => map.Items.TryGetValue(item, out var placeable) && map.Prototypes.ContainsKey(placeable.EntityName)
-            && (carried.GetValueOrDefault(item) > 0 || catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == item)));
+        bool Available(string item) => Obtainable(catalog, map, carried, item);
         string? pole = Available("small-electric-pole") ? "small-electric-pole" : null;
         string? inserter = Available("inserter") ? "inserter" : null;
         string chest = Available("iron-chest") ? "iron-chest" : "wooden-chest";
         string? furnace = null;
-        if (supply.Recipe is { } recipe)
+        if (supply.Recipe is not null)
         {
             if (pole is null || inserter is null) return null;
-            furnace = catalog.Machines.Where(m => m.Value.Categories.ContainsKey(recipe.Category) && Available(m.Key))
-                .OrderByDescending(m => m.Value.CraftingSpeed).ThenBy(m => m.Key, StringComparer.Ordinal).Select(m => m.Key).FirstOrDefault();
+            furnace = CompatibleFurnaces(catalog, map, supply, carried).FirstOrDefault();
             if (furnace is null) return null;
         }
         var categories = map.Prototypes.Values.Where(p => p.Type == "resource" && p.ResourceCategory is not null && Yields(catalog, p.Name, supply.Resource))
@@ -142,6 +140,28 @@ public sealed class ResourceCellPlanner
         bool electric = Geometry(map, drill).IsElectric;
         return new(drill, chest, furnace, supply.Recipe is null ? null : inserter, electric || supply.Recipe is not null ? pole : null);
     }
+
+    /// <summary>
+    /// Preferred equipment followed by other obtainable compatible furnaces. A slower furnace can preserve the supply
+    /// horizon on a partly depleted deposit; every candidate still uses its own native rate, geometry and reserve proof.
+    /// </summary>
+    public static IReadOnlyList<ResourceCellEquipment> EquipmentCandidates(ProductionCatalog catalog, SpatialSnapshot map,
+        ResourceSupply supply, IReadOnlyDictionary<string, long> carried)
+    {
+        var preferred = Equipment(catalog, map, supply, carried);
+        if (preferred is null) return [];
+        if (supply.Recipe is null) return [preferred];
+        return CompatibleFurnaces(catalog, map, supply, carried).Select(f => preferred with { Furnace = f }).ToArray();
+    }
+
+    private static bool Obtainable(ProductionCatalog catalog, SpatialSnapshot map, IReadOnlyDictionary<string, long> carried, string item) =>
+        map.Items.TryGetValue(item, out var placeable) && map.Prototypes.ContainsKey(placeable.EntityName)
+        && (carried.GetValueOrDefault(item) > 0 || catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == item)));
+
+    private static IEnumerable<string> CompatibleFurnaces(ProductionCatalog catalog, SpatialSnapshot map, ResourceSupply supply,
+        IReadOnlyDictionary<string, long> carried) => catalog.Machines
+        .Where(m => supply.Recipe is { } recipe && m.Value.Categories.ContainsKey(recipe.Category) && Obtainable(catalog, map, carried, m.Key))
+        .OrderByDescending(m => m.Value.CraftingSpeed).ThenBy(m => m.Key, StringComparer.Ordinal).Select(m => m.Key);
 
     /// <summary>Whether a deposit yielding the resource was observed, which native cell sizing requires.</summary>
     public static bool Observed(SpatialSnapshot map, ProductionCatalog catalog, string resource) =>
