@@ -59,13 +59,33 @@ public static class FactoryTransportHealth
         for (int i = 0; i < beltIds.Length; i++)
         {
             var data = records[beltIds[i]];
-            var connections = Facts(data)?.BeltConnections;
+            var facts = Facts(data);
+            var connections = facts?.BeltConnections;
             if (bus.Graph is not null) continue;
-            string[] input = i == 0 ? [] : [beltIds[i - 1]];
-            string[] output = i + 1 == beltIds.Length ? [] : [beltIds[i + 1]];
-            if (!Own(data) || data.GetProperty("type").GetString() != "transport-belt"
+            var planned = cell.Plan[ordered[i]];
+            bool underground = planned.UndergroundType is not null;
+            string[] input = i == 0 || planned.UndergroundType == "output" ? [] : [beltIds[i - 1]];
+            string[] output = i + 1 == beltIds.Length || planned.UndergroundType == "input" ? [] : [beltIds[i + 1]];
+            if (!Own(data) || data.GetProperty("type").GetString() != (underground ? "underground-belt" : "transport-belt")
                 || connections is null || connections.InputsCount != input.Length || connections.OutputsCount != output.Length
                 || !connections.Inputs.SequenceEqual(input) || !connections.Outputs.SequenceEqual(output)) return false;
+            if (underground)
+            {
+                int other = i + (planned.UndergroundType == "input" ? 1 : -1);
+                if (planned.UndergroundType is not ("input" or "output") || other < 0 || other >= beltIds.Length
+                    || facts?.Underground is not { NeighbourCount: 1 } native || native.Type != planned.UndergroundType
+                    || native.NeighbourId != beltIds[other]
+                    || cell.Plan[ordered[other]].UndergroundType != (planned.UndergroundType == "input" ? "output" : "input")
+                    || cell.Plan[ordered[other]].Direction != planned.Direction || cell.Plan[ordered[other]].Item != planned.Item
+                    || !data.TryGetProperty("position", out var position) || position.Deserialize<MapPosition>(Protocol.Json) != planned.Position
+                    || !data.TryGetProperty("direction", out var direction) || direction.GetInt32() != planned.Direction) return false;
+                var step = ExtractionPlanner.Rotate(new(0, planned.UndergroundType == "input" ? -1 : 1), planned.Direction);
+                var partner = cell.Plan[ordered[other]].Position;
+                double separation = Math.Abs(planned.Position.X - partner.X) + Math.Abs(planned.Position.Y - partner.Y);
+                if (separation < 2 || partner != new MapPosition(planned.Position.X + step.X * separation, planned.Position.Y + step.Y * separation)) return false;
+                try { BeltTransportReading.TransportRecords(snapshot, beltIds[i], false); }
+                catch (InvalidDataException) { return false; }
+            }
         }
         if (bus.Graph is not null && !GraphMatches()) return false;
         var belts = (bus.Graph?.Keys.Select(role => cell.Entities[role]) ?? beltIds).ToHashSet(StringComparer.Ordinal);
@@ -139,5 +159,5 @@ public static class FactoryTransportHealth
         int? RedNeighbourCount = null, MapPosition? PickupPosition = null, MapPosition? DropPosition = null,
         ObservedSplitterControl? SplitterControl = null,
         [property: System.Text.Json.Serialization.JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? GreenNeighbours = null,
-        int? GreenNeighbourCount = null);
+        int? GreenNeighbourCount = null, ObservedUndergroundBelt? Underground = null);
 }

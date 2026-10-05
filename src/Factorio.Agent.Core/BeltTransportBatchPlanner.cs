@@ -74,9 +74,17 @@ public sealed class BeltTransportBatchPlanner
         var pole = map.Prototypes[map.Items[equipment.Pole].EntityName];
         AddArm("source", link.Plan.SourceInserter);
         AddArm("target", link.Plan.TargetInserter);
-        foreach (var part in link.Plan.Belts)
-            additions.Add(new($"planned:batch:{identity}:belt:{additions.Count}", belt.Name, part.Position,
-                belt.CollisionBox.Rotate(part.Direction).Translate(part.Position), part.Direction, force));
+        for (int i = 0; i < link.Plan.Belts.Count; i++)
+        {
+            var part = link.Plan.Belts[i];
+            var geometry = part.UndergroundType is null ? belt
+                : map.Prototypes[map.Items[link.Plan.UndergroundBeltItem ?? throw new InvalidDataException("Missing underground item.")].EntityName];
+            string? partner = part.UndergroundType is null ? null : $"planned:batch:{identity}:belt:{i + (part.UndergroundType == "input" ? 1 : -1)}";
+            additions.Add(new($"planned:batch:{identity}:belt:{i}", geometry.Name, part.Position,
+                geometry.CollisionBox.Rotate(part.Direction).Translate(part.Position), part.Direction, force,
+                // This is projected occupancy, never a claim about observed engine transport lines.
+                Underground: part.UndergroundType is null ? null : new(part.UndergroundType, 1, 0, partner)));
+        }
         foreach (var part in link.Plan.Poles)
         {
             var connection = map.Entities.Concat(additions).First(e => e.Force == force && e.Power?.NetworkId is not null

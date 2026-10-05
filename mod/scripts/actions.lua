@@ -193,6 +193,10 @@ starts.build = function(r, c, args)
   local prototype = prototypes.item[item]
   U.check(prototype and prototype.place_result, "not_buildable", "The item does not place a supported entity")
   local name, position = prototype.place_result.name, U.position(args.position)
+  local underground_type = args.undergroundType
+  if prototype.place_result.type == "underground-belt" then
+    U.check(underground_type == "input" or underground_type == "output", "invalid_arguments", "Explicit underground endpoint type required")
+  else U.check(underground_type == nil, "invalid_arguments", "Underground endpoint type only applies to underground belts") end
   local stopped_item
   if args.stoppedInserterItem ~= nil then
     stopped_item = U.string(args.stoppedInserterItem, "stoppedInserterItem")
@@ -209,13 +213,14 @@ starts.build = function(r, c, args)
       force = c.force, build_check_type = defines.build_check_type.manual},
     "placement_blocked", "Native placement validation failed")
   local entity = c.surface.create_entity{name = name, position = position, direction = direction,
-    force = c.force, item = stack, raise_built = true, create_build_effect_smoke = true}
+    type = underground_type, force = c.force, item = stack, raise_built = true, create_build_effect_smoke = true}
   U.check(entity and entity.valid, "build_failed", "Engine did not create the entity")
   stack.count = stack.count - 1
   Actor.state().known[U.entity_id(entity)] = entity
   r.receipt.effects.entityId, r.receipt.effects.entityName = U.entity_id(entity), entity.name
   r.receipt.effects.consumed = {[item] = 1}
   r.receipt.effects.entityPosition = U.copy(entity.position)
+  if underground_type then r.receipt.effects.undergroundType = entity.belt_to_ground_type end
   if stopped_item then
     local control = filter_inserter(entity, stopped_item)
     control.circuit_condition = {first_signal = {type = "item", name = stopped_item, quality = "normal"}, comparator = "<", constant = 0}

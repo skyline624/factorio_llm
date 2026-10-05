@@ -43,7 +43,8 @@ local function prototype(value)
     result.inserterPickup = pickup and {x = pickup[1], y = pickup[2]}
     result.inserterDrop = drop and {x = drop[1], y = drop[2]}
   end
-  if value.type == "transport-belt" or value.type == "splitter" then result.beltSpeed = value.belt_speed end
+  if value.type == "underground-belt" then result.maxUndergroundDistance = value.max_underground_distance end
+  if value.type == "transport-belt" or value.type == "underground-belt" or value.type == "splitter" then result.beltSpeed = value.belt_speed end
   if #value.fluidbox_prototypes > 0 then
     result.fluidBoxes = {}
     for _, fluidbox in ipairs(value.fluidbox_prototypes) do
@@ -205,10 +206,14 @@ function M.validate_placement(args)
     local position = U.position(candidate.position)
     local direction = U.number(candidate.direction, "direction", 0, 12, 0, true)
     U.check(direction % 4 == 0, "invalid_direction", "Cardinal placement direction required")
+    local underground_type = candidate.undergroundType
+    if item.place_result.type == "underground-belt" then
+      U.check(underground_type == "input" or underground_type == "output", "invalid_arguments", "Explicit underground endpoint type required")
+    else U.check(underground_type == nil, "invalid_arguments", "Underground endpoint type only applies to underground belts") end
     -- This read must not probe placements beyond current normal visibility.
     U.check(Visibility.is_visible(c, {position = position, surface = c.surface}), "position_not_visible",
       "Candidate is outside current visibility")
-    result.candidates[#result.candidates + 1] = {index = index, position = position, direction = direction,
+    result.candidates[#result.candidates + 1] = {index = index, position = position, direction = direction, undergroundType = underground_type,
       allowed = c.surface.can_place_entity{name = item.place_result.name, position = position, direction = direction,
         force = c.force, build_check_type = defines.build_check_type.manual},
       inReach = U.distance(c.position, position) <= c.build_distance}

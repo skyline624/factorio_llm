@@ -58,7 +58,8 @@ public sealed record EntityGeometry(string Name, string Type, WorldBox Collision
     double? SupplyArea = null, double? MaxWireDistance = null, bool IsElectric = false,
     MapPosition? InserterPickup = null, MapPosition? InserterDrop = null, double? BeltSpeed = null,
     double? MiningSpeed = null, double? MiningTime = null, double? EnergyPerTick = null, double? BurnerEffectivity = null,
-    double? MaxPowerOutput = null, double? NormalResourceAmount = null, bool InfiniteResource = false, int? FilterSlots = null);
+    double? MaxPowerOutput = null, double? NormalResourceAmount = null, bool InfiniteResource = false, int? FilterSlots = null,
+    int? MaxUndergroundDistance = null);
 public sealed record FluidBoxGeometry(int Index, string ProductionType,
     [property: JsonConverter(typeof(NativeArrayConverter<FluidPortGeometry>))] IReadOnlyList<FluidPortGeometry> Connections,
     string? Filter = null, double? MinimumTemperature = null, double? MaximumTemperature = null);
@@ -77,7 +78,9 @@ public sealed record SpatialEntity(string Id, string Name, MapPosition Position,
     ObservedBeltConnections? BeltConnections = null, string? Status = null, ObservedInserterControl? InserterControl = null,
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? RedNeighbours = null, int? RedNeighbourCount = null,
     ObservedSplitterControl? SplitterControl = null,
-    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? GreenNeighbours = null, int? GreenNeighbourCount = null);
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? GreenNeighbours = null, int? GreenNeighbourCount = null,
+    ObservedUndergroundBelt? Underground = null);
+public sealed record ObservedUndergroundBelt(string Type, int NeighbourCount, int TransportLineCount, string? NeighbourId = null);
 public sealed record ObservedSplitterControl(string InputPriority, string OutputPriority, string? Filter = null);
 public sealed record ObservedInserterControl(bool UseFilters, string? FilterMode,
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Filters,
@@ -126,11 +129,18 @@ public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int S
                 || map.Actor.ResourceReachDistance is { } resourceReach && (!double.IsFinite(resourceReach) || resourceReach <= 0))
                 throw new InvalidDataException("Incomplete or inconsistent spatial observation.");
             foreach (EntityGeometry geometry in map.Prototypes.Values)
-                if (!ValidBox(geometry.CollisionBox) || geometry.TileWidth < 0 || geometry.TileHeight < 0)
+                if (!ValidBox(geometry.CollisionBox) || geometry.TileWidth < 0 || geometry.TileHeight < 0
+                    || geometry.MaxUndergroundDistance is { } distance && (geometry.Type != "underground-belt" || distance is < 1 or > 255))
                     throw new InvalidDataException("Invalid native prototype geometry.");
             if (map.Entities.Select(e => e.Id).Distinct(StringComparer.Ordinal).Count() != map.Entities.Count
                 || map.Entities.Any(e => !ValidBox(e.Bounds) || !map.Prototypes.ContainsKey(e.Name)))
                 throw new InvalidDataException("Invalid spatial entity identity or shape.");
+            foreach (var entity in map.Entities.Where(e => e.Underground is not null))
+                if (map.Prototypes[entity.Name].Type != "underground-belt"
+                    || entity.Underground is not { Type: "input" or "output", NeighbourCount: 0 or 1, TransportLineCount: >= 2 and <= 4 } native
+                    || native.NeighbourId is not null && (string.IsNullOrWhiteSpace(native.NeighbourId)
+                        || native.NeighbourId == entity.Id || native.NeighbourCount != 1))
+                    throw new InvalidDataException("Invalid native underground endpoint observation.");
             if (map.StationaryThreats is { } threats
                 && (threats.Count > 1000 || threats.Select(t => t.Id).Distinct(StringComparer.Ordinal).Count() != threats.Count
                     || threats.Any(t => string.IsNullOrWhiteSpace(t.Id) || t.Position is null

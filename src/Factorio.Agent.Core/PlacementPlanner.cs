@@ -1,6 +1,6 @@
 namespace Factorio.Agent.Core;
 
-public sealed record PlacementCandidate(MapPosition Position, int Direction, double Score);
+public sealed record PlacementCandidate(MapPosition Position, int Direction, double Score, string? UndergroundType = null);
 
 /// <summary>Enumerates native tile-aligned placements from geometry; no predefined layout coordinates.</summary>
 public sealed class PlacementPlanner

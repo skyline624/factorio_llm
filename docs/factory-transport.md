@@ -176,6 +176,10 @@ Les **19 minages** visent des identités distinctes et ne répètent pas le retr
 
 ## Limites
 
+Le candidat de calcul souterrain accepte un équipement explicitement fourni à `BeltTransportPlanner` ; les appels de campagne gardent encore l'équipement de surface. La portée et la vitesse viennent du prototype natif. Les extrémités portent un type `input` ou `output` conservé dans le plan, la validation, la construction, son reçu et la maintenance. Le calcul refuse les zones non relevées, les ports d'autres bras, les connexions parasites de surface et les paires voisines susceptibles de capturer une extrémité. Les expansions de surface et de franchissement partagent le budget du trajet.
+
+Une liaison souterraine ne devient saine qu'avec les partenaires natifs réciproques, les connexions de surface attendues et toutes les sections natives de transport, y compris les sections enfouies. Le comptage des lots conserve ces sections. Le prolongement et la conversion avec répartiteur refusent les plans souterrains ; la réorientation automatique d'une extrémité reste refusée. Ces contrôles et leurs tests hors ligne ne constituent pas encore une qualification headless réelle ni un déploiement dans une campagne.
+
 La planification demande les extrémités et les pièces conservées dans la même observation locale, avec une étendue maximale de 80 cases sur chaque axe avant le déplacement, 200 tapis au plus par bus, 12 000 expansions par recherche et huit couples envisagés par appel. Les futurs emplacements des bandes, les rangées de ressources et la croissance électrique restent réservés. Une absence de route conserve les transferts existants ; elle ne justifie pas une position devinée. Les limites de tampon sont fixées lors de la création de la liaison ; leur redimensionnement après une hausse de la demande reste à couvrir.
 
 La limite native de seize articles par photographie reste appliquée. Si les seuls équipements nécessaires aux réservations et au bus dépassent cette limite, l'appel est encore refusé ; aucun prototype nécessaire n'est retiré pour forcer une route. La lecture séparée de ces métadonnées au-delà de cette borne reste à couvrir.

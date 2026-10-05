@@ -181,6 +181,54 @@ public sealed class FactoryTransportHealthTests
         Assert.Equal(healthy, FactoryTransportHealth.Healthy(state, snapshot, bus));
     }
 
+    [Theory]
+    [InlineData("healthy", true)]
+    [InlineData("unknown-partner", false)]
+    [InlineData("one-way-partner", false)]
+    [InlineData("wrong-type", false)]
+    [InlineData("wrong-direction", false)]
+    [InlineData("wrong-position", false)]
+    [InlineData("surface-leak", false)]
+    [InlineData("missing-buried-section", false)]
+    [InlineData("duplicate-section-index", false)]
+    public void UndergroundHealthRequiresReciprocalNativePairsAndAllBuriedSections(string fault, bool expected)
+    {
+        var (state, snapshot, bus) = Fixture();
+        var cell = state.Cells.Single(c => c.Id == bus.CellId);
+        state = state.With(cell with { Plan = new Dictionary<string, PlannedEntity>
+        {
+            ["belt-0"] = new("belt-0", "underground", new(0, 0), 4, "input"),
+            ["belt-1"] = new("belt-1", "underground", new(3, 0), 4, "output")
+        } });
+        var rows = snapshot.Records.Select(r => r.EntityId is "b0" or "b1"
+            ? Change(r, "type", "underground-belt", "direction", 4, "position", new { x = r.EntityId == "b0" ? 0 : 3, y = 0 },
+                "transport.beltConnections", new ObservedBeltConnections([], [], 0, 0),
+                "transport.underground", new ObservedUndergroundBelt(r.EntityId == "b0" ? "input" : "output", 1, r.EntityId == "b0" ? 4 : 2, r.EntityId == "b0" ? "b1" : "b0"),
+                "transportLines", Enumerable.Range(1, r.EntityId == "b0" ? 4 : 2).Select(i => $"line:{r.EntityId}:{i}").ToArray()) : r).ToList();
+        foreach (string id in new[] { "b0", "b1" })
+            for (int i = 1; i <= (id == "b0" ? 4 : 2); i++)
+                rows.Add(new($"line:{id}:{i}", "transit", id, "transport-line",
+                    Protocol.ToElement(new { index = i, items = new Dictionary<string, long>(), collection = "native-owner-line-section" })));
+        int output = rows.FindIndex(r => r.EntityId == "b1" && r.Kind == "entity");
+        rows[output] = fault switch
+        {
+            "unknown-partner" => Change(rows[output], "transport.underground.neighbourId", "unknown"),
+            "one-way-partner" => Change(rows[output], "transport.underground.neighbourCount", 0),
+            "wrong-type" => Change(rows[output], "transport.underground.type", "input"),
+            "wrong-direction" => Change(rows[output], "direction", 8),
+            "wrong-position" => Change(rows[output], "position", new { x = 3, y = 1 }),
+            "surface-leak" => Change(rows[output], "transport.beltConnections", new ObservedBeltConnections([], ["foreign"], 0, 1)),
+            _ => rows[output]
+        };
+        if (fault == "missing-buried-section") rows.RemoveAll(r => r.Id == "line:b0:4");
+        if (fault == "duplicate-section-index")
+        {
+            int section = rows.FindIndex(r => r.Id == "line:b0:4");
+            rows[section] = Change(rows[section], "index", 3);
+        }
+        Assert.Equal(expected, FactoryTransportHealth.Healthy(state, snapshot with { Records = rows }, bus));
+    }
+
     private static (FactoryState State, FactorySnapshot Snapshot, FactoryTransportBus Bus) Fixture()
     {
         var source = new FactoryCell("source", 1, new(0, 0, true), "assembler", "assembler", "gear",
@@ -218,7 +266,7 @@ public sealed class FactoryTransportHealthTests
             string[] path = ((string)changes[i]).Split('.');
             var parent = node;
             foreach (string segment in path[..^1]) parent = parent[segment]!;
-            parent[path[^1]] = JsonSerializer.SerializeToNode(changes[i + 1]);
+            parent[path[^1]] = JsonSerializer.SerializeToNode(changes[i + 1], Protocol.Json);
         }
         return record with { Data = JsonSerializer.SerializeToElement(node) };
     }

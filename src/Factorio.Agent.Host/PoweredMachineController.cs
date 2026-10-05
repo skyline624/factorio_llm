@@ -139,8 +139,13 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         }
         if (stoppedInserterItem is not null && (current.Prototypes[current.Items[item].EntityName].FilterSlots is not > 0
             || !catalog.Items.ContainsKey(stoppedInserterItem))) throw new InvalidDataException("Stopped transport construction requires native filter geometry and item.");
-        var receipt = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction, stoppedInserterItem }, 600, token: token);
+        bool underground = current.Prototypes[current.Items[item].EntityName].Type == "underground-belt";
+        if (underground ? candidate.UndergroundType is not ("input" or "output") : candidate.UndergroundType is not null)
+            throw new InvalidDataException("An underground endpoint requires an explicit native input/output type.");
+        var receipt = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction, candidate.UndergroundType, stoppedInserterItem }, 600, token: token);
         string id = BuiltEntity(receipt);
+        if (underground && (!receipt.Effects.TryGetProperty("undergroundType", out var type)
+            || type.GetString() != candidate.UndergroundType)) throw new InvalidDataException("Native underground build type differs from its intent; reconcile before continuing.");
         if (stoppedInserterItem is not null && (!receipt.Effects.TryGetProperty("stoppedInserterItem", out var configured)
             || configured.GetString() != stoppedInserterItem || !receipt.Effects.TryGetProperty("disabledByScript", out var stopped)
             || stopped.ValueKind != System.Text.Json.JsonValueKind.True)) throw new InvalidDataException("Transport build did not prove its stopped native filter.");

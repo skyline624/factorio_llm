@@ -46,6 +46,12 @@ function M.read(entity, known)
       logisticCondition = control and control.connect_to_logistic_network or false, scriptDisabled = entity.disabled_by_script}
     read_red(value.inserterControl)
   elseif entity.type == "transport-belt" or entity.type == "underground-belt" or entity.type == "splitter" then
+    if entity.type == "underground-belt" then
+      local partner = entity.neighbours
+      value.underground = {type = entity.belt_to_ground_type, neighbourCount = partner and partner.valid and 1 or 0,
+        neighbourId = partner and partner.valid and known(partner) and U.entity_id(partner) or nil,
+        transportLineCount = entity.get_max_transport_line_index()}
+    end
     if entity.type == "splitter" then
       local filter = entity.splitter_filter
       value.splitterControl = {inputPriority = entity.splitter_input_priority,

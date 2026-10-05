@@ -18,7 +18,7 @@ public sealed class SpatialClient(IGameClient game)
     {
         GameResponse response = await game.ExecuteAsync(GameRequest.Create("validate_placement", new
         {
-            scope, item, candidates = candidates.Select(c => new { c.Position, c.Direction }).ToArray()
+            scope, item, candidates = candidates.Select(c => new { c.Position, c.Direction, c.UndergroundType }).ToArray()
         }), cancellationToken);
         if (!response.Ok) throw new GameRpcException(response.Error!);
         PlacementValidation validation = response.Data.Deserialize<PlacementValidation>(Protocol.Json)
@@ -28,12 +28,13 @@ public sealed class SpatialClient(IGameClient game)
             throw new InvalidDataException("Placement validation scope or correlation mismatch.");
         for (int index = 0; index < candidates.Count; index++)
             if (validation.Candidates[index].Index != index + 1 || validation.Candidates[index].Position != candidates[index].Position
-                || validation.Candidates[index].Direction != candidates[index].Direction)
+                || validation.Candidates[index].Direction != candidates[index].Direction
+                || validation.Candidates[index].UndergroundType != candidates[index].UndergroundType)
                 throw new InvalidDataException("Placement candidate correlation mismatch.");
         return validation;
     }
 }
 
-public sealed record ValidatedPlacement(int Index, MapPosition Position, int Direction, bool Allowed, bool InReach);
+public sealed record ValidatedPlacement(int Index, MapPosition Position, int Direction, bool Allowed, bool InReach, string? UndergroundType = null);
 public sealed record PlacementValidation(ActorScope Scope, long CollectedTick, string Item,
     [property: JsonConverter(typeof(NativeArrayConverter<ValidatedPlacement>))] IReadOnlyList<ValidatedPlacement> Candidates);

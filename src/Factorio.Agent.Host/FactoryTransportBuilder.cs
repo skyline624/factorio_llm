@@ -194,7 +194,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var entities = new Dictionary<string, PlannedEntity>(StringComparer.Ordinal);
         Add("source-inserter", Equipment.Inserter, plan.SourceInserter);
         Add("target-inserter-0", Equipment.Inserter, plan.TargetInserter);
-        for (int i = 0; i < plan.Belts.Count; i++) Add($"belt-{i}", Equipment.Belt, plan.Belts[i]);
+        for (int i = 0; i < plan.Belts.Count; i++) Add($"belt-{i}", plan.Belts[i].UndergroundType is null ? Equipment.Belt
+            : plan.UndergroundBeltItem ?? throw new InvalidDataException("Underground route has no construction item."), plan.Belts[i]);
         for (int i = 0; i < plan.Poles.Count; i++) Add($"pole-{i}", Equipment.Pole, plan.Poles[i]);
         string cellId = $"transport-{Guid.NewGuid():N}";
         var cell = new FactoryCell(cellId, 0, new(0, 0, true), "transport", Equipment.Belt, null,
@@ -202,7 +203,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var bus = new FactoryTransportBus($"bus-{Guid.NewGuid():N}", sourceCellId, item, cellId,
             [new(targetCellId, "target-inserter-0", maximum)]);
         return (cell, bus);
-        void Add(string role, string equipment, PlacementCandidate p) => entities[role] = new(role, equipment, p.Position, p.Direction);
+        void Add(string role, string equipment, PlacementCandidate p) => entities[role] = new(role, equipment, p.Position, p.Direction, p.UndergroundType);
     }
 
     public async Task<bool> LinkAsync(string sourceCellId, string targetCellId, string item, int maximum, ProductionCatalog catalog,
@@ -269,6 +270,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             return true;
         }
         var current = state.Cells.Single(c => c.Id == bus.CellId);
+        if (current.Plan?.Values.Any(p => p.UndergroundType is not null) == true) return false;
         var plans = new Dictionary<string, PlannedEntity>(current.Plan!, StringComparer.Ordinal);
         string consumerRole = $"target-inserter-{bus.Consumers.Count}";
         var roles = FactoryTransportHealth.Belts(current);
@@ -435,7 +437,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             : p.Role.StartsWith("target-inserter-", StringComparison.Ordinal) ? 1 : p.Role == "source-inserter" ? 3 : 2))
         {
             if (ids.ContainsKey(p.Role)) continue;
-            string id = await new PoweredMachineController(game, journal).BuildAtAsync(p.Item, new(p.Position, p.Direction, 0), catalog, controller, token,
+            string id = await new PoweredMachineController(game, journal).BuildAtAsync(p.Item, new(p.Position, p.Direction, 0, p.UndergroundType), catalog, controller, token,
                 stoppedInserterItem: p.Item == Equipment.Inserter ? bus.Item : null);
             ids[p.Role] = id;
             cell = cell with { Entities = new Dictionary<string, string>(ids, StringComparer.Ordinal) };
@@ -473,6 +475,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         {
             var record = orientations.Records.Single(r => r.Kind == "entity" && r.EntityId == cell.Entities[role]);
             if (record.Data.GetProperty("direction").GetInt32() == cell.Plan![role].Direction) continue;
+            if (cell.Plan[role].UndergroundType is not null)
+                throw new InvalidDataException("Underground endpoint orientation must be reconciled without an untyped rotation.");
             await OrientAsync(cell.Entities[role], cell.Plan[role].Direction, catalog, controller, token);
         }
         var sourceSnapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);

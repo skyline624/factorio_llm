@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Factorio.Agent.Core;
 
 public sealed record MaterialEndpoint(string EntityId, string InventoryId, string? Recipe, long UnitsPerCycle, bool Source)
@@ -69,10 +71,9 @@ public sealed record BeltTransportReading(MaterialEndpointReading Source, Materi
     {
         snapshot.SummarizeStocks();
         long transit = 0;
-        foreach (var (id, expected) in belts.Select(id => (id, 2)).Concat(inserters.Select(id => (id, 1))))
+        foreach (var (id, arm) in belts.Select(id => (id, false)).Concat(inserters.Select(id => (id, true))))
         {
-            var records = snapshot.Records.Where(r => r.Kind == "transit" && r.EntityId == id).ToArray();
-            if (records.Length != expected) throw new InvalidDataException("Missing or ambiguous native transport lanes or inserter hands.");
+            var records = TransportRecords(snapshot, id, arm);
             foreach (var record in records)
                 foreach (var content in record.Data.GetProperty("items").EnumerateObject())
                 {
@@ -82,5 +83,47 @@ public sealed record BeltTransportReading(MaterialEndpointReading Source, Materi
                 }
         }
         return new(source.Read(snapshot, item), target.Read(snapshot, item), transit);
+    }
+
+    /// <summary>Includes every native owner section, including an underground input's buried sections.</summary>
+    public static IReadOnlyList<FactoryRecord> TransportRecords(FactorySnapshot snapshot, string id, bool inserter)
+    {
+        var records = snapshot.Records.Where(r => r.Kind == "transit" && r.EntityId == id).ToArray();
+        if (inserter)
+        {
+            if (records.Length != 1)
+                throw new InvalidDataException("Missing or ambiguous native inserter hand.");
+            return records;
+        }
+        var entities = snapshot.Records.Where(r => r.Kind == "entity" && r.EntityId == id).ToArray();
+        // Preserve the existing two-section ordinary-belt contract. Underground owners declare their extra buried sections.
+        bool undergroundOwner = entities.Length == 1 && entities[0].Data.TryGetProperty("type", out var type)
+            && type.GetString() == "underground-belt";
+        if (!undergroundOwner)
+        {
+            if (entities.Length > 1 || records.Length != 2) throw new InvalidDataException("Missing or ambiguous native ordinary belt lanes.");
+            return records;
+        }
+        if (!entities[0].Data.TryGetProperty("transportLines", out var lines) || lines.ValueKind != JsonValueKind.Array)
+            throw new InvalidDataException("Missing native underground transport-line list.");
+        var declared = lines.EnumerateArray().Select(p => p.GetString()).ToArray();
+        int expected = 2;
+        if (undergroundOwner)
+        {
+            if (!entities[0].Data.TryGetProperty("transport", out var transport)
+                || !transport.TryGetProperty("underground", out var underground)
+                || !underground.TryGetProperty("transportLineCount", out var count) || !count.TryGetInt32(out expected)
+                || expected is < 2 or > 4)
+                throw new InvalidDataException("Missing native underground transport-line count.");
+        }
+        if (declared.Length != expected || declared.Any(string.IsNullOrWhiteSpace)
+            || declared.Distinct().Count() != expected || records.Length != expected
+            || !declared.ToHashSet().SetEquals(records.Select(r => r.Id))
+            || records.Any(r => r.Name != "transport-line"
+                || !r.Data.TryGetProperty("collection", out var collection) || collection.GetString() != "native-owner-line-section"
+                || !r.Data.TryGetProperty("index", out var index) || !index.TryGetInt32(out int number) || number < 1 || number > expected)
+            || records.Select(r => r.Data.GetProperty("index").GetInt32()).Distinct().Count() != expected)
+            throw new InvalidDataException("Missing or ambiguous native belt sections.");
+        return records;
     }
 }

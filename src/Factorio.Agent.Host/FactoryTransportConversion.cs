@@ -18,6 +18,7 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
         IReadOnlyDictionary<string, NativeTechnology> technologies)
     {
         int count = (state?.Transports ?? []).Count(b => b.Graph is null && b.Consumers.Count == 2
+            && state!.Cells.Single(c => c.Id == b.CellId).Plan?.Values.Any(p => p.UndergroundType is not null) != true
             && b.Consumers.All(c => !c.Paused) && FactoryTransportHealth.Healthy(state!, snapshot, b));
         bool enabled = FactoryDirector.Enabled(catalog, "splitter");
         return new(count, enabled, FactoryDirector.EquipmentUnlocks(catalog, technologies, count > 0 && !enabled ? ["splitter"] : []));
@@ -29,6 +30,7 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
             || bus.Consumers.Any(c => c.Paused) || !FactoryDirector.Enabled(catalog, "splitter")) return false;
         var registry = new FactoryRegistry(directory);
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        if (state.Cells.Single(c => c.Id == bus.CellId).Plan?.Values.Any(p => p.UndergroundType is not null) == true) return false;
         var source = state.Cells.Single(c => c.Id == bus.SourceCellId);
         var targets = bus.Consumers.Select(c => state.Cells.Single(t => t.Id == c.TargetCellId)).ToArray();
         if (targets.Any(t => !catalog.Recipes.Any(r => r.Name == t.Recipe && r.Ingredients.Any(i => i.DeterministicItem && i.Name == bus.Item))))

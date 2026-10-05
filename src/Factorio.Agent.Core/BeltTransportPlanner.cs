@@ -1,8 +1,8 @@
 namespace Factorio.Agent.Core;
 
-public sealed record BeltTransportEquipment(string Belt, string Inserter, string Pole);
+public sealed record BeltTransportEquipment(string Belt, string Inserter, string Pole, string? UndergroundBelt = null);
 public sealed record BeltTransportPlan(PlacementCandidate SourceInserter, PlacementCandidate TargetInserter,
-    IReadOnlyList<PlacementCandidate> Belts, IReadOnlyList<PlacementCandidate> Poles);
+    IReadOnlyList<PlacementCandidate> Belts, IReadOnlyList<PlacementCandidate> Poles, string? UndergroundBeltItem = null);
 
 public sealed class BeltTransportPlanner
 {
@@ -33,7 +33,7 @@ public sealed class BeltTransportPlanner
             cancellationToken.ThrowIfCancellationRequested();
             var start = BeltRoutePlanner.Cell(At(pair.Output, arm.InserterDrop));
             var finish = BeltRoutePlanner.Cell(At(pair.Input, arm.InserterPickup));
-            if (Math.Abs(start.X - finish.X) + Math.Abs(start.Y - finish.Y) + 1 > maximumBelts) continue;
+            if (equipment.UndergroundBelt is null && Math.Abs(start.X - finish.X) + Math.Abs(start.Y - finish.Y) + 1 > maximumBelts) continue;
             var projected = clearMap with { Entities = [.. clearMap.Entities, ProjectArm("planned:source-arm", pair.Output)] };
             if (!new SpatialCollisionField(projected).PlacementClear(arm, pair.Input.Position, pair.Input.Direction)) continue;
             projected = projected with { Entities = [.. projected.Entities, ProjectArm("planned:target-arm", pair.Input)] };
@@ -65,8 +65,17 @@ public sealed class BeltTransportPlanner
             var route = new BeltRoutePlanner().Find(projected, equipment.Belt, start, finish,
                 nodeBudget: nodeBudget, cancellationToken: cancellationToken);
             if (route.Status == BeltRouteStatus.BudgetExceeded) throw new TimeoutException("Belt route search exhausted its node budget.");
+            if ((route.Status != BeltRouteStatus.Found || route.Belts.Count > maximumBelts) && equipment.UndergroundBelt is { } underground)
+            {
+                int remaining = nodeBudget - route.ExpandedNodes;
+                if (remaining <= 0) throw new TimeoutException("Belt route search exhausted its shared node budget.");
+                route = new UndergroundBeltRoutePlanner().Find(projected, equipment.Belt, underground, start, finish,
+                    remaining, cancellationToken);
+                if (route.Status == BeltRouteStatus.BudgetExceeded) throw new TimeoutException("Underground belt route search exhausted its shared node budget.");
+            }
             if (route.Status == BeltRouteStatus.Found && route.Belts.Count <= maximumBelts)
-                return new(pair.Output, pair.Input, route.Belts, poles);
+                return new(pair.Output, pair.Input, route.Belts, poles,
+                    route.Belts.Any(p => p.UndergroundType is not null) ? equipment.UndergroundBelt : null);
         }
         return null;
 

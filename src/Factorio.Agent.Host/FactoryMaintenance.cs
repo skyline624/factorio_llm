@@ -78,7 +78,7 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
                 try
                 {
                     id = await new PoweredMachineController(game, journal).BuildAtAsync(item,
-                        new(missing.Plan.Position, missing.Plan.Direction, 0), catalog, controller, token, stoppedInserterItem: stoppedItem);
+                        new(missing.Plan.Position, missing.Plan.Direction, 0, missing.Plan.UndergroundType), catalog, controller, token, stoppedInserterItem: stoppedItem);
                 }
                 catch (PlacementRefusedException error)
                 {
@@ -200,6 +200,7 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         return snapshot.Records.Where(r => r.Kind == "entity" && r.Name == name && !excluded.Contains(r.EntityId)
                 && r.Data.GetProperty("role").GetString() == "factory"
                 && r.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!.DistanceTo(plan.Position) < .01
+                && UndergroundType(r.Data) == plan.UndergroundType
                 && (r.Data.GetProperty("type").GetString() is "container" or "electric-pole" or "wall" or "furnace"
                     || allowBeltRotation && r.Data.GetProperty("type").GetString() == "transport-belt"
                     || r.Data.GetProperty("direction").GetInt32() == plan.Direction))
@@ -232,13 +233,20 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
                 string? item = catalog.Items.Where(p => p.Value.PlaceEntity == record.Name).Select(p => p.Key)
                     .OrderBy(k => k != cell.MachineItem).ThenBy(k => k, StringComparer.Ordinal).FirstOrDefault();
                 if (item is null) break;
+                string? underground = UndergroundType(record.Data);
+                if (record.Data.GetProperty("type").GetString() == "underground-belt" && underground is null) break;
                 plan[role] = new(role, item, record.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!,
-                    record.Data.GetProperty("direction").GetInt32());
+                    record.Data.GetProperty("direction").GetInt32(), underground);
             }
             if (plan.Count == cell.Entities.Count) recovered.Add(cell with { Plan = plan });
         }
         return recovered;
     }
+
+    private static string? UndergroundType(JsonElement data) => data.TryGetProperty("type", out var type)
+        && type.GetString() == "underground-belt" && data.TryGetProperty("transport", out var transport)
+        && transport.TryGetProperty("underground", out var underground) && underground.TryGetProperty("type", out var value)
+        && value.GetString() is "input" or "output" ? value.GetString() : null;
 
     /// <summary>Electric entities among the given ones whose native network holds no known power source.</summary>
     public static IReadOnlyList<string> Unpowered(FactorySnapshot snapshot, IEnumerable<string> ids)

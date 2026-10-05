@@ -1,7 +1,7 @@
 namespace Factorio.Agent.Core;
 
 public sealed record CellEquipment(string Machine, string Inserter, string Chest, string Pole);
-public sealed record PlannedEntity(string Role, string Item, MapPosition Position, int Direction);
+public sealed record PlannedEntity(string Role, string Item, MapPosition Position, int Direction, string? UndergroundType = null);
 /// <summary>A slot in a factory band: machines face a shared walkway, north row above it, south row below it.</summary>
 public sealed record CellSlot(int Band, int Index, bool North);
 public sealed record CellLayout(CellSlot Slot, IReadOnlyList<PlannedEntity> Entities, WorldBox Footprint, WorldBox Walkway)

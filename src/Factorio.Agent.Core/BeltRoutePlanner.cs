@@ -14,39 +14,8 @@ public sealed class BeltRoutePlanner
         var geometry = map.Prototypes[map.Items[beltItem].EntityName];
         if (geometry.Type != "transport-belt" || geometry.TileWidth != 1 || geometry.TileHeight != 1 || geometry.BeltSpeed is not > 0)
             throw new InvalidDataException("Routing requires native one-tile ordinary belt geometry and speed.");
-        var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
-        // Physical collisions remain in the full native field. Only belts and inserter ports can reserve extra flow space.
-        var flowBlocked = new HashSet<MapPosition>();
-        foreach (var entity in map.Entities)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (map.Prototypes[entity.Name].Type is "transport-belt" or "underground-belt" or "splitter")
-            {
-                var box = new WorldBox(new(entity.Bounds.Min.X - 1, entity.Bounds.Min.Y - 1),
-                    new(entity.Bounds.Max.X + 1, entity.Bounds.Max.Y + 1));
-                bool retainedBelt = existingBusBelts?.Contains(entity.Id) == true && map.Prototypes[entity.Name].Type == "transport-belt";
-                for (double x = Math.Ceiling(Math.Max(box.Min.X, map.Bounds.Min.X) - .5) + .5;
-                    x <= Math.Min(box.Max.X, map.Bounds.Max.X); x++)
-                for (double y = Math.Ceiling(Math.Max(box.Min.Y, map.Bounds.Min.Y) - .5) + .5;
-                    y <= Math.Min(box.Max.Y, map.Bounds.Max.Y); y++)
-                {
-                    var position = new MapPosition(x, y);
-                    if (!(position == start && entity.Id == inletBeltId)
-                        && !(retainedBelt && Front(entity.Position, entity.Direction) != position)) flowBlocked.Add(position);
-                }
-            }
-            if (entity.PickupPosition is { } pickup) flowBlocked.Add(Cell(pickup));
-            if (entity.DropPosition is { } drop) flowBlocked.Add(Cell(drop));
-        }
-        var clearance = new Dictionary<MapPosition, bool>();
-        bool Clear(MapPosition p)
-        {
-            if (Cell(p) != p) return false;
-            if (clearance.TryGetValue(p, out bool known)) return known;
-            bool allowed = field.PlacementClear(geometry, p, 0) && !flowBlocked.Contains(p);
-            clearance[p] = allowed;
-            return allowed;
-        }
+        var field = new BeltRoutingField(map, geometry, start, cancellationToken, inletBeltId, existingBusBelts);
+        bool Clear(MapPosition p) => field.SurfaceClear(p);
         if (!Clear(start) || !Clear(target)) return new(BeltRouteStatus.NoRouteInSnapshot, [], 0);
         // Break equal A* costs toward the target instead of flooding the whole equal-cost rectangle of a long route.
         var frontier = new PriorityQueue<MapPosition, (double Score, double Remaining, int Sequence)>();

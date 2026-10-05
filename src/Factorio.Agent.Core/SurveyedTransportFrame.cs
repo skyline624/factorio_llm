@@ -4,7 +4,7 @@ namespace Factorio.Agent.Core;
 public sealed class SurveyedTransportFrame
 {
     public const int MaximumTiles = 262144;
-    private const string UnknownTile = "__unsurveyed_transport_tile__";
+    internal const string UnknownTile = "__unsurveyed_transport_tile__";
     private readonly Dictionary<(int X, int Y), string> tiles = [];
     private readonly Dictionary<string, SpatialEntity> entities = new(StringComparer.Ordinal);
     private readonly Dictionary<string, EntityGeometry> prototypes = new(StringComparer.Ordinal);
