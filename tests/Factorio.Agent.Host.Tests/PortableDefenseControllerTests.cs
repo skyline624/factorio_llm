@@ -13,6 +13,45 @@ public sealed class PortableDefenseControllerTests : IDisposable
     public PortableDefenseControllerTests() => Directory.CreateDirectory(directory);
 
     [Fact]
+    public async Task TheArbiterProtectsOnlyTheActiveNavigationOfTheSameActor()
+    {
+        var fixture = PortableDefenseTests.Fixture();
+        var original = new PortableDefensePlanner().Find(fixture.Observed, fixture.Map, fixture.Catalog, fixture.Carried)!;
+        var destination = original.Placement.Position;
+        var game = new Game();
+        var defense = new DefenseController(game, new Journal());
+        using (defense.ProtectNavigationDestination(fixture.Map.Scope, destination))
+            await defense.StepAsync();
+        Assert.NotEqual(destination, game.TurretPosition);
+
+        var foreignGame = new Game();
+        var foreignDefense = new DefenseController(foreignGame, new Journal());
+        using (foreignDefense.ProtectNavigationDestination(fixture.Map.Scope with { Incarnation = 2 }, destination))
+            await foreignDefense.StepAsync();
+        Assert.Equal(destination, foreignGame.TurretPosition);
+    }
+
+    [Fact]
+    public async Task NestedProtectionRestoresItsOuterEndpointAndDisposalRestoresFreePlacement()
+    {
+        var fixture = PortableDefenseTests.Fixture();
+        var destination = new PortableDefensePlanner().Find(fixture.Observed, fixture.Map, fixture.Catalog, fixture.Carried)!.Placement.Position;
+        var game = new Game();
+        var defense = new DefenseController(game, new Journal());
+        var outer = defense.ProtectNavigationDestination(fixture.Map.Scope, destination);
+        using (defense.ProtectNavigationDestination(fixture.Map.Scope, new(30, 30))) { }
+        await defense.StepAsync();
+        Assert.NotEqual(destination, game.TurretPosition);
+        outer.Dispose(); outer.Dispose();
+
+        var freeGame = new Game();
+        var freeDefense = new DefenseController(freeGame, new Journal());
+        using (freeDefense.ProtectNavigationDestination(fixture.Map.Scope, destination)) { }
+        await freeDefense.StepAsync();
+        Assert.Equal(destination, freeGame.TurretPosition);
+    }
+
+    [Fact]
     public async Task OneArbiterBuildsLoadsAndVerifiesTwoCoversBeforeRepositioningTheHealthyActor()
     {
         var game = new Game(); var journal = new Journal();

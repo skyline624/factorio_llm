@@ -55,6 +55,33 @@ public sealed class PortableDefenseTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PaidDefenseKeepsTheNavigationEndpointAndItsNativeCharacterBodyClear(bool bodyClearance)
+    {
+        var (map, catalog, observed, carried) = Fixture();
+        var planner = new PortableDefensePlanner();
+        var original = planner.Find(observed, map, catalog, carried)!;
+        var geometry = map.Prototypes[map.Items[original.Turret].EntityName];
+        var field = new SpatialCollisionField(map);
+        var box = geometry.CollisionBox.Rotate(original.Placement.Direction).Translate(original.Placement.Position);
+        var destination = bodyClearance
+            ? new MapPosition(box.Max.X - field.Character.CollisionBox.Min.X + .1, original.Placement.Position.Y)
+            : original.Placement.Position;
+        Assert.True(field.Walkable(destination));
+        Assert.False(After(original).Walkable(destination));
+        var replacement = planner.Find(observed, map, catalog, carried, protectedDestination: destination)!;
+        Assert.True(After(replacement).Walkable(destination));
+        Assert.Equal(RouteStatus.Found, new RoutePlanner().Find(After(replacement), destination).Status);
+        Assert.Equal(2, carried[replacement.Turret]);
+        Assert.Equal(60, carried[replacement.Ammunition]);
+
+        SpatialCollisionField After(PortableDefensePlan plan) => field.AppendEntities([new("paid-turret", geometry.Name,
+            plan.Placement.Position, geometry.CollisionBox.Rotate(plan.Placement.Direction).Translate(plan.Placement.Position),
+            plan.Placement.Direction, "agent")]);
+    }
+
+    [Theory]
     [InlineData("manual")]
     [InlineData("stopped")]
     [InlineData("dead")]

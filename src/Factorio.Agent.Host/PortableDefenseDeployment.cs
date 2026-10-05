@@ -18,7 +18,8 @@ internal sealed class PortableDefenseDeployment(IGameClient game, IControllerJou
     private const int MaximumPlacementRefusals = 3;
     public bool ObservationChanged { get; private set; }
 
-    public async Task<OperationSubmission?> NextAsync(SafetyObservation observed, CancellationToken token)
+    public async Task<OperationSubmission?> NextAsync(SafetyObservation observed, CancellationToken token,
+        MapPosition? protectedDestination = null)
     {
         ObservationChanged = false;
         if (!observed.Alive || observed.ControlMode != "ai" || observed.StopUnconfirmed || observed.Position is null
@@ -66,7 +67,8 @@ internal sealed class PortableDefenseDeployment(IGameClient game, IControllerJou
             return proposed;
         }
         plan = new PortableDefensePlanner().Find(observed, map, catalog, observed.Inventory, token,
-            requiredCovers: PortableDefensePlanner.TurretReserve, refusedPlacements: refusedPlacements);
+            requiredCovers: PortableDefensePlanner.TurretReserve, refusedPlacements: refusedPlacements,
+            protectedDestination: protectedDestination);
         if (plan is null) return null;
         scope = map.Scope;
         proposed = OperationSubmission.Create(map.Scope, "build", new { item = plan.Turret, plan.Placement.Position, plan.Placement.Direction },

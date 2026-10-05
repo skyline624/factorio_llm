@@ -17,6 +17,27 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
     private OperationSubmission? ownedSubmission;
     private bool ownedStopRequested;
     private long lastTick = -1;
+    private (ActorScope Scope, MapPosition Position)? navigationDestination;
+
+    /// <summary>Paid defense must keep this same actor's active navigation endpoint free.</summary>
+    internal IDisposable ProtectNavigationDestination(ActorScope scope, MapPosition position)
+    {
+        var previous = navigationDestination;
+        navigationDestination = (scope, position);
+        return new NavigationProtection(this, previous);
+    }
+
+    private sealed class NavigationProtection(DefenseController owner,
+        (ActorScope Scope, MapPosition Position)? previous) : IDisposable
+    {
+        private bool disposed;
+        public void Dispose()
+        {
+            if (disposed) return;
+            owner.navigationDestination = previous;
+            disposed = true;
+        }
+    }
 
     public async Task<DefenseStep> StepAsync(CancellationToken token = default, GameResponse? observed = null)
     {
@@ -48,7 +69,8 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         VisibleThreat? target = DefensePolicy.SelectTarget(observation);
         EquipmentDecision? equipment = target is null ? EquipmentPolicy.Select(observation) : null;
         OperationSubmission? portableAction = observation.Operation is { IsTerminal: false } running
-            && running.OperationId == ownedOperation && running.Kind != "shoot" ? null : await portable.NextAsync(observation, token);
+            && running.OperationId == ownedOperation && running.Kind != "shoot" ? null : await portable.NextAsync(observation, token,
+                navigationDestination is { } destination && destination.Scope == observation.Scope ? destination.Position : null);
         if (portable.ObservationChanged) return new("defending", observation.Tick);
         bool retreat = RetreatPlanner.Needed(observation);
         (SpatialSnapshot Map, RetreatPlan Plan)? cover = null;

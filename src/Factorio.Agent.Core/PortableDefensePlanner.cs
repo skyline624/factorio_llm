@@ -19,7 +19,7 @@ public sealed class PortableDefensePlanner
 
     public PortableDefensePlan? Find(SafetyObservation observed, SpatialSnapshot map, ProductionCatalog catalog,
         IReadOnlyDictionary<string, long> carried, CancellationToken token = default, int requiredCovers = 1,
-        IReadOnlyList<MapPosition>? refusedPlacements = null)
+        IReadOnlyList<MapPosition>? refusedPlacements = null, MapPosition? protectedDestination = null)
     {
         token.ThrowIfCancellationRequested();
         if (requiredCovers is < 1 or > TurretReserve) throw new ArgumentOutOfRangeException(nameof(requiredCovers));
@@ -60,10 +60,20 @@ public sealed class PortableDefensePlanner
             var placements = new PlacementPlanner();
             var selected = placements.FindCandidates(field, turret.Key, preferred, limit: 100,
                     eligible: p => p.Position.DistanceTo(map.Actor.Position) <= radius
-                        && refusedPlacements?.Any(rejected => p.Position.DistanceTo(rejected) < 1.5) != true,
+                        && refusedPlacements?.Any(rejected => p.Position.DistanceTo(rejected) < 1.5) != true
+                        && PreservesDestination(p),
                     cancellationToken: token)
                 .FirstOrDefault(p => placements.PreservesExit(field, turret.Key, p, token));
             if (selected is not null) return new(turret.Key, ammo, MagazinesPerTurret, selected);
+
+            bool PreservesDestination(PlacementCandidate placement)
+            {
+                if (protectedDestination is null) return true;
+                var geometry = map.Prototypes[map.Items[turret.Key].EntityName];
+                return !field.Character.Mask.CollidesWith(geometry.Mask, false)
+                    || !new OrientedCollisionBox(geometry.CollisionBox.Rotate(placement.Direction).Translate(placement.Position))
+                        .IntersectsSweep(protectedDestination, protectedDestination, field.Character.CollisionBox, .18);
+            }
         }
         return null;
     }

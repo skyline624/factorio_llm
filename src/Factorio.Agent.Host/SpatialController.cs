@@ -84,6 +84,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: deadline.Token);
         RequireAi(initial);
         ActorScope scope = initial.Scope;
+        using var protectedDestination = defense.ProtectNavigationDestination(scope, destination);
         long latestObservationTick = initial.CollectedTick;
         while (plans < 256)
         {
