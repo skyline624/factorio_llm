@@ -73,6 +73,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     Math.Max(0, targetStock - arrived.Inventory.GetValueOrDefault(item)),
                     catalog.Items.TryGetValue(item, out var native) ? native.StackSize : 1);
                 if (count == 0) continue;
+                if (await new CraftInventoryController(game, journal).PrepareCollectionAsync(item, count, catalog, controller, deadline.Token))
+                    continue; // A deposit may move the actor and change stocks; select the source again from a fresh frame.
                 await ActAsync("take", new
                 {
                     entityId = ready.Id,

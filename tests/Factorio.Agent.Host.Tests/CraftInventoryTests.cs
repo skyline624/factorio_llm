@@ -75,6 +75,44 @@ public sealed class CraftInventoryTests
     }
 
     [Fact]
+    public async Task ExistingRoomForCollectedStockDoesNotMoveOrDeposit()
+    {
+        var game = new CapacityGame(room: true);
+        var journal = new Journal();
+        using var factory = ProductionReservations.EnterFactory(new(1, game.Catalog.Scope.WorldId, [], []));
+        await using var controller = new SpatialController(game, journal);
+        Assert.False(await new CraftInventoryController(game, journal)
+            .PrepareCollectionAsync("underground-belt", 2, game.Catalog, controller, default));
+        Assert.Equal(["factory_snapshot"], game.Actions);
+        Assert.Empty(journal.Types);
+    }
+
+    [Fact]
+    public async Task AFullBagCannotTakeExistingStockWithoutAnObservedStorageHome()
+    {
+        // Normal seed20261072: a full bag after recovery refused200cables needed by the first coal drill.
+        var game = new CapacityGame(room: false);
+        var journal = new Journal();
+        using var factory = ProductionReservations.EnterFactory(new(1, game.Catalog.Scope.WorldId, [], []));
+        await using var controller = new SpatialController(game, journal);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new CraftInventoryController(game, journal)
+            .PrepareCollectionAsync("underground-belt", 2, game.Catalog, controller, default));
+        Assert.All(game.Actions, action => Assert.Equal("factory_snapshot", action));
+        Assert.Equal(["stock-collection-inventory-room-unavailable"], journal.Types);
+    }
+
+    [Fact]
+    public async Task ARespawnedActorsCapacityCannotAuthorizeACollection()
+    {
+        var game = new CapacityGame(room: true, changedScope: true);
+        using var factory = ProductionReservations.EnterFactory(new(1, game.Catalog.Scope.WorldId, [], []));
+        await using var controller = new SpatialController(game, new Journal());
+        await Assert.ThrowsAsync<InvalidDataException>(() => new CraftInventoryController(game, new Journal())
+            .PrepareCollectionAsync("underground-belt", 2, game.Catalog, controller, default));
+        Assert.Equal(["factory_snapshot"], game.Actions);
+    }
+
+    [Fact]
     public async Task CapacityFromAnotherIncarnationCannotAuthorizeStorageOrCrafting()
     {
         var game = new CapacityGame(room: true, changedScope: true);

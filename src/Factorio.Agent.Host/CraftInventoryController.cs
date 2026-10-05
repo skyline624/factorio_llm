@@ -3,21 +3,40 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
-/// <summary>Makes room for one native craft batch by returning surplus to known producer chests.</summary>
+/// <summary>Makes room for native crafting or stock collection by returning surplus to known producer chests.</summary>
 internal sealed class CraftInventoryController(IGameClient game, IControllerJournal journal)
 {
-    internal async Task<bool> PrepareAsync(NativeRecipe recipe, int batches, ProductionCatalog catalog,
+    internal Task<bool> PrepareAsync(NativeRecipe recipe, int batches, ProductionCatalog catalog,
         SpatialController controller, CancellationToken token)
     {
-        var factory = ProductionReservations.Factory;
-        if (factory is null) return false; // Standalone production has no registered storage to deposit into.
-        if (factory.WorldId != catalog.Scope.WorldId) throw new InvalidDataException("Craft storage belongs to another world.");
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromMinutes(3));
-        token = deadline.Token;
+        if (ProductionReservations.Factory is null) return Task.FromResult(false);
         var retained = Retained(recipe, batches, CarriedStock.RetainedStock);
         var incoming = recipe.Products.GroupBy(p => p.Name, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => checked((long)g.Sum(p => p.Amount!.Value)), StringComparer.Ordinal);
+        return PrepareRoomAsync(incoming, retained, recipe.Name, null, catalog, controller, token);
+    }
+
+    internal Task<bool> PrepareCollectionAsync(string item, long quantity, ProductionCatalog catalog,
+        SpatialController controller, CancellationToken token)
+    {
+        if (ProductionReservations.Factory is null) return Task.FromResult(false);
+        if (string.IsNullOrWhiteSpace(item) || !catalog.Items.ContainsKey(item) || quantity is < 1 or > 1000)
+            throw new InvalidDataException("Collection capacity requires a known item and a bounded quantity.");
+        return PrepareRoomAsync(new Dictionary<string, long>(StringComparer.Ordinal) { [item] = quantity },
+            new Dictionary<string, int>(CarriedStock.RetainedStock, StringComparer.Ordinal), null, item,
+            catalog, controller, token);
+    }
+
+    private async Task<bool> PrepareRoomAsync(IReadOnlyDictionary<string, long> incoming, Dictionary<string, int> retained,
+        string? recipe, string? collectionItem, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
+    {
+        var factory = ProductionReservations.Factory;
+        if (factory is null) return false; // Standalone production has no registered storage to deposit into.
+        if (factory.WorldId != catalog.Scope.WorldId) throw new InvalidDataException("Inventory storage belongs to another world.");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromMinutes(3));
+        token = deadline.Token;
+        string purpose = collectionItem is null ? "craft" : "stock-collection";
         var reader = new FactorySnapshotClient(game);
         long latestTick = 0;
         var snapshot = await CaptureAsync(incoming.Keys.ToArray());
@@ -28,7 +47,7 @@ internal sealed class CraftInventoryController(IGameClient game, IControllerJour
         var blocked = new HashSet<(string Entity, string Item)>();
         for (int deposit = 0; !FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, incoming); deposit++)
         {
-            if (deposit >= ResourceEquipmentReuse.MaximumDeposits) throw new InvalidOperationException("Craft output still lacks native inventory room after bounded surplus deposits.");
+            if (deposit >= ResourceEquipmentReuse.MaximumDeposits) throw new InvalidOperationException("Incoming stock still lacks native inventory room after bounded surplus deposits.");
             ResourceRecoveryDeposit? home = null;
             foreach (var (item, _) in FactoryLogistics.Surplus(FactoryLogistics.Carried(snapshot),
                 item => catalog.Items.TryGetValue(item, out var native)
@@ -42,9 +61,9 @@ internal sealed class CraftInventoryController(IGameClient game, IControllerJour
             }
             if (home is null)
             {
-                await journal.AppendAsync("craft-inventory-room-unavailable", new { recipe = recipe.Name, snapshot.Scope,
+                await journal.AppendAsync($"{purpose}-inventory-room-unavailable", new { recipe, collectionItem, snapshot.Scope,
                     snapshot.CollectedTick, incoming, retained }, token);
-                throw new InvalidOperationException("Craft output lacks native room and no observed producer chest accepts the surplus.");
+                throw new InvalidOperationException("Incoming stock lacks native room and no observed producer chest accepts the surplus.");
             }
             await controller.ApproachEntityAsync(home.EntityId, home.Position, catalog, token);
             changed = true;
@@ -56,7 +75,7 @@ internal sealed class CraftInventoryController(IGameClient game, IControllerJour
             var receipt = await controller.WorkAsync("insert", new { entityId = refreshed.EntityId, inventory = "chest",
                 item = refreshed.Item, count = refreshed.Count }, 600, token: token);
             long moved = ResourceEquipmentReuse.Transfer(receipt, refreshed.EntityId, refreshed.Item, refreshed.Count, "from_actor");
-            await journal.AppendAsync("craft-inventory-room-deposit", new { recipe = recipe.Name, home = refreshed, moved, receipt }, token);
+            await journal.AppendAsync($"{purpose}-inventory-room-deposit", new { recipe, collectionItem, home = refreshed, moved, receipt }, token);
             if (moved == 0) blocked.Add((refreshed.EntityId, refreshed.Item));
             snapshot = await CaptureAsync(incoming.Keys.ToArray());
         }
@@ -66,7 +85,7 @@ internal sealed class CraftInventoryController(IGameClient game, IControllerJour
         {
             var current = await reader.CaptureAsync(items, cancellationToken: token);
             if (current.Scope != catalog.Scope || current.CollectedTick < latestTick)
-                throw new InvalidDataException("Craft capacity observation changed actor scope or regressed in time.");
+                throw new InvalidDataException("Inventory capacity observation changed actor scope or regressed in time.");
             latestTick = current.CollectedTick;
             return current;
         }
