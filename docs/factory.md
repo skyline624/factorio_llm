@@ -4,6 +4,8 @@ La production « à la demande » historique fait tout passer par le personnage 
 
 La couche d'usine ajoute des **cellules persistantes** : elles continuent de produire entre les décisions du modèle, et le personnage ne sert plus que de transport entre elles.
 
+La préparation des matières premières compte les stocks natifs distribuables : sac du personnage, coffres connus et sorties des machines. Les cadavres, les entrées des machines, le combustible, les chargeurs des tourelles et les objets en transit n'alimentent pas ce calcul. Un tampon couvrant dix minutes de la demande complète permet de démarrer les ateliers avant d'étendre l'extraction. Un objectif explicite de débit de matière première conserve sa croissance obligatoire ; lorsqu'il est indépendant de l'objectif demandé et possède ce tampon, sa croissance passe après les ateliers. Elle est recalculée depuis une nouvelle observation, avec les mêmes objectifs et le même budget de deux cellules par matière. La capacité de charbon nécessaire aux chaudières reste requise avant ce report. Un arrêt après réalisation de l'objectif demandé conserve les autres débits dans le registre, sans les déclarer atteints.
+
 ## Bandes de cellules
 
 Une cellule comprend :

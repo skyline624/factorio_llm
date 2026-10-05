@@ -92,6 +92,72 @@ public sealed class RawSeedTests
         Assert.Empty(FactoryDirector.RawSeeds(Catalogs.Raw(), state, raw, new Dictionary<string, long>()));
     }
 
+    [Fact]
+    public void NativeChestAndFinishedOutputsCoverPreparationWithoutCountingCommittedInventories()
+    {
+        FactoryRecord Stock(string id, string name, object items) => new(id, "inventory", id, name, Protocol.ToElement(new { items }));
+        var accessible = new[] { Stock("bag", "character_main", new Dictionary<string, long> { ["iron-plate"] = 4 }),
+            Stock("chest", "chest", new Dictionary<string, long> { ["iron-plate"] = 120, ["copper-plate"] = 120 }),
+            Stock("output", "crafter_output", new Dictionary<string, long> { ["iron-plate"] = 116 }) };
+        var committed = new[] { "character_corpse", "crafter_input", "fuel", "turret_ammo", "lab_input", "transit" }
+            .Select(name => Stock(name, name, new Dictionary<string, long> { ["iron-plate"] = 10000, ["copper-plate"] = 10000, ["coal"] = 10000 })).ToArray();
+        var snapshot = new FactorySnapshot("stock", new("world", "session", "actor", 1, 1), 100, 200,
+            Protocol.ToElement(new { }), [.. accessible, .. committed]);
+        var available = FactoryLogistics.AvailableStock(snapshot);
+        Assert.Equal(240, available["iron-plate"]);
+        Assert.Equal(120, available["copper-plate"]);
+        Assert.False(available.ContainsKey("coal"));
+        Assert.Empty(FactoryDirector.RawSeeds(Catalogs.Raw(), State(), ScienceRaw, available));
+        Assert.Equal(["coal", "copper-plate", "iron-plate"], FactoryDirector.RawSeeds(Catalogs.Raw(), State(), ScienceRaw,
+            FactoryLogistics.AvailableStock(snapshot with { Records = committed })).Select(s => s.Item));
+    }
+
+    [Fact]
+    public void AnIndependentRawTargetWithNativeBufferGrowsAfterTheRequestedChain()
+    {
+        var targets = new Dictionary<string, double> { ["automation-science-pack"] = 6, ["copper-plate"] = 12 };
+        var state = State() with { Targets = targets };
+        var available = new Dictionary<string, long> { ["iron-plate"] = 240, ["copper-plate"] = 120, ["coal"] = 500 };
+        Assert.Empty(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, available, priorityItem: "automation-science-pack"));
+        // The later pass still requests the full explicit rate; stock is never certified as sustainable capacity.
+        Assert.Equal(("copper-plate", 12d), Assert.Single(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, available)));
+        Assert.Equal(targets, state.Targets);
+    }
+
+    [Theory]
+    [InlineData("copper-plate")]
+    [InlineData("coal")]
+    public void TheRequestedRawTargetAlwaysRequiresCapacityDespiteALargeBuffer(string item)
+    {
+        var raw = new Dictionary<string, double> { [item] = 30 };
+        var state = State() with { Targets = raw };
+        var available = new Dictionary<string, long> { [item] = 10000, ["coal"] = 10000 };
+        Assert.Equal((item, 30d), Assert.Single(FactoryDirector.RawSeeds(Catalogs.Raw(), state, raw, available, priorityItem: item)));
+    }
+
+    [Fact]
+    public void AnIndependentRawTargetWithoutItsHorizonBufferStillGrowsBeforeTheRequestedChain()
+    {
+        var state = State() with { Targets = new Dictionary<string, double> { ["automation-science-pack"] = 6, ["copper-plate"] = 12 } };
+        var available = new Dictionary<string, long> { ["iron-plate"] = 240, ["copper-plate"] = 119, ["coal"] = 500 };
+        Assert.Equal(("copper-plate", 12d), Assert.Single(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, available,
+            priorityItem: "automation-science-pack")));
+    }
+
+    [Fact]
+    public void BoilerFuelCapacityRemainsMandatoryDuringBufferedPriorityPreparation()
+    {
+        var state = State() with { Targets = new Dictionary<string, double> { ["automation-science-pack"] = 6 } };
+        var available = new Dictionary<string, long> { ["iron-plate"] = 240, ["copper-plate"] = 120, ["coal"] = 10000 };
+        Assert.Equal(("coal", 45d), Assert.Single(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, available,
+            powerFuelPerMinute: 45, priorityItem: "automation-science-pack")));
+    }
+
+    [Fact]
+    public void PreparationCannotPrioritizeAnUnregisteredObjective() =>
+        Assert.Throws<ArgumentException>(() => FactoryDirector.RawSeeds(Catalogs.Raw(), State(), ScienceRaw,
+            new Dictionary<string, long>(), priorityItem: "automation-science-pack"));
+
     private static FactoryState CoveredPlates()
     {
         var smelter = new ResourceCellEquipment("electric-mining-drill", "iron-chest", "stone-furnace", "inserter", "small-electric-pole");

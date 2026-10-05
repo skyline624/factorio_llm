@@ -67,7 +67,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         var plan = AutomationPlanner.Plan(catalog, registered.Targets!, machines, fluidMachineItems: fluidMachines, priorityItem: item);
         await journal.AppendAsync("factory-automation-plan", new { item, perMinute, targets = registered.Targets, plan }, token);
         if (await DeferAsync()) return plan;
-        await SeedRawAsync(catalog, plan.RawPerMinute, token, isObjectiveComplete);
+        var deferredRaw = await SeedRawAsync(catalog, plan.RawPerMinute, item, token, isObjectiveComplete);
         var builder = new FactoryCellBuilder(game, journal, directory);
         var fluids = new FluidChainDirector(game, journal, directory);
         // Consumers after their suppliers keeps early cells useful even if a later build is interrupted.
@@ -99,6 +99,8 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             }
             await StartStageAsync(stage, catalog, existing, token, isObjectiveComplete);
         }
+        if (await DeferAsync()) return plan;
+        await GrowDeferredRawAsync(catalog, plan.RawPerMinute, deferredRaw, token, isObjectiveComplete);
         if (await DeferAsync()) return plan;
         await new FactoryTransportBuilder(game, journal, directory).ConnectAsync(catalog, token: token);
         return plan;
@@ -286,7 +288,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         return resumed;
     }
 
-    /// <summary>Minutes of the planned rate that carried stock must cover before a raw item can go without a resource cell.</summary>
+    /// <summary>Minutes of the planned rate that distributable native stock must cover before raw growth can wait.</summary>
     public const double SeedHorizonMinutes = ResourceCellPlanner.MinimumSupplyMinutes;
 
     /// <summary>Resource cells built per raw item and automation call before the assemblers; growth adds the rest later.</summary>
@@ -295,18 +297,23 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     public const int PowerFuelSeedCells = 2;
 
     /// <summary>
-    /// Raw items the plan draws faster than ready resource cells supply and carried stock cannot cover for the horizon, plus coal
-    /// for new or retained active smelters. Explicit raw-rate targets require capacity even when carried stock covers the horizon.
+    /// Raw items the plan draws faster than ready resource cells supply and distributable stock cannot cover for the horizon,
+    /// plus coal for new or retained active smelters. Explicit raw-rate targets require capacity; unrelated ones with stock
+    /// covering the horizon can grow after the requested chain starts. A requested raw-rate target still grows first.
     /// A smelter cell costs about what an assembler cell costs and repays it
     /// within minutes, so it is built first; a pocket of plates still lets the assemblers start at once.
     /// </summary>
     internal static IReadOnlyList<(string Item, double PerMinute)> RawSeeds(ProductionCatalog catalog, FactoryState state,
-        IReadOnlyDictionary<string, double> raw, IReadOnlyDictionary<string, long> carried, double powerFuelPerMinute = 0)
+        IReadOnlyDictionary<string, double> raw, IReadOnlyDictionary<string, long> available, double powerFuelPerMinute = 0,
+        string? priorityItem = null)
     {
         if (!double.IsFinite(powerFuelPerMinute) || powerFuelPerMinute < 0) throw new ArgumentOutOfRangeException(nameof(powerFuelPerMinute));
+        if (priorityItem is not null && state.Targets?.ContainsKey(priorityItem) != true)
+            throw new ArgumentException("Raw preparation priority must be a registered target.", nameof(priorityItem));
         bool Unsupplied(string item, double perMinute) => ResourceCellPlanner.Supply(catalog, item) is not null
             && RawCapacity(state, item).PerMinute < perMinute - 1e-9
-            && (state.Targets?.ContainsKey(item) == true || carried.GetValueOrDefault(item) < perMinute * SeedHorizonMinutes);
+            && (state.Targets?.ContainsKey(item) == true && (priorityItem is null || priorityItem == item)
+                || available.GetValueOrDefault(item) < perMinute * SeedHorizonMinutes);
         var seeds = raw.Where(p => p.Value > 0 && Unsupplied(p.Key, p.Value)).Select(p => (p.Key, p.Value)).ToList();
         // Existing plate capacity still consumes fuel. On normal seed20261072, coal depletion was missed until
         // another plate cell was needed, leaving preparation to repeated transient coal procurement.
@@ -331,7 +338,8 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     /// Up to two resource cells per undersupplied raw item before any assembler, travelling at most a few steps toward remembered
     /// deposits. A failure leaves the item to the usual growth and procurement; a changed actor identity stays fatal.
     /// </summary>
-    private async Task SeedRawAsync(ProductionCatalog catalog, IReadOnlyDictionary<string, double> raw, CancellationToken token,
+    private async Task<IReadOnlySet<string>> SeedRawAsync(ProductionCatalog catalog, IReadOnlyDictionary<string, double> raw,
+        string priorityItem, CancellationToken token,
         Func<CancellationToken, Task<bool>>? isObjectiveComplete)
     {
         // Capacity includes an idle ready cell: start retained suppliers before deciding that no raw growth is needed.
@@ -349,10 +357,44 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             await new ResourceCellStartup(game, journal).StartManyAsync(
                 RawStartupCells(catalog, await registry.LoadAsync(catalog.Scope.WorldId, token), startupRaw),
                 catalog, controller, token, isObjectiveComplete);
-        var carried = FactoryLogistics.Carried(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token));
-        foreach (var (item, perMinute) in RawSeeds(catalog, await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token), raw, carried, powerFuel))
+        var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Raw preparation stock scope changed.");
+        var available = FactoryLogistics.AvailableStock(snapshot);
+        current = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        var seeds = RawSeeds(catalog, current, raw, available, powerFuel, priorityItem);
+        var first = seeds.Select(s => s.Item).ToHashSet(StringComparer.Ordinal);
+        var deferred = RawSeeds(catalog, current, raw, available, powerFuel).Where(s => !first.Contains(s.Item))
+            .Select(s => s.Item).ToHashSet(StringComparer.Ordinal);
+        await journal.AppendAsync("factory-raw-preparation", new { priorityItem, snapshot.Scope, snapshot.CollectedTick,
+            available = raw.Keys.Append(FactoryLogistics.Fuel).Distinct(StringComparer.Ordinal)
+                .ToDictionary(item => item, item => available.GetValueOrDefault(item), StringComparer.Ordinal),
+            seeds = seeds.Select(s => new { s.Item, s.PerMinute }), deferred = deferred.Order(StringComparer.Ordinal) }, token);
+        if (!await EnsureRawSeedsAsync(catalog, seeds, token, isObjectiveComplete)) return deferred;
+        await new PowerFuelTransport(game, journal, directory).ConnectAsync(catalog, token);
+        await SeedPowerFuelSourcesAsync(catalog, token, isObjectiveComplete);
+        return deferred;
+    }
+
+    private async Task GrowDeferredRawAsync(ProductionCatalog catalog, IReadOnlyDictionary<string, double> raw,
+        IReadOnlySet<string> deferred, CancellationToken token, Func<CancellationToken, Task<bool>>? isObjectiveComplete)
+    {
+        if (deferred.Count == 0) return;
+        var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Deferred raw growth stock scope changed.");
+        var state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
+        var seeds = RawSeeds(catalog, state, raw, FactoryLogistics.AvailableStock(snapshot))
+            .Where(s => deferred.Contains(s.Item)).ToArray();
+        await journal.AppendAsync("factory-raw-growth", new { snapshot.Scope, snapshot.CollectedTick,
+            seeds = seeds.Select(s => new { s.Item, s.PerMinute }) }, token);
+        await EnsureRawSeedsAsync(catalog, seeds, token, isObjectiveComplete);
+    }
+
+    private async Task<bool> EnsureRawSeedsAsync(ProductionCatalog catalog, IReadOnlyList<(string Item, double PerMinute)> seeds,
+        CancellationToken token, Func<CancellationToken, Task<bool>>? isObjectiveComplete)
+    {
+        foreach (var (item, perMinute) in seeds)
         {
-            if (isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
+            if (isObjectiveComplete is not null && await isObjectiveComplete(token)) return false;
             try
             {
                 await EnsureRawAsync(item, Math.Min(perMinute, 10000), token, maximumNewCells: SeedCellsPerItem, explorationBudget: 4,
@@ -364,8 +406,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 await journal.AppendAsync("factory-raw-seed-failed", new { item, perMinute, error = error.GetType().Name, error.Message }, token);
             }
         }
-        await new PowerFuelTransport(game, journal, directory).ConnectAsync(catalog, token);
-        await SeedPowerFuelSourcesAsync(catalog, token, isObjectiveComplete);
+        return true;
     }
 
     internal async Task SeedPowerFuelSourcesAsync(ProductionCatalog catalog, CancellationToken token,
