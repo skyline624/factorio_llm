@@ -276,6 +276,50 @@ public sealed class FluidRelayTests
         Assert.Null(new FluidRelayPlanner().FindOffshore(map, "pump", "pipe", new(-20.5, .5), "water", new(130.5, .5)));
     }
 
+    [Theory]
+    [InlineData(130.5, .5)]
+    [InlineData(80.5, 12.5)]
+    public void ANewIntakeCanAdvanceAlongAShoreWithAShortConnectionToItsOutlet(double x, double y)
+    {
+        var map = ShoreMap();
+        var near = new MapPosition(-20.5, .5);
+        var destination = new MapPosition(x, y);
+        map = map with
+        {
+            Entities = map.Entities.Where(e => e.Id != "source").ToArray(),
+            Rows = Enumerable.Range(-48, 96).Select(row => new TileRun(-48, row, 96, row < 0 ? "water" : "grass")).ToArray()
+        };
+        // The installation and its future growth still occupy their original shore; the new pump uses another site.
+        var reserved = new WorldBox(new(-23, 0), new(-14, 11));
+        var planning = FactoryGround.Reserve(map, [reserved], "pipe");
+        Assert.False(new SpatialCollisionField(planning).PlacementClear(planning.Prototypes["pipe"], new(-19.5, 5.5), 0));
+        var site = new FluidRelayPlanner().FindOffshore(planning, "pump", "pipe", near, "water", destination);
+        Assert.NotNull(site);
+        Assert.NotNull(site.Pump);
+        Assert.True(site.Outlet.Position.DistanceTo(destination) <= near.DistanceTo(destination) - 8);
+        Assert.True(site.Outlet.Position.DistanceTo(destination) > site.Pump.Placement.Position.DistanceTo(destination) - 8);
+        Assert.InRange(site.Route.Pipes.Count, 0, 7);
+        Assert.DoesNotContain(site.Route.Pipes.Append(site.Outlet.Position).Append(site.Pump.Placement.Position), reserved.Contains);
+        var offset = ExtractionPlanner.Rotate(map.Prototypes["pump"].FluidSourceOffset!, site.Pump.Placement.Direction);
+        Assert.Equal("water", new SpatialCollisionField(planning).FluidAt(new(site.Pump.Placement.Position.X + offset.X,
+            site.Pump.Placement.Position.Y + offset.Y)));
+    }
+
+    [Fact]
+    public void ANewIntakeCannotReplaceTheRequiredProgressFromTheKnownShore()
+    {
+        var map = ShoreMap();
+        map = map with
+        {
+            Entities = map.Entities.Where(e => e.Id != "source").ToArray(),
+            Rows = Enumerable.Range(-48, 96).Select(row => new TileRun(-48, row, 96, row < 0 ? "water" : "grass")).ToArray()
+        };
+        var near = new MapPosition(-20.5, .5);
+        // Only the land beside the old shore remains buildable. No outlet there advances by eight tiles.
+        var planning = FactoryGround.Reserve(map, [new(new(-14, -48), new(48, 48))], "pipe");
+        Assert.Null(new FluidRelayPlanner().FindOffshore(planning, "pump", "pipe", near, "water", new(130.5, .5)));
+    }
+
     [Fact]
     public void APlannedPumpReceiptIsAdoptedOnlyAtItsOriginalOrientation()
     {
@@ -305,8 +349,8 @@ public sealed class FluidRelayTests
             Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
             {
                 ["pump"] = native.Prototypes["pump"] with { Type = "offshore-pump" },
-                ["pipe"] = map.Prototypes["pipe"] with { Mask = native.Prototypes["boiler"].Mask },
-                ["character"] = map.Prototypes["character"] with { Mask = native.Prototypes["boiler"].Mask }
+                ["pipe"] = map.Prototypes["pipe"] with { Mask = native.Prototypes["boiler"].Mask with { Layers = ["object", "player", "water"] } },
+                ["character"] = map.Prototypes["character"] with { Mask = native.Prototypes["boiler"].Mask with { Layers = ["player", "water"] } }
             },
             Items = new Dictionary<string, PlaceableItem>(map.Items) { ["pump"] = new("pump", 50) },
             Entities = [.. map.Entities, new(map.Actor.Id, "character", map.Actor.Position,

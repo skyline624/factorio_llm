@@ -111,8 +111,9 @@ public sealed class FluidRelayPlanner
                 p.Position == other.TargetPosition && p.TargetPosition == other.Position)))) continue;
             var projected = map with { Entities = [.. field.Map.Entities, entity] };
             var supply = new OffshoreSupplyPlanner().Find(projected, pumpItem, pipeItem, PlannedId, fluid, cancellationToken);
-            if (supply is null || supply.Route.Pipes.Count > MaximumPipes
-                || outlet.Position.DistanceTo(destination) > supply.Pump.Position.DistanceTo(destination) - 8) continue;
+            // The outlet already advances at least eight tiles from the known shore. A new intake can stand
+            // beside it; requiring another eight tiles from that intake rejects short, valid native connections.
+            if (supply is null || supply.Route.Pipes.Count > MaximumPipes) continue;
             var nativePump = new SpatialEntity(supply.Route.Source!.EntityId, pump.Name, supply.Pump.Position,
                 pump.CollisionBox.Rotate(supply.Pump.Direction).Translate(supply.Pump.Position), supply.Pump.Direction, force,
                 FluidConnections: FluidCellPlanner.Ports(pump, supply.Pump));
