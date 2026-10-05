@@ -55,9 +55,11 @@ public sealed class RetreatPlanner
     {
         bool needed = Needed(state);
         if (!needed && !SeeksCover(state)) return new("not-needed");
-        if (map.Scope != state.Scope || map.CollectedTick < state.Tick || map.CollectedTick - state.Tick > 60
-            || map.Actor.ControlMode != "ai" || map.Actor.Position.DistanceTo(state.Position!) > .5)
+        if (map.Scope != state.Scope || map.CollectedTick < state.Tick || map.Actor.ControlMode != "ai")
             throw new InvalidDataException("Retreat geometry no longer matches the current native safety observation.");
+        // A running movement can advance between the two read-only captures; wait for another safety step.
+        if (map.CollectedTick - state.Tick > 60 || map.Actor.Position.DistanceTo(state.Position!) > .5)
+            return new("observation-changed");
         var field = new SpatialCollisionField(map);
         // Destinations cut off by walls or water would spend the route budget on searches that cannot succeed.
         var reachable = Reachable(field, map.Actor.Position, 32);

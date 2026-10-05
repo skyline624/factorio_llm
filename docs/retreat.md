@@ -10,6 +10,8 @@ La recherche teste au plus douze destinations ; chaque recherche A* possède ses
 
 La préemption, les déplacements et les tirs passent par le même arbitre et le même journal. Une opération de repli sans réponse est interrogée par identité avant toute autre action ; aucun déplacement ambigu n'est renvoyé aveuglément. Une session différente, un terrain trop ancien ou un changement de position inattendu interdit la soumission.
 
+Si les deux lectures successives gardent le même périmètre mais que le personnage a avancé de plus d'une demi-case, ou que la carte dépasse l'observation de sécurité de plus de soixante ticks, le plan retourne `observation-changed`. Le contrôleur attend le prochain pas d'observation sans soumettre de repli, de tir ou d'équipement fondé sur ces données décalées. Un changement de périmètre, un recul de tick ou le passage en mode manuel restent des erreurs. Cette distinction couvre l'arrêt observé le 5 octobre 2026 pendant un déplacement de récupération ; ses tests hors ligne ne constituent pas encore une nouvelle preuve native.
+
 Sans tourelle chargée observée, le contrôleur cherche une destination à quatre à douze cases augmentant d'au moins deux cases la distance au plus proche ennemi observé. Il vérifie le terrain et les routes avec les mêmes contraintes, puis soumet uniquement le premier déplacement borné. Le résultat `separation` indique un éloignement, sans déclarer une couverture défensive ni un lieu sûr. Une rafale de tir déjà détenue par la défense peut être annulée lorsque le repli devient nécessaire ; elle n'impose plus d'attendre sa fin.
 
 ## Essais natifs du 13 septembre 2026

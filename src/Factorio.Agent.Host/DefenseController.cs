@@ -44,6 +44,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         {
             // Planned before preempting: an unreachable refuge never interrupts a fight the actor can still win.
             cover = await PlanRetreatAsync(observation, token);
+            if (cover.Value.Plan.Status == "observation-changed") return new("defending", cover.Value.Map.CollectedTick);
             retreat = cover.Value.Plan.Next is not null;
         }
         if (observation.Operation is { IsTerminal: false } own && own.OperationId == ownedOperation
@@ -78,6 +79,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         if (retreat)
         {
             var (map, plan) = cover ?? await PlanRetreatAsync(observation, token);
+            if (plan.Status == "observation-changed") return new("defending", map.CollectedTick);
             if (plan.Next is not null)
                 submission = OperationSubmission.Create(map.Scope, "move", new { position = plan.Next, tolerance = .15 },
                     map.CollectedTick + 180, new { position = map.Actor.Position, positionTolerance = .5 });

@@ -52,9 +52,17 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
             var field = new SpatialCollisionField(current with { Entities = current.Entities.Where(e => e.Id != current.Actor.Id).ToArray() });
             var belt = current.Prototypes[current.Items[equipment.Belt].EntityName];
             var routing = new BeltRoutingField(current,belt,current.Actor.Position,token,collisionField:field);
+            // Baseline occupancy is immutable for this search state; only candidate projections need fresh ports.
+            var nativePorts = new Dictionary<(string Id, bool Output), IReadOnlyList<MapPosition>>();
+            IReadOnlyList<MapPosition> Ports(string id, bool output)
+            {
+                if (!nativePorts.TryGetValue((id, output), out var ports))
+                    nativePorts.Add((id, output), ports = NativePorts(current, field, routing, equipment, id, output, token));
+                return ports;
+            }
             (int Ports,int Region) Access(int index)
             {
-                var ports = NativePorts(current,field,equipment,requests[index].TargetId,false,token);
+                var ports = Ports(requests[index].TargetId,false);
                 return (ports.Count,ports.Sum(Region));
             }
             int Region(MapPosition start)
@@ -99,14 +107,15 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
                 {
                     var future = Project(current,equipment,new(sourceId,targetId,candidate),identity);
                     var projected = field.AppendEntities(future.Entities.Skip(current.Entities.Count).ToArray());
+                    var futureRouting = new BeltRoutingField(future, belt, future.Actor.Position, token, collisionField: projected);
                     return remaining.Where(i=>i!=requestIndex).All(i=>
                     {
                         var suppliers = requests[i].SourceIds.Where(s=>s!=sourceId && !used.Contains(s)).ToArray();
                         // An insufficient source count still permits the established partial result contract.
-                        bool targetWasAccessible = NativePorts(current,field,equipment,requests[i].TargetId,false,token).Count > 0;
-                        bool supplierWasAccessible = suppliers.Any(s=>NativePorts(current,field,equipment,s,true,token).Count > 0);
-                        return (!targetWasAccessible || NativePorts(future,projected,equipment,requests[i].TargetId,false,token).Count > 0)
-                            && (!supplierWasAccessible || suppliers.Any(s=>NativePorts(future,projected,equipment,s,true,token).Count > 0));
+                        bool targetWasAccessible = Ports(requests[i].TargetId,false).Count > 0;
+                        bool supplierWasAccessible = suppliers.Any(s=>Ports(s,true).Count > 0);
+                        return (!targetWasAccessible || NativePorts(future,projected,futureRouting,equipment,requests[i].TargetId,false,token).Count > 0)
+                            && (!supplierWasAccessible || suppliers.Any(s=>NativePorts(future,projected,futureRouting,equipment,s,true,token).Count > 0));
                     });
                 }
             }
@@ -119,9 +128,10 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
         IReadOnlyList<BeltTransportRequest> requests, CancellationToken token)
     {
         var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
+        var routing = new BeltRoutingField(map, map.Prototypes[map.Items[equipment.Belt].EntityName], map.Actor.Position, token, collisionField: field);
         var accessibleSources = requests.SelectMany(r => r.SourceIds).Distinct(StringComparer.Ordinal)
-            .Where(s => NativePorts(map, field, equipment, s, true, token).Count > 0).ToHashSet(StringComparer.Ordinal);
-        var candidates = requests.Select(r => NativePorts(map, field, equipment, r.TargetId, false, token).Count == 0
+            .Where(s => NativePorts(map, field, routing, equipment, s, true, token).Count > 0).ToHashSet(StringComparer.Ordinal);
+        var candidates = requests.Select(r => NativePorts(map, field, routing, equipment, r.TargetId, false, token).Count == 0
             ? [] : r.SourceIds.Where(accessibleSources.Contains).ToArray()).ToArray();
         var owners = new Dictionary<string, int>(StringComparer.Ordinal);
         int matched = 0;
@@ -143,13 +153,11 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
     }
 
     private static IReadOnlyList<MapPosition> NativePorts(SpatialSnapshot map,SpatialCollisionField field,
-        BeltTransportEquipment equipment,string entityId,bool output,CancellationToken token)
+        BeltRoutingField routing,BeltTransportEquipment equipment,string entityId,bool output,CancellationToken token)
     {
         var endpoint = map.Entities.Single(e=>e.Id==entityId);
         var arm = map.Prototypes[map.Items[equipment.Inserter].EntityName];
-        var belt = map.Prototypes[map.Items[equipment.Belt].EntityName];
         var tunnel = equipment.UndergroundBelt is null ? null : map.Prototypes[map.Items[equipment.UndergroundBelt].EntityName];
-        var routing = new BeltRoutingField(map,belt,map.Actor.Position,token,collisionField:field);
         var inside = (output ? arm.InserterPickup : arm.InserterDrop) ?? throw new InvalidDataException("Missing native inserter endpoint.");
         var outside = (output ? arm.InserterDrop : arm.InserterPickup) ?? throw new InvalidDataException("Missing native inserter material port.");
         bool Clear(MapPosition p) => routing.SurfaceClear(p)

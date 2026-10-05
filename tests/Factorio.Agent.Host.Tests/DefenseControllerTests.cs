@@ -93,6 +93,30 @@ public sealed class DefenseControllerTests
         Assert.DoesNotContain("submit", fake.Calls);
     }
 
+    [Theory]
+    [InlineData(true, 1, 100)]
+    [InlineData(false, 1, 100)]
+    [InlineData(true, 0, 161)]
+    [InlineData(false, 0, 161)]
+    public async Task ChangedRetreatObservationWaitsForAFreshStepWithoutSubmittingStaleWork(bool danger, double spatialX, long spatialTick)
+    {
+        var fake = new GameStub { Health = danger ? 50 : 250, EnemyCount = 3, Defenses = Refuge(),
+            SpatialPosition = new(spatialX, 0), SpatialTick = spatialTick };
+        var journal = new JournalStub();
+        var defense = new DefenseController(fake, journal);
+        Assert.Equal("defending", (await defense.StepAsync()).State);
+        Assert.Equal(["observe", "spatial"], fake.Calls);
+        Assert.Null(fake.Submission);
+        Assert.Equal("observation-changed", Assert.Single(journal.RetreatPlans).GetProperty("plan").GetProperty("status").GetString());
+        if (spatialTick == 100)
+        {
+            fake.SpatialPosition = new(0, 0);
+            Assert.Equal("defending", (await defense.StepAsync()).State);
+            Assert.Equal("move", fake.Submission?.Kind);
+            Assert.Single(fake.Calls, call => call == "submit");
+        }
+    }
+
     [Fact]
     public async Task ARefugeAcrossAnImpassableWallFallsBackToAProvenLocalEscape()
     {
@@ -421,6 +445,8 @@ public sealed class DefenseControllerTests
         public int EnemyCount { get; set; } = 1;
         public object? Defenses { get; set; }
         public bool StaleSpatial { get; init; }
+        public MapPosition SpatialPosition { get; set; } = new(0, 0);
+        public long SpatialTick { get; set; } = 100;
         public bool RefugeBlocked { get; init; }
         public double Distance { get; init; } = 4;
         public long ObservationTick { get; init; } = 100;
@@ -461,6 +487,7 @@ public sealed class DefenseControllerTests
                     var entities = new List<SpatialEntity> { new("safe", "gun-turret", new(-8, 0), turret.CollisionBox.Translate(new(-8, 0)), 0, "agent") };
                     if (RefugeBlocked) entities.Add(new("wall", "wall", new(-2, 0), new(new(-2.5, -12), new(-1.5, 13)), 0, "agent"));
                     data = map with { Scope = StaleSpatial ? Scope with { Generation = Scope.Generation + 1 } : Scope,
+                        CollectedTick = SpatialTick, Actor = map.Actor with { Position = SpatialPosition },
                         Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { ["gun-turret"] = turret }, Entities = entities };
                     break;
                 case "cancel":
@@ -480,7 +507,7 @@ public sealed class DefenseControllerTests
                     break;
                 default: throw new InvalidOperationException(request.Action);
             }
-            return Task.FromResult(new GameResponse(1, request.RequestId, true, 100, Protocol.ToElement(data)));
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, request.Action == "spatial" ? SpatialTick : 100, Protocol.ToElement(data)));
         }
     }
 }
