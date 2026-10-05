@@ -39,9 +39,9 @@ public sealed class PerimeterDefenseController(IGameClient game, IControllerJour
         token = deadline.Token;
         var setup = await PrepareAsync(wallItem, turretItem, true, token);
         await using var controller = new SpatialController(game, journal);
-        // Before planning, so a band created for the magazine cell lies inside its ring.
-        await AutomateAmmunitionAsync(setup, build: true, token);
-        var known = await CaptureAsync(setup.Catalog, token); // Automation may have added cells and spent carried items.
+        // Preserve ammunition production demand without expanding unrelated factory targets before the defenses.
+        await RegisterAmmunitionTargetAsync(setup, token);
+        var known = await CaptureAsync(setup.Catalog, token);
         var clusters = IndustryClusters.Read(await new FactoryRegistry(directory).LoadAsync(setup.Catalog.Scope.WorldId, token), known);
         if (clusters.Count == 0) throw new InvalidOperationException("No known own industry to protect.");
         var actor = ActorPosition(known);
@@ -82,7 +82,7 @@ public sealed class PerimeterDefenseController(IGameClient game, IControllerJour
         token = deadline.Token;
         var setup = await PrepareAsync(wallItem, turretItem, buildWalls, token);
         await using var controller = new SpatialController(game, journal);
-        await AutomateAmmunitionAsync(setup, build: false, token);
+        await RegisterAmmunitionTargetAsync(setup, token);
         var (result, _) = await RingAsync(setup, controller, cluster, focus, maximumNests, layers, token);
         await journal.AppendAsync("perimeter-cluster-result", result, token);
         return result;
@@ -104,10 +104,10 @@ public sealed class PerimeterDefenseController(IGameClient game, IControllerJour
     }
 
     /// <summary>
-    /// A persistent magazine cell resupplies turrets through logistics once assemblers are available. An attack response only
-    /// registers the automation target, which the next automation pass builds: it must not hold the actor for a whole cell.
+    /// Retains ammunition demand for the next factory pass. Defense obtains paid stock through production without waiting
+    /// for unrelated registered factory targets to be constructed; existing magazine cells remain available to logistics.
     /// </summary>
-    private async Task AutomateAmmunitionAsync(Setup setup, bool build, CancellationToken token)
+    private async Task RegisterAmmunitionTargetAsync(Setup setup, CancellationToken token)
     {
         var catalog = setup.Catalog;
         if (!FactoryDirector.Available(catalog)) return;
@@ -115,21 +115,11 @@ public sealed class PerimeterDefenseController(IGameClient game, IControllerJour
         if (AutomationPlanner.Choose(catalog, setup.Ammunition, machines) is null) return;
         // One turret reserve per minute; the actor still brings the plates.
         double perMinute = FactoryMaintenance.Magazines(0, setup.MagazineSize);
-        if (!build)
-        {
-            var registry = new FactoryRegistry(directory);
-            var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-            if (state.Targets?.GetValueOrDefault(setup.Ammunition) >= perMinute) return;
-            await registry.SaveAsync(state.WithTarget(setup.Ammunition, perMinute), token);
-            await journal.AppendAsync("perimeter-ammunition-target", new { setup.Ammunition, perMinute }, token);
-            return;
-        }
-        try { await new FactoryDirector(game, journal, directory).AutomateAsync(setup.Ammunition, perMinute, token); }
-        catch (InvalidOperationException error)
-        {
-            // An unfinished cell keeps its slot and resumes later; hand production still supplies this perimeter.
-            await journal.AppendAsync("perimeter-ammunition-automation-unavailable", new { setup.Ammunition, error.Message }, token);
-        }
+        var registry = new FactoryRegistry(directory);
+        var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        if (state.Targets?.GetValueOrDefault(setup.Ammunition) >= perMinute) return;
+        await registry.SaveAsync(state.WithTarget(setup.Ammunition, perMinute), token);
+        await journal.AppendAsync("perimeter-ammunition-target", new { setup.Ammunition, perMinute }, token);
     }
 
     /// <summary>Plans one cluster ring from its centre and builds its unfinished nests in priority order, at most the given count.</summary>
