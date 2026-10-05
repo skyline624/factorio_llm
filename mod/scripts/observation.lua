@@ -74,7 +74,8 @@ function M.observe(args)
     operation = Operations.last_receipt(), entities = {}, resources = {}, enemies = {}, players = {}, defenses = {},
     coverage = {radius = radius, limit = limit, entityLimit = entity_limit, atomic = true, collectionStartTick = game.tick,
       collectionEndTick = game.tick, factoryComplete = false, transitComplete = false,
-      fluidsAggregateSafe = false, enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility", enemyComplete = false},
+      fluidsAggregateSafe = false, enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility", enemyComplete = false,
+      movementFire = "native-walking-and-shooting"},
     goal = {rocketsLaunched = Actor.force() and Actor.force().rockets_launched or 0,
       humanInterventions = s.humanInterventions, fixture = s.fixture == true,
       fixtureReason = s.fixtureReason, fixtureTick = s.fixtureTick}}

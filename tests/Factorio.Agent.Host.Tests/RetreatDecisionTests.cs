@@ -3,6 +3,8 @@ using Xunit;
 
 namespace Factorio.Agent.Host.Tests;
 
+// These route assertions share native wall-clock budgets with the other isolated retreat tests.
+[Collection("Retreat progress")]
 public sealed class RetreatDecisionTests
 {
     [Theory]
@@ -34,5 +36,75 @@ public sealed class RetreatDecisionTests
         Assert.Equal(cover, RetreatPlanner.SeeksCover(state));
         Assert.False(RetreatPlanner.Needed(state));
         Assert.False(RetreatPlanner.SeeksCover(state with { Defenses = [] }));
+    }
+
+    [Fact]
+    public void AHealthyActorGainsSeparationInsideLoadedCoverageBeforeThePackReachesIt()
+    {
+        var (map, state) = Covered();
+        Assert.False(RetreatPlanner.Needed(state));
+        Assert.False(RetreatPlanner.SeeksCover(state));
+        Assert.True(RetreatPlanner.RepositionsInCover(state));
+        var plan = new RetreatPlanner().Find(state, map);
+        Assert.Equal("found", plan.Status);
+        Assert.Equal("loaded", plan.RefugeId);
+        Assert.True(plan.Next!.X < state.Position!.X);
+        var refuge = Assert.Single(state.Defenses!);
+        Assert.All(plan.Route!.Waypoints, p => Assert.True(p.DistanceTo(refuge.Position) <= RetreatPlanner.CoverRadius(refuge)));
+        Assert.True(plan.Destination!.DistanceTo(state.Enemies[0].Position) >= state.Position.DistanceTo(state.Enemies[0].Position) + 2);
+        Assert.InRange(plan.Next.DistanceTo(state.Position), RetreatPlanner.MoveTolerance, 2.01);
+        Assert.Equal(250, state.Health);
+    }
+
+    [Theory]
+    [InlineData("manual")]
+    [InlineData("dead")]
+    [InlineData("stop-unconfirmed")]
+    [InlineData("zero-health")]
+    [InlineData("unknown-types")]
+    [InlineData("static-enemies")]
+    [InlineData("incomplete")]
+    [InlineData("two-enemies")]
+    [InlineData("no-cover")]
+    [InlineData("outside-cover")]
+    public void EarlyRepositionRequiresVisibleMobilePackAndCurrentLoadedCover(string invalid)
+    {
+        var (_, state) = Covered();
+        state = invalid switch
+        {
+            "manual" => state with { ControlMode = "manual" }, "dead" => state with { Alive = false },
+            "stop-unconfirmed" => state with { StopUnconfirmed = true }, "zero-health" => state with { Health = 0 },
+            "unknown-types" => state with { Enemies = state.Enemies.Select(e => e with { Type = null }).ToArray() },
+            "static-enemies" => state with { Enemies = state.Enemies.Select(e => e with { Type = "unit-spawner" }).ToArray() },
+            "incomplete" => state with { LocalEnemiesComplete = false }, "two-enemies" => state with { Enemies = state.Enemies.Take(2).ToArray() },
+            "no-cover" => state with { Defenses = [] }, "outside-cover" => state with { Position = new(-10, 0) }, _ => state
+        };
+        Assert.False(RetreatPlanner.RepositionsInCover(state));
+    }
+
+    [Theory]
+    [InlineData("scope")]
+    [InlineData("moved")]
+    [InlineData("stale")]
+    public void EarlyCoveredRepositionStillRequiresMatchingFreshTerrain(string changed)
+    {
+        var (map, state) = Covered();
+        map = changed switch
+        {
+            "scope" => map with { Scope = map.Scope with { Generation = 4 } },
+            "moved" => map with { Actor = map.Actor with { Position = new(-2, 0) } },
+            _ => map with { CollectedTick = 161 }
+        };
+        if (changed == "scope") Assert.Throws<InvalidDataException>(() => new RetreatPlanner().Find(state, map));
+        else Assert.Equal("observation-changed", new RetreatPlanner().Find(state, map).Status);
+    }
+
+    private static (SpatialSnapshot Map, SafetyObservation State) Covered()
+    {
+        var (map, _, state, _) = PortableDefenseTests.Fixture();
+        var position = new MapPosition(2, 0);
+        return (map with { Entities = [new("loaded", "turret-entity", position,
+            new(new(1.3, -.7), new(2.7, .7)), 0, "agent")] },
+            state with { Defenses = [new("loaded", position, 18, 200, 100)] });
     }
 }

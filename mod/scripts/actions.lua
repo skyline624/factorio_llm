@@ -6,6 +6,7 @@ local CraftAccounting = require("scripts.craft_accounting")
 local CraftDelivery = require("scripts.craft_delivery")
 local Equipment = require("scripts.equipment")
 local ShotAccounting = require("scripts.shot_accounting")
+local Weapons = require("scripts.weapons")
 local M = {}
 
 M.capabilities = {"move", "mine", "craft", "wait", "build", "insert", "take", "set_recipe",
@@ -76,10 +77,33 @@ starts.move = function(r, c, args)
   w.waypointIndex, w.destination = 1, w.waypoints[1]
   r.receipt.effects.waypointIndex, r.receipt.effects.waypointCount, r.receipt.effects.waypointsReached = 1, #w.waypoints, 0
   r.work.lastPosition = U.copy(c.position)
+  if args.shootEntityId ~= nil then
+    local entity = T.find(c, {entityId = U.string(args.shootEntityId, 'shootEntityId')})
+    U.check(entity.force ~= c.force and not c.force.get_friend(entity.force), 'not_enemy', 'Moving fire target is not hostile')
+    U.check(Visibility.is_visible(c, entity), 'target_not_visible', 'Moving fire target is not normally visible')
+    local weapon = Weapons.observe(c)
+    U.check(weapon.ready and U.distance(c.position, entity.position) <= weapon.range, 'weapon_unavailable', 'No ready in-range bullet weapon')
+    w.firingTarget = entity
+    w.beforeAmmo = U.inventory(c.get_inventory(defines.inventory.character_ammo))
+    w.beforeRounds = U.ammo(c.get_inventory(defines.inventory.character_ammo))
+    ShotAccounting.prepare(r, c)
+    r.receipt.effects.firingTargetId = U.entity_id(entity)
+    r.receipt.effects.movementFire = 'native-walking-and-shooting'
+  end
 end
 
 steps.move = function(r, c)
   local w = r.work
+  if w.firingTarget then
+    local entity, weapon = w.firingTarget, Weapons.observe(c)
+    local can_fire = entity.valid and entity.surface == c.surface and entity.force ~= c.force
+      and not c.force.get_friend(entity.force) and Visibility.is_visible(c, entity)
+      and weapon.ready and U.distance(c.position, entity.position) <= weapon.range
+    c.shooting_state = can_fire and {state = defines.shooting.shooting_enemies, position = entity.position}
+      or {state = defines.shooting.not_shooting}
+    r.receipt.effects.firingTargetGone = not entity.valid
+    ShotAccounting.update(r, c)
+  end
   while U.distance(c.position, w.destination) <= w.tolerance do
     r.receipt.effects.waypointsReached = w.waypointIndex
     if w.waypointIndex == #w.waypoints then return "completed" end

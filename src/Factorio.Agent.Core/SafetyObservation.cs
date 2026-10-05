@@ -6,7 +6,8 @@ namespace Factorio.Agent.Core;
 public sealed record SafetyObservation(long Tick, ActorScope Scope, bool Alive, string ControlMode,
     bool StopUnconfirmed, MapPosition? Position, double Health, WeaponState Weapon,
     IReadOnlyList<VisibleThreat> Enemies, OperationReceipt? Operation, EquipmentState? Loadout = null,
-    double? MaxHealth = null, IReadOnlyList<DefensiveRefuge>? Defenses = null, bool LocalEnemiesComplete = false)
+    double? MaxHealth = null, IReadOnlyList<DefensiveRefuge>? Defenses = null, bool LocalEnemiesComplete = false,
+    IReadOnlyDictionary<string, long>? Inventory = null, bool SupportsMovingFire = false)
 {
     public static SafetyObservation Parse(GameResponse response)
     {
@@ -56,7 +57,10 @@ public sealed record SafetyObservation(long Tick, ActorScope Scope, bool Alive, 
                     string id = node.GetProperty("id").GetString() ?? "";
                     if (string.IsNullOrWhiteSpace(id) || !ids.Add(id) || node.GetProperty("collectedTick").GetInt64() != tick)
                         throw new InvalidDataException("Enemy identity or observation freshness is invalid.");
-                    enemies.Add(new(id, ReadPosition(node.GetProperty("position"))));
+                    double? enemyHealth = node.TryGetProperty("health", out var measuredHealth) ? Finite(measuredHealth) : null;
+                    if (enemyHealth < 0) throw new InvalidDataException("Negative native enemy health.");
+                    enemies.Add(new(id, ReadPosition(node.GetProperty("position")),
+                        node.TryGetProperty("type", out var type) ? type.GetString() : null, enemyHealth));
                 }
             }
             else if (nodes.ValueKind != JsonValueKind.Object || nodes.EnumerateObject().Any())
@@ -72,7 +76,10 @@ public sealed record SafetyObservation(long Tick, ActorScope Scope, bool Alive, 
                 alive && agent.TryGetProperty("loadout", out var loadout) && loadout.ValueKind != JsonValueKind.Null
                     ? EquipmentState.Parse(loadout) : null, maxHealth,
                 data.TryGetProperty("defenses", out var defenses) ? DefensiveRefuge.Read(defenses, tick) : [],
-                coverage.TryGetProperty("enemiesTruncated", out var truncated) && !truncated.GetBoolean());
+                coverage.TryGetProperty("enemiesTruncated", out var truncated) && !truncated.GetBoolean(),
+                alive && agent.TryGetProperty("inventory", out var inventory) ? ReadInventory(inventory) : null,
+                coverage.TryGetProperty("movementFire", out var movingFire) && movingFire.ValueKind == JsonValueKind.String
+                    && movingFire.GetString() == "native-walking-and-shooting");
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or OverflowException)
         {
@@ -81,6 +88,18 @@ public sealed record SafetyObservation(long Tick, ActorScope Scope, bool Alive, 
     }
 
     private static MapPosition ReadPosition(JsonElement node) => new(Finite(node.GetProperty("x")), Finite(node.GetProperty("y")));
+    private static IReadOnlyDictionary<string, long> ReadInventory(JsonElement node)
+    {
+        if (node.ValueKind != JsonValueKind.Object) throw new InvalidDataException("Invalid native carried inventory.");
+        var items = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var item in node.EnumerateObject())
+        {
+            if (string.IsNullOrWhiteSpace(item.Name) || !item.Value.TryGetInt64(out long count) || count < 0
+                || !items.TryAdd(item.Name, count))
+                throw new InvalidDataException("Invalid native carried stock.");
+        }
+        return new System.Collections.ObjectModel.ReadOnlyDictionary<string, long>(items);
+    }
     private static double Finite(JsonElement node)
     {
         double value = node.GetDouble();
@@ -93,7 +112,7 @@ public sealed record WeaponState(bool Ready, int Rounds, double Range)
     public static WeaponState Unavailable { get; } = new(false, 0, 0);
 }
 
-public sealed record VisibleThreat(string Id, MapPosition Position);
+public sealed record VisibleThreat(string Id, MapPosition Position, string? Type = null, double? Health = null);
 
 public static class DefensePolicy
 {
@@ -102,9 +121,11 @@ public static class DefensePolicy
         if (!observation.Alive || observation.ControlMode != "ai" || observation.StopUnconfirmed
             || observation.Position is null || !observation.Weapon.Ready || observation.Health <= 0)
             return null;
+        bool pack = observation.LocalEnemiesComplete && observation.Enemies.Count(e => e.Type == "unit") >= RetreatPlanner.OutnumberedEnemies;
         return observation.Enemies
             .Where(e => observation.Position.DistanceTo(e.Position) <= observation.Weapon.Range)
-            .OrderBy(e => observation.Position.DistanceTo(e.Position))
+            .OrderBy(e => pack && e.Type == "unit" ? e.Health ?? double.PositiveInfinity : double.PositiveInfinity)
+            .ThenBy(e => observation.Position.DistanceTo(e.Position))
             .ThenBy(e => e.Id, StringComparer.Ordinal)
             .FirstOrDefault();
     }

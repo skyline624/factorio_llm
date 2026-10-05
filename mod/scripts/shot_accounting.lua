@@ -25,7 +25,7 @@ function M.update(record, character)
 end
 
 function M.on_death(record)
-  if record.request.kind ~= "shoot" or not record.work then return end
+  if not record.work or record.work.beforeAllRounds == nil then return end
   local effects = record.receipt.effects
   record.work.shotDeathTick = game.tick
   effects.ammoAccounting = {status = "awaiting-native-corpse", collectedTick = game.tick,

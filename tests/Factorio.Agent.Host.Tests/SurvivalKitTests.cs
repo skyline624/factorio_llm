@@ -219,7 +219,61 @@ public sealed class SurvivalKitTests
 
     private sealed class Journal : IControllerJournal
     {
-        public Task AppendAsync(string type, object data, CancellationToken token) => Task.CompletedTask;
+        public List<(string Type, JsonElement Data)> Events { get; } = [];
+        public Task AppendAsync(string type, object data, CancellationToken token)
+        { Events.Add((type, Protocol.ToElement(data))); return Task.CompletedTask; }
+    }
+
+    private static ProductionCatalog PortableCatalog(bool ammunitionRecipe = false)
+    {
+        var catalog = Catalog("light-armor", ammunitionRecipe ? "firearm-magazine" : "");
+        return catalog with { Turrets = new Dictionary<string, NativeTurret> { ["gun-turret"] = new("gun-turret", 18, ["bullet"]) },
+            Items = new Dictionary<string, NativeItem>(catalog.Items)
+                { ["gun-turret"] = new(0, 50, PlaceEntity: "gun-turret", PlaceEntityType: "ammo-turret") } };
+    }
+
+    [Fact]
+    public async Task PortableKitKeepsSixtyCarriedMagazinesAfterLoadingTheBetterGun()
+    {
+        var game = new KitGame(PortableCatalog()) { MountedSubmachineGun = true, PortableTurrets = 2, MagazineStock = 70 };
+        var journal = new Journal();
+        var result = await new SurvivalKitController(game, journal).EnsureAsync("petroleum-trip", default);
+        Assert.Equal("complete", result.Status);
+        Assert.Equal(60, result.CarriedMagazines);
+        Assert.Empty(result.Produced);
+        var plan = Assert.Single(journal.Events, e => e.Type == "survival-kit-portable-plan").Data;
+        Assert.Equal(60, plan.GetProperty("magazineTarget").GetInt32());
+        Assert.Equal(2, plan.GetProperty("turretTarget").GetInt32());
+        Assert.Equal(["armor:light-armor", "ammo:firearm-magazine"], result.Equipped);
+    }
+
+    [Fact]
+    public async Task PortableAmmoShortfallDoesNotSpendTheTripsCarriedPlateInputs()
+    {
+        var game = new KitGame(PortableCatalog(true)) { MountedSubmachineGun = true, PortableTurrets = 2,
+            MagazineStock = 30, TaskIron = 100 };
+        var result = await new SurvivalKitController(game, new Journal()).EnsureAsync("chemical-science-input-trip", default);
+        Assert.Equal(20, result.CarriedMagazines);
+        Assert.Equal(40, result.Missing["firearm-magazine"]["iron-plate"]);
+        Assert.Empty(result.Produced);
+        Assert.Equal(100, game.TaskIron);
+        Assert.Equal(2, game.Calls.Count(c => c == "submit"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SpendingPortableStockInvalidatesTheTripKitCache(bool turret)
+    {
+        var game = new KitGame(PortableCatalog(true)) { MountedSubmachineGun = true, PortableTurrets = 2, MagazineStock = 70 };
+        await new SurvivalKitController(game, new Journal()).EnsureAsync("first-trip", default);
+        Assert.Null(await new SurvivalKitController(game, new Journal()).BeforeTripAsync("unchanged", default));
+        if (turret) game.PortableTurrets = 1;
+        else game.MagazineStock = 20;
+        var result = await new SurvivalKitController(game, new Journal()).BeforeTripAsync("after-combat", default);
+        Assert.NotNull(result);
+        Assert.Contains(turret ? "gun-turret" : "firearm-magazine", result.Missing.Keys);
+        Assert.Empty(result.Produced);
     }
 
     /// <summary>A living actor carrying light armor in main slot 4; equip operations move it natively.</summary>
@@ -230,6 +284,9 @@ public sealed class SurvivalKitTests
         private bool submachineLoaded;
         public bool Enemy { get; init; }
         public bool MountedSubmachineGun { get; init; }
+        public int PortableTurrets { get; set; }
+        public int? MagazineStock { get; set; }
+        public int TaskIron { get; init; }
         public List<string> Calls { get; } = [];
 
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
@@ -248,6 +305,8 @@ public sealed class SurvivalKitTests
         private object Observation()
         {
             var inventory = new Dictionary<string, long>();
+            if (PortableTurrets > 0) inventory["gun-turret"] = PortableTurrets;
+            if (TaskIron > 0) inventory["iron-plate"] = TaskIron;
             var carried = new List<object>();
             if (worn is null)
             {
@@ -256,7 +315,7 @@ public sealed class SurvivalKitTests
             }
             if (MountedSubmachineGun)
             {
-                int magazines = submachineLoaded ? 20 : 30;
+                int magazines = MagazineStock ?? (submachineLoaded ? 20 : 30);
                 inventory["firearm-magazine"] = magazines;
                 carried.Add(new { slot = 6, name = "firearm-magazine", kind = "ammo", count = magazines, bullet = true,
                     range = 0d, rounds = magazines * 10, damage = 5d });
@@ -293,6 +352,8 @@ public sealed class SurvivalKitTests
             {
                 Assert.True(MountedSubmachineGun);
                 Assert.Equal((2, 6, 10), (args.GetProperty("slot").GetInt32(), args.GetProperty("sourceSlot").GetInt32(), args.GetProperty("count").GetInt32()));
+                int before = MagazineStock ?? 30;
+                if (MagazineStock is not null) MagazineStock -= 10;
                 submachineLoaded = true;
                 return new
                 {
@@ -300,10 +361,10 @@ public sealed class SurvivalKitTests
                     effects = new
                     {
                         compartment = "ammo", slot = 2, sourceSlot = 6, item = "firearm-magazine", requested = 10, transferred = 10,
-                        equipmentBefore = new { main = new Dictionary<string, long> { ["firearm-magazine"] = 30 },
-                            ammo = new Dictionary<string, long> { ["firearm-magazine"] = 10 }, mainRounds = 300, loadedRounds = 100, selectedSlot = 1 },
-                        equipmentAfter = new { main = new Dictionary<string, long> { ["firearm-magazine"] = 20 },
-                            ammo = new Dictionary<string, long> { ["firearm-magazine"] = 20 }, mainRounds = 200, loadedRounds = 200, selectedSlot = 2 }
+                        equipmentBefore = new { main = new Dictionary<string, long> { ["firearm-magazine"] = before },
+                            ammo = new Dictionary<string, long> { ["firearm-magazine"] = 10 }, mainRounds = before * 10, loadedRounds = 100, selectedSlot = 1 },
+                        equipmentAfter = new { main = new Dictionary<string, long> { ["firearm-magazine"] = before - 10 },
+                            ammo = new Dictionary<string, long> { ["firearm-magazine"] = 20 }, mainRounds = (before - 10) * 10, loadedRounds = 200, selectedSlot = 2 }
                     }
                 };
             }

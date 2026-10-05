@@ -17,7 +17,7 @@ function M.active()
 end
 
 function M.finish(record, status, err)
-  if record.request.kind == "shoot" and type(err) == "table" and err.code == "actor_dead" then
+  if record.work and record.work.beforeAllRounds ~= nil and type(err) == "table" and err.code == "actor_dead" then
     Actions.account_shot_death(record)
     Actor.state().pendingShotDeath = record.receipt.operationId
   end

@@ -13,6 +13,8 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
     private int controlWaiters;
     private bool disposed;
     private NativeDeathTransition? recordedDeath;
+    /// <summary>Private world storage shared by the actor's planning and reflex paths.</summary>
+    internal string Directory => session.Directory;
     private string WatermarkPath => Path.Combine(session.Directory, "observation-watermark.json");
 
     public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)

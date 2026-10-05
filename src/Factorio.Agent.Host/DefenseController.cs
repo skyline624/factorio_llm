@@ -5,10 +5,13 @@ using System.Net.Sockets;
 namespace Factorio.Agent.Host;
 
 /// <summary>Single sequential actor arbiter. No inference call is part of this control loop.</summary>
-public sealed class DefenseController(IGameClient game, IControllerJournal journal, ReflexEventLog? reflexes = null)
+public sealed class DefenseController(IGameClient game, IControllerJournal journal, ReflexEventLog? reflexes = null,
+    FactoryRegistry? registry = null)
 {
     private readonly OperationClient operations = new(game);
     private readonly ReflexEventLog fights = reflexes ?? ReflexEventLog.Shared;
+    private readonly PortableDefenseDeployment portable = new(game, journal,
+        registry ?? (game is SessionGameClient session ? new FactoryRegistry(session.Directory) : null));
     private string? uncertainOperation;
     private string? ownedOperation;
     private OperationSubmission? ownedSubmission;
@@ -22,7 +25,11 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
             // An ambiguous submission/cancellation is reconciled by identity, never retransmitted.
             OperationReceipt reconciled = await operations.QueryAsync(uncertainOperation, token);
             await journal.AppendAsync("reconciled", reconciled, token);
-            if (ownedSubmission?.OperationId == reconciled.OperationId) EquipmentReceipt.Validate(ownedSubmission, reconciled);
+            if (ownedSubmission?.OperationId == reconciled.OperationId)
+            {
+                await AcceptAsync(ownedSubmission, reconciled, token);
+                if (reconciled.IsTerminal) { ownedOperation = null; ownedSubmission = null; ownedStopRequested = false; }
+            }
             uncertainOperation = null;
             return new("reconciled", reconciled.UpdatedTick, reconciled.OperationId);
         }
@@ -33,16 +40,19 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         if (observation.Operation is { IsTerminal: true } finished && finished.OperationId == ownedOperation)
         {
             await journal.AppendAsync("receipt", finished, token);
-            if (ownedSubmission is not null) EquipmentReceipt.Validate(ownedSubmission, finished);
+            if (ownedSubmission is not null) await AcceptAsync(ownedSubmission, finished, token);
             ownedOperation = null;
             ownedSubmission = null;
             ownedStopRequested = false;
         }
         VisibleThreat? target = DefensePolicy.SelectTarget(observation);
         EquipmentDecision? equipment = target is null ? EquipmentPolicy.Select(observation) : null;
+        OperationSubmission? portableAction = observation.Operation is { IsTerminal: false } running
+            && running.OperationId == ownedOperation && running.Kind != "shoot" ? null : await portable.NextAsync(observation, token);
+        if (portable.ObservationChanged) return new("defending", observation.Tick);
         bool retreat = RetreatPlanner.Needed(observation);
         (SpatialSnapshot Map, RetreatPlan Plan)? cover = null;
-        if (!retreat && RetreatPlanner.SeeksCover(observation))
+        if (portableAction is null && !retreat && (RetreatPlanner.SeeksCover(observation) || RetreatPlanner.RepositionsInCover(observation)))
         {
             // Planned before preempting: an unreachable refuge never interrupts a fight the actor can still win.
             cover = await PlanRetreatAsync(observation, token);
@@ -50,16 +60,17 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
             retreat = cover.Value.Plan.Next is not null;
         }
         if (observation.Operation is { IsTerminal: false } own && own.OperationId == ownedOperation
-            && !(retreat && own.Kind == "shoot"))
+            && !((retreat || portableAction is not null) && own.Kind == "shoot"))
             return new("defending", observation.Tick, own.OperationId);
-        if (target is null && equipment is null && !retreat) return new("observing", observation.Tick);
+        if (target is null && equipment is null && !retreat && portableAction is null) return new("observing", observation.Tick);
         if (observation.Operation is { IsTerminal: false } active)
         {
-            if (active.OperationId == ownedOperation && !(retreat && active.Kind == "shoot"))
+            if (active.OperationId == ownedOperation && !((retreat || portableAction is not null) && active.Kind == "shoot"))
                 return new("defending", observation.Tick, active.OperationId);
-            if (target is null && observation.Enemies.Count == 0) return new("observing", observation.Tick);
+            if (portableAction is null && target is null && observation.Enemies.Count == 0) return new("observing", observation.Tick);
             await journal.AppendAsync("cancel-intent", new { active.OperationId, observation.Tick, targetId = target?.Id,
-                reason = retreat ? "Visible danger requires retreat on observed terrain."
+                reason = portableAction is not null ? "A visible pack requires paid local turret protection."
+                    : retreat ? "Visible danger requires retreat on observed terrain."
                     : target is not null ? "Visible enemy in current weapon range preempts existing work."
                     : "A visible enemy requires restoring carried weapons before continuing work." }, token);
             try
@@ -77,13 +88,17 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
                 throw;
             }
         }
-        OperationSubmission? submission = null;
-        if (retreat)
+        OperationSubmission? submission = portableAction;
+        if (submission is null && retreat)
         {
             var (map, plan) = cover ?? await PlanRetreatAsync(observation, token);
             if (plan.Status == "observation-changed") return new("defending", map.CollectedTick);
             if (plan.Next is not null)
-                submission = OperationSubmission.Create(map.Scope, "move", new { position = plan.Next, tolerance = RetreatPlanner.MoveTolerance },
+                // Native shooting slows walking: preserve full retreat speed against mobile or untyped threats.
+                submission = OperationSubmission.Create(map.Scope, "move", target is null || !observation.SupportsMovingFire
+                    || !observation.LocalEnemiesComplete || observation.Enemies.Any(e => e.Type is not ("turret" or "unit-spawner"))
+                    ? new { position = plan.Next, tolerance = RetreatPlanner.MoveTolerance }
+                    : (object)new { position = plan.Next, tolerance = RetreatPlanner.MoveTolerance, shootEntityId = target.Id },
                     map.CollectedTick + 180, new { position = map.Actor.Position, positionTolerance = .5 });
         }
         if (submission is null && target is null && equipment is null) return new("observing", observation.Tick);
@@ -102,9 +117,9 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         {
             OperationReceipt receipt = await operations.SubmitAsync(submission, token);
             await journal.AppendAsync("receipt", receipt, token);
-            EquipmentReceipt.Validate(submission, receipt);
+            await AcceptAsync(submission, receipt, token);
             if (receipt.IsTerminal) { ownedOperation = null; ownedSubmission = null; }
-            return new(receipt.IsTerminal && equipment is null ? "resolved" : "defending", receipt.UpdatedTick, receipt.OperationId);
+            return new(receipt.IsTerminal && equipment is null && portableAction is null ? "resolved" : "defending", receipt.UpdatedTick, receipt.OperationId);
         }
         catch (OperationOutcomeUnknownException)
         {
@@ -113,12 +128,20 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         }
     }
 
+    private async Task AcceptAsync(OperationSubmission submission, OperationReceipt receipt, CancellationToken token)
+    {
+        EquipmentReceipt.Validate(submission, receipt);
+        MovementFireReceipt.Validate(submission, receipt);
+        await portable.AcceptAsync(submission, receipt, token);
+    }
+
     private async Task<(SpatialSnapshot Map, RetreatPlan Plan)> PlanRetreatAsync(SafetyObservation observation, CancellationToken token)
     {
         var map = await new SpatialClient(game).CaptureAsync(cancellationToken: token);
         var plan = new RetreatPlanner().Find(observation, map, token);
         await journal.AppendAsync("retreat-plan", new { map.Scope, map.CollectedTick, observation.Health, plan,
-            reason = RetreatPlanner.Needed(observation) ? "danger" : "outnumbered-cover",
+            reason = RetreatPlanner.Needed(observation) ? "danger"
+                : RetreatPlanner.RepositionsInCover(observation) ? "covered-separation" : "outnumbered-cover",
             interpretation = "Observed paths toward loaded-turret coverage or increased enemy separation; no guarantee against unseen or faster threats." }, token);
         return (map, plan);
     }
@@ -174,6 +197,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         }
         await journal.AppendAsync("final-receipt", receipt, token);
         if (receipt.Error?.Code == "stop_unconfirmed") throw new InvalidDataException("The native defense action has not been confirmed stopped.");
+        if (ownedSubmission is not null) await AcceptAsync(ownedSubmission, receipt, token);
         if (uncertainOperation == ownedOperation) uncertainOperation = null;
         ownedOperation = null;
         ownedSubmission = null;

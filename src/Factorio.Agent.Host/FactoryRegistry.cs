@@ -64,7 +64,18 @@ public sealed class FactoryRegistry(string directory)
         return state;
     }
 
-    public Task SaveAsync(FactoryState state, CancellationToken token) => LocalJson.WriteAsync(Path, state, token);
+    public async Task SaveAsync(FactoryState state, CancellationToken token)
+    {
+        // A reflex may add a paid turret while a production pass holds an older registry snapshot.
+        // Preserve those additions; an explicit update to an existing cell still belongs to its caller.
+        if (File.Exists(Path))
+        {
+            var latest = await LoadAsync(state.WorldId, token);
+            foreach (var cell in latest.Cells.Where(c => c.Id.StartsWith("portable-defense-", StringComparison.Ordinal)
+                && state.Cells.All(incoming => incoming.Id != c.Id))) state = state.With(cell);
+        }
+        await LocalJson.WriteAsync(Path, state, token);
+    }
 
     /// <summary>Allocates the next slot of a compatible zone: north then south row, from the zone origin outward.</summary>
     public static CellSlot? NextSlot(FactoryState state, FactoryZone zone)

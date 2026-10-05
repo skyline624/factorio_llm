@@ -53,10 +53,16 @@ public sealed class RetreatPlanner
     /// <summary>Destinations lie in the inner half of a turret's native range, at most twelve tiles from it.</summary>
     public static double CoverRadius(DefensiveRefuge refuge) => Math.Min(refuge.Range * .5, 12);
 
+    /// <summary>Whether an outnumbered actor should gain separation while remaining inside observed loaded coverage.</summary>
+    public static bool RepositionsInCover(SafetyObservation state) => state.Alive && state.ControlMode == "ai"
+        && !state.StopUnconfirmed && state.Health > 0 && state.Position is { } position && state.LocalEnemiesComplete
+        && state.Enemies.Count(e => e.Type == "unit") >= OutnumberedEnemies
+        && state.Defenses?.Any(t => position.DistanceTo(t.Position) <= CoverRadius(t)) == true;
+
     public RetreatPlan Find(SafetyObservation state, SpatialSnapshot map, CancellationToken token = default)
     {
         bool needed = Needed(state);
-        if (!needed && !SeeksCover(state)) return new("not-needed");
+        if (!needed && !SeeksCover(state) && !RepositionsInCover(state)) return new("not-needed");
         if (map.Scope != state.Scope || map.CollectedTick < state.Tick || map.Actor.ControlMode != "ai")
             throw new InvalidDataException("Retreat geometry no longer matches the current native safety observation.");
         // A running movement can advance between the two read-only captures; wait for another safety step.

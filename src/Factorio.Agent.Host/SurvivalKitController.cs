@@ -22,7 +22,7 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
     public const long RecheckTicks = 18000;
     private static readonly AsyncLocal<bool> Running = new();
     private static readonly Lock Gate = new();
-    private static (string? Key, long Tick) settled;
+    private static (string? Key, long Tick, string? Turret) settled;
     private readonly OperationClient operations = new(game);
 
     /// <summary>
@@ -37,7 +37,7 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
             var observation = await ObserveAsync(token);
             if (observation?.Loadout is null) return null;
             lock (Gate)
-                if (settled.Key == Key(observation) && observation.Tick - settled.Tick is >= 0 and < RecheckTicks) return null;
+                if (settled.Key == Key(observation, settled.Turret) && observation.Tick - settled.Tick is >= 0 and < RecheckTicks) return null;
             return await EnsureAsync(reason, token);
         }
         catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
@@ -58,6 +58,8 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
         var missing = new Dictionary<string, IReadOnlyDictionary<string, long>>(StringComparer.Ordinal);
         string status = "complete";
         ProductionCatalog? catalog = null;
+        string? portableTurret = null;
+        int magazineTarget = SurvivalKitPlanner.MagazineReserve;
         try
         {
             catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), deadline.Token));
@@ -78,6 +80,16 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
                     if (!missing.ContainsKey(candidate)) break;
                 }
                 if (gun is not null && !await ObtainAsync(gun, 1)) gun = null;
+                var supplied = await SafeAsync(deadline.Token);
+                if (supplied is null) status = "deferred";
+                else if (supplied.Inventory is { } inventory)
+                {
+                    portableTurret = PortableDefensePlanner.SupplyTurret(catalog, inventory);
+                    if (portableTurret is not null && await ObtainAsync(portableTurret, PortableDefensePlanner.TurretReserve))
+                        magazineTarget += PortableDefensePlanner.TurretReserve * PortableDefensePlanner.MagazinesPerTurret;
+                    await journal.AppendAsync("survival-kit-portable-plan", new { portableTurret,
+                        turretTarget = PortableDefensePlanner.TurretReserve, magazineTarget, supplied.Tick }, deadline.Token);
+                }
                 // Revisit equipment after reserving ammunition, so newly obtained rounds are loaded before the trip.
                 int equipmentSteps = 0;
                 for (int pass = 0; pass < 2 && status == "complete"; pass++)
@@ -100,8 +112,8 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
                     var latest = await ObserveAsync(deadline.Token);
                     if (status == "complete" && latest?.Loadout is { } after)
                         foreach (string ammunition in SurvivalKitPlanner.Ammunition(catalog, Carried(after)))
-                            if (Carried(after).GetValueOrDefault(ammunition) >= SurvivalKitPlanner.MagazineReserve
-                                || await ObtainAsync(ammunition, SurvivalKitPlanner.MagazineReserve)) break;
+                            if (Carried(after).GetValueOrDefault(ammunition) >= magazineTarget
+                                || await ObtainAsync(ammunition, magazineTarget)) break;
                 }
             }
         }
@@ -113,7 +125,7 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
         var final = await ObserveAsync(token);
         // A failed pass is not retried at every trip either; a deferred one is, once enemies are gone.
         if (status != "deferred" && final?.Loadout is not null)
-            lock (Gate) settled = (Key(final), final.Tick);
+            lock (Gate) settled = (Key(final, portableTurret), final.Tick, portableTurret);
         var result = new SurvivalKitResult(reason, status, final?.Loadout?.Armor,
             final?.Loadout?.Slots.Where(s => s.Gun is not null).Select(s => s.Gun!).ToArray() ?? [],
             final?.Loadout?.Carried.Where(c => c.Kind == "ammo" && c.Bullet).Sum(c => (long)c.Count) ?? 0,
@@ -200,7 +212,9 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
         .ToDictionary(g => g.Key, g => g.Sum(c => (long)c.Count), StringComparer.Ordinal);
 
     /// <summary>Incarnation and equipment: a death, a loot or a lost gun makes the next trip reconsider the kit.</summary>
-    private static string Key(SafetyObservation observation) => string.Join("|", observation.Scope.WorldId, observation.Scope.Incarnation,
+    private static string Key(SafetyObservation observation, string? turret) => string.Join("|", observation.Scope.WorldId, observation.Scope.Incarnation,
         observation.Loadout!.Armor, string.Join(",", observation.Loadout.Slots.Select(s => $"{s.Gun}/{s.Ammo}")),
-        string.Join(",", observation.Loadout.Carried.Select(c => c.Name).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)));
+        string.Join(",", observation.Loadout.Carried.GroupBy(c => c.Name, StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key}:{g.Sum(c => (long)c.Count)}")),
+        turret is null ? "" : $"{turret}:{observation.Inventory?.GetValueOrDefault(turret)}");
 }
