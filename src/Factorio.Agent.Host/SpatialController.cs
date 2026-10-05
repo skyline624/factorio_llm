@@ -74,6 +74,9 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         var receipts = new List<OperationReceipt>();
         var remaining = new List<MapPosition>();
         int plans = 0, clearedTrees = 0, observationRadius = 32;
+        // A broad approach hands control back for another observation or interaction. A belt can push
+        // the character outside that radius between RPCs, so choose a stable endpoint inside it.
+        bool requireStableArrival = arrivalDistance > 0.4;
         SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: deadline.Token);
         RequireAi(initial);
         ActorScope scope = initial.Scope;
@@ -99,18 +102,21 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (map.CollectedTick < latestObservationTick)
                 throw new InvalidDataException("Navigation observation predates the previous view; reconcile before choosing a route.");
             latestObservationTick = map.CollectedTick;
-            if (map.Actor.Position.DistanceTo(destination) <= arrivalDistance)
-                return new(destination, map.Actor.Position, arrivalDistance, plans, receipts.AsReadOnly());
             var field = new SpatialCollisionField(map);
+            if (map.Actor.Position.DistanceTo(destination) <= arrivalDistance
+                && (!requireStableArrival || PlacementPlanner.CanStop(field, map.Actor.Position)))
+                return new(destination, map.Actor.Position, arrivalDistance, plans, receipts.AsReadOnly());
             while (remaining.Count > 0 && map.Actor.Position.DistanceTo(remaining[0]) <= 0.15) remaining.RemoveAt(0);
-            bool reusable = remaining.Count > 0 && field.SegmentClear(map.Actor.Position, remaining[0], 0);
+            bool reusable = remaining.Count > 0 && field.SegmentClear(map.Actor.Position, remaining[0], 0)
+                && (!requireStableArrival || PlacementPlanner.CanStop(field, remaining[^1]));
             RoutePlan route = reusable
                 ? new(RouteStatus.Found, remaining.ToArray(), 0, 0)
-                : new RoutePlanner().Find(field, destination, Math.Max(0, arrivalDistance - 0.2), token: deadline.Token);
+                : new RoutePlanner().Find(field, destination, Math.Max(0, arrivalDistance - 0.2), token: deadline.Token,
+                    requireStableArrival: requireStableArrival);
             if (!reusable && route.Status == RouteStatus.Found)
                 route = route with { Waypoints = Subdivide(map.Actor.Position, route.Waypoints) };
             plans++;
-            await journal.AppendAsync("route-plan", new { map.Scope, map.CollectedTick, destination, arrivalDistance,
+            await journal.AppendAsync("route-plan", new { map.Scope, map.CollectedTick, destination, arrivalDistance, requireStableArrival,
                 map.StationaryThreats, radius = map.Coverage.Radius, reused = reusable, route }, deadline.Token);
             if (!reusable && route.Status == RouteStatus.BudgetExceeded)
             {
@@ -171,7 +177,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         CancellationToken token)
     {
         var route = await ControllerPlanning.RunAsync(t => new RoutePlanner().Find(field, destination,
-            Math.Max(0, arrivalDistance - 0.2), timeBudget: TimeSpan.FromSeconds(2), token: t),
+            Math.Max(0, arrivalDistance - 0.2), timeBudget: TimeSpan.FromSeconds(2), token: t,
+            requireStableArrival: arrivalDistance > 0.4),
             this, TimeSpan.FromSeconds(3), token);
         await journal.AppendAsync("route-search-deepened", new { field.Map.Scope, field.Map.CollectedTick, destination,
             arrivalDistance, searchSeconds = 2, maximumNodes = 25000, route }, token);
