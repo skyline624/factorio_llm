@@ -20,7 +20,9 @@ public sealed record MaintenanceResult(IReadOnlyList<string> Rebuilt, IReadOnlyL
 /// </summary>
 public sealed class FactoryMaintenance(IGameClient game, IControllerJournal journal, string directory)
 {
-    public async Task<MaintenanceResult> RunAsync(SpatialController controller, ProductionCatalog catalog, CancellationToken token)
+    /// <summary>An explicit cell set confines this round's repairs and rearming; attack detection still covers the whole factory.</summary>
+    public async Task<MaintenanceResult> RunAsync(SpatialController controller, ProductionCatalog catalog, CancellationToken token,
+        IReadOnlySet<string>? targetCellIds = null)
     {
         var registry = new FactoryRegistry(directory);
         var snapshots = new FactorySnapshotClient(game);
@@ -31,12 +33,15 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         int actions = 0;
         var snapshot = await CaptureAsync();
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        bool Selected(FactoryCell cell) => targetCellIds is null || targetCellIds.Contains(cell.Id);
         // Repair and rearming trips can prepare a survival kit; protect the latest registered input buffers.
         using var reservations = ProductionReservations.EnterFactory(state);
         // Rebuilding erases the evidence of an attack inside a goal; record it first for the between-goals response.
         await new AttackMonitor(directory, journal).RecordQuietlyAsync(state, snapshot, token);
-        var recovered = RecoverPlans(state, snapshot, catalog);
-        if (recovered.Count > 0)
+        if (targetCellIds is not null)
+            await journal.AppendAsync("factory-maintenance-scope", new { cells = targetCellIds.Order(StringComparer.Ordinal), snapshot.Scope, snapshot.CollectedTick }, token);
+        var recovered = RecoverPlans(state, snapshot, catalog).Where(Selected).ToArray();
+        if (recovered.Length > 0)
         {
             state = recovered.Aggregate(state, (current, cell) => current.With(cell));
             await registry.SaveAsync(state, token);
@@ -44,7 +49,7 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         }
         // Another cell's replacement chain can already feed this cell. Keep the damage evidence above,
         // but do not rebuild absent legacy links once every structural part and consumer is verified.
-        var obsolete = ObsoletePowerLinks(state, snapshot, catalog);
+        var obsolete = ObsoletePowerLinks(state, snapshot, catalog).Where(m => Selected(m.Cell)).ToArray();
         foreach (var group in obsolete.GroupBy(m => m.Cell.Id))
         {
             var cell = group.First().Cell;
@@ -61,12 +66,12 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
                 Plan = cell.Plan!.Where(p => !roles.Contains(p.Key)).ToDictionary(StringComparer.Ordinal)
             });
         }
-        if (obsolete.Count > 0) await registry.SaveAsync(state, token);
+        if (obsolete.Length > 0) await registry.SaveAsync(state, token);
         var carried = FactoryLogistics.Carried(snapshot);
         var registered = state.Cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
         var zones = game is IDangerZoneReader reader
             ? await reader.ReadActiveDeathsAsync(catalog.Scope, 1, snapshot.CollectedTick, token) : [];
-        foreach (var missing in Missing(state, Present(snapshot)))
+        foreach (var missing in Missing(state, Present(snapshot)).Where(m => Selected(m.Cell)))
         {
             // Full resource plans now permit maintenance to rebuild them before cell health reopens them.
             // Apply the same death-zone deferral as the resource builder before any travel or placement.
@@ -134,10 +139,10 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         carried = FactoryLogistics.Carried(snapshot);
         state = await registry.LoadAsync(catalog.Scope.WorldId, token);
         // Every registered pole and machine, rebuilt or not, must reach a generator: one lost link pole silences whole cells.
-        var unpowered = Unpowered(snapshot, state.Cells.Where(c => c.Status == "ready").SelectMany(c => c.Entities.Values));
+        var unpowered = Unpowered(snapshot, state.Cells.Where(c => c.Status == "ready" && Selected(c)).SelectMany(c => c.Entities.Values));
         foreach (var id in unpowered)
             await journal.AppendAsync("factory-power-fault", new { entityId = id, rebuilt = rebuilt.Contains(id), snapshot.CollectedTick }, token);
-        var turretIds = state.Cells.Where(c => c.Kind == "turret" && c.Status == "ready").SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
+        var turretIds = state.Cells.Where(c => c.Kind == "turret" && c.Status == "ready" && Selected(c)).SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
         // Without registered turrets there is nothing to rearm; the defense reading is skipped.
         foreach (var turret in (turretIds.Count == 0 ? [] : DefenseFactoryState.Read(snapshot, catalog).Turrets).Where(t => t.Active && turretIds.Contains(t.Id))
             .OrderBy(t => t.Id, StringComparer.Ordinal))

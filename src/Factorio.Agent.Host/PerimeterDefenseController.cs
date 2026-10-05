@@ -156,6 +156,7 @@ public sealed class PerimeterDefenseController(IGameClient game, IControllerJour
         }
         await journal.AppendAsync("perimeter-plan", new { cluster = cluster.Id, turretItem, wallItem, layers, buildWalls = setup.BuildWalls,
             plan, map.CollectedTick }, token);
+        var cells = plan.Nests.SelectMany(n => new[] { TurretCell(n), WallCell(n) }).ToHashSet(StringComparer.Ordinal);
 
         int built = 0, refused = 0, nestsBuilt = 0;
         var shortfall = new Dictionary<string, long>(StringComparer.Ordinal);
@@ -183,7 +184,7 @@ public sealed class PerimeterDefenseController(IGameClient game, IControllerJour
             foreach (var nest in unfinished.TakeWhile(_ => stocked))
                 stocked = await PlaceAsync(TurretCell(nest), "turret", turretItem, [nest.Turret], remaining);
             // Turrets fight while the walls go up.
-            await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token);
+            await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token, targetCellIds: cells);
             if (setup.BuildWalls)
             {
                 if (stocked) await EnsureAsync(wallItem, remaining.GetValueOrDefault(wallItem));
@@ -192,10 +193,9 @@ public sealed class PerimeterDefenseController(IGameClient game, IControllerJour
             }
         }
 
-        var upkeep = await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token);
+        var upkeep = await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token, targetCellIds: cells);
         var final = await CaptureAsync(catalog, token);
         state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-        var cells = plan.Nests.SelectMany(n => new[] { TurretCell(n), WallCell(n) }).ToHashSet(StringComparer.Ordinal);
         var ids = state.Cells.Where(c => cells.Contains(c.Id)).SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
         int ready = DefenseFactoryState.Read(final, catalog).Turrets.Count(t => ids.Contains(t.Id) && DefenseDeploymentPlanner.Ready(t));
         present = FactoryMaintenance.Present(final);

@@ -30,6 +30,8 @@ La qualification effectue également une lecture de photographie d'usine en para
 
 Le choix d'équipement, les chemins de repli et la protection transportable disposent de contrôleurs, mais leur présence ne garantit pas la survie contre toutes les attaques. Le réapprovisionnement durable, la protection de l'ensemble des bâtiments et les attaques multiples sous charge restent à qualifier séparément. La reprise du travail interrompu appartient au planificateur après réconciliation des effets.
 
+Pendant la construction d'un périmètre, chaque tour de maintenance répare et réarme uniquement les cellules de ce périmètre. Une tourelle détruite dans un autre secteur ne provoque ainsi pas un détour avant la pose des murs locaux. La détection des attaques conserve toute l'usine connue, et les tours généraux de maintenance restent responsables des autres cellules. Les réflexes de survie continuent de préempter les déplacements et constructions locaux.
+
 ## Protection transportable en développement
 
 Pendant une navigation, la défense réserve la destination pour le même personnage et la même incarnation. Une pose de tourelle doit laisser libre le corps natif du personnage et sa marge de navigation à cet endroit. Cette réservation reste active pendant les replis et la recherche de route, puis est libérée à la fin du déplacement, y compris en cas d'échec. La preuve de sortie du personnage reste également obligatoire ; garder une destination libre ne prouve pas à lui seul que tout le trajet est praticable.
