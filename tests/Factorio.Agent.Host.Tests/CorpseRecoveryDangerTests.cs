@@ -157,6 +157,54 @@ public sealed class CorpseRecoveryDangerTests
         Assert.Equal(40, corpse.GetProperty("lostBeforeApproach").GetProperty("iron-plate").GetInt64());
     }
 
+    [Theory]
+    [InlineData("unit", false)]
+    [InlineData("unit", true)]
+    [InlineData("unit-spawner", false)]
+    [InlineData("unit-spawner", true)]
+    public async Task AGuardRevealedDuringNativeMovementStopsItsKnownIdentityAndDefersBeforeCollecting(string type, bool loseCancellation)
+    {
+        var game = new Game { AllowTravel = true, LoseCancellation = loseCancellation, Tick = 120000,
+            Enemies = [(type, new(24, 0))] };
+        var journal = new Journal();
+
+        var result = await new CorpseRecoveryController(game, journal).RunAsync(Death, Scope, default);
+
+        Assert.Equal("unsafe-corpses-deferred", result.Outcome);
+        Assert.Equal(result.Tick + CorpseRecoveryController.VisibleThreatRetryTicks, result.RetryTick);
+        Assert.Equal(40, result.Remaining["iron-plate"]);
+        Assert.Empty(result.Collected);
+        Assert.Equal(1, game.Submissions);
+        Assert.Equal(1, game.Cancellations);
+        Assert.Single(journal.All("corpse-recovery-approach-deferred"));
+        Assert.Equal("cancelled", journal.Single("final-receipt").GetProperty("status").GetString());
+        Assert.DoesNotContain("factory_snapshot", game.Calls); // No collection preparation after the guard appears.
+    }
+
+    [Fact]
+    public async Task AGuardSeenJustAfterArrivalIsReobservedBeforeReadingOrTakingTheCorpseInventory()
+    {
+        var game = new Game { AllowTravel = true, CompleteMove = true, Tick = 120000, Enemies = [("unit", new(24, 0))] };
+        var result = await new CorpseRecoveryController(game, new Journal()).RunAsync(Death, Scope, default);
+        Assert.Equal("unsafe-corpses-deferred", result.Outcome);
+        Assert.Equal(1, game.Submissions);
+        Assert.Equal(0, game.Cancellations);
+        Assert.Equal(40, result.Remaining["iron-plate"]);
+        Assert.DoesNotContain("factory_snapshot", game.Calls);
+    }
+
+    [Fact]
+    public async Task AnotherIncarnationDuringTheApproachCannotBeReportedAsACurrentGuardVerdict()
+    {
+        var game = new Game { AllowTravel = true, ChangeScopeDuringMove = true, Tick = 120000,
+            Enemies = [("unit", new(24, 0))] };
+        var journal = new Journal();
+        await Assert.ThrowsAsync<InvalidDataException>(() => new CorpseRecoveryController(game, journal).RunAsync(Death, Scope, default));
+        Assert.Equal(1, game.Submissions);
+        Assert.Equal(1, game.Cancellations);
+        Assert.Empty(journal.All("corpse-recovery-result"));
+    }
+
     private sealed class Journal : IControllerJournal
     {
         private readonly List<(string Type, JsonElement Data)> rows = [];
@@ -177,6 +225,14 @@ public sealed class CorpseRecoveryDangerTests
         public IReadOnlyList<(string Type, MapPosition Position)> Enemies { get; init; } = [];
         public bool EnemiesTruncated { get; init; }
         public bool LimitEnemiesToRequestedRadius { get; init; }
+        public bool AllowTravel { get; init; }
+        public bool LoseCancellation { get; init; }
+        public bool CompleteMove { get; init; }
+        public bool ChangeScopeDuringMove { get; init; }
+        private string? operationId;
+        private string operationStatus = "running";
+        public int Submissions { get; private set; }
+        public int Cancellations { get; private set; }
         public IReadOnlyList<NativeDeathTransition> Corpses { get; init; } = [Death];
         public DangerZones Zones { get; init; } = DangerZones.Empty("world").Record(Death);
         public ActorScope ObservedScope { get; init; } = Scope;
@@ -190,18 +246,49 @@ public sealed class CorpseRecoveryDangerTests
         {
             Calls.Add(request.Action);
             // Travel starts by reading the production catalog: stop there, the approach decision is made.
-            if (request.Action != "observe") throw new InvalidOperationException($"Approach requested with {request.Action}.");
             long tick = ++Tick;
+            if (AllowTravel && request.Action != "observe")
+            {
+                var map = SpatialPlannerTests.Map([]) with
+                {
+                    Scope = ObservedScope, CollectedTick = tick,
+                    Bounds = new(new(-32, -32), new(33, 33)),
+                    Rows = Enumerable.Range(-32, 65).Select(y => new TileRun(-32, y, 65, "grass")).ToArray()
+                };
+                object result;
+                switch (request.Action)
+                {
+                    case "production_catalog": result = Catalogs.Raw() with { Scope = ObservedScope, CollectedTick = tick }; break;
+                    case "spatial": result = map with { Actor = map.Actor with { Position = CompleteMove && operationId is not null ? Death.Position : Actor } }; break;
+                    case "submit":
+                        Assert.Equal("move", request.Arguments.GetProperty("kind").GetString());
+                        operationId = request.Arguments.GetProperty("operationId").GetString();
+                        Submissions++;
+                        if (CompleteMove) operationStatus = "completed";
+                        result = Receipt(); break;
+                    case "operation": Assert.Equal(operationId, request.Arguments.GetProperty("operationId").GetString()); result = Receipt(); break;
+                    case "cancel":
+                        Assert.Equal(operationId, request.Arguments.GetProperty("operationId").GetString());
+                        Cancellations++;
+                        operationStatus = "cancelled";
+                        if (LoseCancellation) throw new IOException("Cancel applied but response lost.");
+                        result = Receipt(); break;
+                    default: throw new InvalidOperationException(request.Action);
+                }
+                return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(result)));
+                object Receipt() => new { operationId, kind = "move", status = operationStatus, acceptedTick = 120000, updatedTick = tick, effects = new { } };
+            }
+            if (request.Action != "observe") throw new InvalidOperationException($"Approach requested with {request.Action}.");
             int radius = request.Arguments.GetProperty("radius").GetInt32();
             ObservedRadii.Add(radius);
             return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(new
             {
-                scope = ObservedScope, collectedTick = tick,
+                scope = ChangeScopeDuringMove && operationId is not null ? ObservedScope with { Incarnation = ObservedScope.Incarnation + 1 } : ObservedScope, collectedTick = tick,
                 coverage = new { atomic = true, collectionStartTick = tick, collectionEndTick = tick, radius, enemiesTruncated = EnemiesTruncated,
                     enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
                 agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = Actor, health = 250.0,
                     weapon = new { ready = true, rounds = 100, range = 15.0 }, inventory = new { }, reachDistance = 10.0 },
-                enemies = Enemies.Where(e => !LimitEnemiesToRequestedRadius || e.Position.DistanceTo(Actor) <= radius)
+                enemies = Enemies.Where(e => (!AllowTravel || operationId is not null) && (!LimitEnemiesToRequestedRadius || e.Position.DistanceTo(Actor) <= radius))
                     .Select((e, index) => new { id = $"enemy-{index}", type = e.Type, position = e.Position, collectedTick = tick }),
                 recovery = new
                 {

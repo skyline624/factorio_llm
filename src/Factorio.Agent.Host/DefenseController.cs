@@ -12,6 +12,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
     private string? uncertainOperation;
     private string? ownedOperation;
     private OperationSubmission? ownedSubmission;
+    private bool ownedStopRequested;
     private long lastTick = -1;
 
     public async Task<DefenseStep> StepAsync(CancellationToken token = default)
@@ -35,6 +36,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
             if (ownedSubmission is not null) EquipmentReceipt.Validate(ownedSubmission, finished);
             ownedOperation = null;
             ownedSubmission = null;
+            ownedStopRequested = false;
         }
         VisibleThreat? target = DefensePolicy.SelectTarget(observation);
         EquipmentDecision? equipment = target is null ? EquipmentPolicy.Select(observation) : null;
@@ -91,6 +93,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         await journal.AppendAsync("submission", submission, token);
         ownedOperation = submission.OperationId;
         ownedSubmission = submission;
+        ownedStopRequested = false;
         // A fight is attack evidence for the industry around it, even once the pack is gone.
         if (submission.Kind is "shoot" or "move" && observation.Position is { } actor && observation.Enemies.Count > 0)
             fights.Record(new(observation.Tick, submission.Kind == "shoot" ? "shoot" : "retreat", actor,
@@ -157,13 +160,24 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
     {
         if (ownedOperation is null) return;
         OperationReceipt receipt = await operations.QueryAsync(ownedOperation, token);
-        if (!receipt.IsTerminal)
+        if (!receipt.IsTerminal && !ownedStopRequested)
         {
             await journal.AppendAsync("cancel-intent", new { operationId = ownedOperation, reason = "Controller stopping." }, token);
-            receipt = await operations.CancelAsync(ownedOperation, token);
+            ownedStopRequested = true;
+            try { receipt = await operations.CancelAsync(ownedOperation, token); }
+            catch (OperationOutcomeUnknownException) { receipt = await operations.QueryAsync(ownedOperation, token); }
+        }
+        while (!receipt.IsTerminal)
+        {
+            await Task.Delay(100, token);
+            receipt = await operations.QueryAsync(ownedOperation, token);
         }
         await journal.AppendAsync("final-receipt", receipt, token);
-        if (receipt.IsTerminal) ownedOperation = null;
+        if (receipt.Error?.Code == "stop_unconfirmed") throw new InvalidDataException("The native defense action has not been confirmed stopped.");
+        if (uncertainOperation == ownedOperation) uncertainOperation = null;
+        ownedOperation = null;
+        ownedSubmission = null;
+        ownedStopRequested = false;
     }
 }
 

@@ -414,6 +414,32 @@ public sealed class DefenseControllerTests
         Assert.Equal(["observe"], fake.Calls);
     }
 
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(false, 2)]
+    [InlineData(true, 2)]
+    public async Task StoppingAnOwnedBurstConfirmsItsTerminalReceiptWithoutRepeatingALostCancellation(bool loseReply, int delayedQueries)
+    {
+        var fake = new GameStub { LoseCancelResponse = loseReply, DelayedCancellationQueries = delayedQueries };
+        var journal = new JournalStub();
+        var controller = new DefenseController(fake, journal);
+        await controller.StepAsync();
+        string id = fake.Submission!.OperationId;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        await controller.StopOwnedActionAsync(deadline.Token);
+        await controller.StopOwnedActionAsync(deadline.Token);
+
+        Assert.Equal("shoot", fake.Submission.Kind);
+        Assert.Equal(id, fake.QueriedId);
+        Assert.Single(fake.Calls, c => c == "submit");
+        Assert.Single(fake.Calls, c => c == "cancel");
+        Assert.Equal("cancelled", fake.Active!.Value.GetProperty("status").GetString());
+        Assert.Single(journal.Types, type => type == "final-receipt");
+        Assert.True(fake.Calls.Count(c => c == "operation") >= 1 + delayedQueries);
+    }
+
     private static JsonElement Receipt(string id, string kind, string status) => Protocol.ToElement(new
     {
         operationId = id, kind, status, acceptedTick = 100, updatedTick = 100, effects = new { }
@@ -453,6 +479,9 @@ public sealed class DefenseControllerTests
         public bool LoseSubmitResponse { get; init; }
         public bool CompleteSubmission { get; init; }
         public bool LoseCancelResponse { get; init; }
+        public int DelayedCancellationQueries { get; init; }
+        private int remainingCancellationQueries;
+        private JsonElement? pendingCancellation;
         public bool EnemiesEmptyObject { get; init; }
         public bool EnemiesTruncated { get; init; }
         public object? Loadout { get; init; }
@@ -491,9 +520,11 @@ public sealed class DefenseControllerTests
                         Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { ["gun-turret"] = turret }, Entities = entities };
                     break;
                 case "cancel":
-                    Active = Receipt(request.Arguments.GetProperty("operationId").GetString()!, "wait", "cancelled");
+                    pendingCancellation = Receipt(request.Arguments.GetProperty("operationId").GetString()!, Submission?.Kind ?? "wait", "cancelled");
+                    remainingCancellationQueries = DelayedCancellationQueries;
+                    if (remainingCancellationQueries == 0) Active = pendingCancellation;
                     if (LoseCancelResponse) throw new IOException("Cancellation response lost after stopping the native action.");
-                    data = Active;
+                    data = Active!.Value;
                     break;
                 case "submit":
                     Submission = request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!;
@@ -503,6 +534,8 @@ public sealed class DefenseControllerTests
                     break;
                 case "operation":
                     QueriedId = request.Arguments.GetProperty("operationId").GetString();
+                    if (pendingCancellation is not null && remainingCancellationQueries > 0 && --remainingCancellationQueries == 0)
+                        Active = pendingCancellation;
                     data = Active!;
                     break;
                 default: throw new InvalidOperationException(request.Action);

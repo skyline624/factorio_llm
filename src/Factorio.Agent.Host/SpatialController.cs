@@ -21,6 +21,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     private readonly OperationClient operations = new(game);
     private readonly DefenseController defense = new(game, journal);
     private string? ownedOperation;
+    private bool ownedStopRequested;
 
     public async Task ApproachEntityAsync(string entityId, MapPosition knownPosition, ProductionCatalog catalog,
         CancellationToken token = default)
@@ -42,28 +43,29 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     }
 
     public async Task TravelAsync(MapPosition destination, double arrivalDistance, ProductionCatalog catalog,
-        CancellationToken token = default)
+        CancellationToken token = default, Func<CancellationToken, Task>? inspectDestination = null)
     {
         var exploration = new ExplorationPlanner();
         for (int segment = 0; segment < 64; segment++)
         {
+            if (inspectDestination is not null) await inspectDestination(token);
             SpatialSnapshot map = await spatial.CaptureAsync(cancellationToken: token);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during travel to a known destination.");
             if (map.Actor.Position.DistanceTo(destination) <= 24)
             {
-                await NavigateAsync(destination, arrivalDistance, token);
+                await NavigateAsync(destination, arrivalDistance, token, inspectDestination);
                 return;
             }
             // A trip beyond the local area may leave defended ground: equip first (cheap when the loadout is unchanged).
             if (segment == 0) await new SurvivalKitController(game, journal).BeforeTripAsync("travel", token);
             ExplorationWaypoint next = await FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
-            await NavigateAsync(next.Position, cancellationToken: token);
+            await NavigateAsync(next.Position, cancellationToken: token, inspectDestination: inspectDestination);
         }
         throw new InvalidOperationException("Travel exhausted its local segment budget.");
     }
 
     public async Task<NavigationResult> NavigateAsync(MapPosition destination, double arrivalDistance = 0.4,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, Func<CancellationToken, Task>? inspectDestination = null)
     {
         if (!double.IsFinite(arrivalDistance) || arrivalDistance is < 0.2 or > 10)
             throw new ArgumentOutOfRangeException(nameof(arrivalDistance));
@@ -79,6 +81,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         while (plans < 256)
         {
             deadline.Token.ThrowIfCancellationRequested();
+            if (inspectDestination is not null) await inspectDestination(deadline.Token);
             DefenseStep reflex = await DefenseStepAsync(deadline.Token);
             if (reflex.State is "defending" or "preempted" or "reconciled" or "uncertain")
             {
@@ -154,7 +157,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 { position = waypoint, tolerance = 0.15, waypoints = movePath.Count > 1 ? movePath : null },
                 map.CollectedTick + 1800, new { position = map.Actor.Position, positionTolerance = 0.5 });
             OperationReceipt receipt = await ExecuteAsync(submission, deadline.Token,
-                movePath.Count > 1 || map.Actor.Position.DistanceTo(waypoint) > 8 ? movePath : null);
+                movePath.Count > 1 || map.Actor.Position.DistanceTo(waypoint) > 8 ? movePath : null, inspectDestination);
             receipts.Add(receipt);
             if (receipt.Status != "completed") remaining.Clear();
             if (receipt.Status != "completed" && receipt.Error?.Code is not ("path_blocked" or "deadline_exceeded" or "cancelled" or "actor_dead" or "stale_scope" or "position_precondition"))
@@ -379,13 +382,14 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     }
 
     private async Task<OperationReceipt> ExecuteAsync(OperationSubmission submission, CancellationToken token,
-        IReadOnlyList<MapPosition>? watchedPath = null)
+        IReadOnlyList<MapPosition>? watchedPath = null, Func<CancellationToken, Task>? inspectDestination = null)
     {
         MapPosition? movementStart = watchedPath is null ? null
             : submission.Preconditions.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)
                 ?? throw new InvalidDataException("A watched movement requires its planned starting position.");
         await journal.AppendAsync("submission", submission, token);
         ownedOperation = submission.OperationId;
+        ownedStopRequested = false;
         OperationReceipt receipt;
         try { receipt = await operations.SubmitAsync(submission, token); }
         catch (OperationOutcomeUnknownException error)
@@ -402,6 +406,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         long lastTerrainTick = receipt.AcceptedTick ?? receipt.UpdatedTick;
         while (!receipt.IsTerminal)
         {
+            if (inspectDestination is not null) await inspectDestination(token);
             await DefenseStepAsync(token);
             receipt = await QueryKnownAsync(submission.OperationId, token);
             // Longer open-terrain moves avoid intermediate stops. Revalidate while walking,
@@ -419,6 +424,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 {
                     await journal.AppendAsync("cancel-intent", new { submission.OperationId,
                         reason = "The observed movement corridor or actor scope changed." }, token);
+                    ownedStopRequested = true;
                     try { receipt = await operations.CancelAsync(submission.OperationId, token); }
                     catch (OperationOutcomeUnknownException) { receipt = await QueryKnownAsync(submission.OperationId, token); }
                     if (!receipt.IsTerminal || receipt.Error?.Code == "stop_unconfirmed")
@@ -430,6 +436,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         }
         await journal.AppendAsync("receipt", receipt, token);
         ownedOperation = null;
+        ownedStopRequested = false;
         return receipt;
     }
 
@@ -458,7 +465,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     }
 
     public async Task<OperationReceipt> WorkAsync(string kind, object arguments, long durationTicks,
-        object? preconditions = null, CancellationToken token = default)
+        object? preconditions = null, CancellationToken token = default, Func<CancellationToken, Task>? inspectDestination = null)
     {
         if (durationTicks is < 1 or > 216000) throw new ArgumentOutOfRangeException(nameof(durationTicks));
         SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: token);
@@ -466,6 +473,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         ActorScope scope = initial.Scope;
         while (true)
         {
+            if (inspectDestination is not null) await inspectDestination(token);
             DefenseStep reflex = await DefenseStepAsync(token);
             if (reflex.State is "defending" or "preempted" or "reconciled" or "uncertain")
             {
@@ -492,7 +500,10 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => StopOwnedActionsAsync();
+
+    /// <summary>Confirms current navigation and defense actions stopped before discarding their destination.</summary>
+    internal async ValueTask StopOwnedActionsAsync()
     {
         using var stopDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try
@@ -513,16 +524,20 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 }
                 if (!receipt.IsTerminal)
                 {
-                    await journal.AppendAsync("cancel-intent", new
+                    if (!ownedStopRequested)
                     {
-                        operationId = ownedOperation,
-                        reason = "Spatial controller stopping."
-                    }, stopDeadline.Token);
-                    try { receipt = await operations.CancelAsync(ownedOperation, stopDeadline.Token); }
-                    catch (OperationOutcomeUnknownException)
-                    {
-                        // An ambiguous cancellation is observed, never retransmitted.
-                        receipt = await QueryKnownAsync(ownedOperation, stopDeadline.Token);
+                        await journal.AppendAsync("cancel-intent", new
+                        {
+                            operationId = ownedOperation,
+                            reason = "Spatial controller stopping."
+                        }, stopDeadline.Token);
+                        ownedStopRequested = true;
+                        try { receipt = await operations.CancelAsync(ownedOperation, stopDeadline.Token); }
+                        catch (OperationOutcomeUnknownException)
+                        {
+                            // An ambiguous cancellation is observed, never retransmitted.
+                            receipt = await QueryKnownAsync(ownedOperation, stopDeadline.Token);
+                        }
                     }
                     while (!receipt.IsTerminal)
                     {
@@ -534,6 +549,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 if (receipt.Error?.Code == "stop_unconfirmed")
                     throw new InvalidDataException("The native spatial action has not been confirmed stopped.");
                 ownedOperation = null;
+                ownedStopRequested = false;
             }
         }
         finally { await defense.StopOwnedActionAsync(stopDeadline.Token); }

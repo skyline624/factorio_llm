@@ -80,12 +80,7 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             var blocked = holding.Where(c => Blocking(c).Length > 0).ToArray();
             var distant = holding.Except(blocked).Where(c => !NearIndustry(industry, c.Position)).ToArray();
             // Expiry removes a historical death warning; it does not remove enemies still observed around the body.
-            var safety = SafetyObservation.Parse(response);
-            var mobileIds = data.GetProperty("enemies") is { ValueKind: JsonValueKind.Array } enemies
-                ? enemies.EnumerateArray().Where(e => e.GetProperty("type").GetString() is "unit" or "unit-spawner")
-                    .Select(e => e.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal)
-                : [];
-            var mobile = safety.Enemies.Where(e => mobileIds.Contains(e.Id)).ToArray();
+            var mobile = VisibleMobileThreats(response);
             var guarded = holding.Except(blocked).Except(distant)
                 .Where(c => mobile.Any(e => e.Position.DistanceTo(c.Position) <= DangerZones.Radius)).ToArray();
             if (guarded.Length > 0)
@@ -125,7 +120,16 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             if (catalog.Scope != scope) throw new InvalidDataException("The recovery production catalog belongs to another actor scope.");
             double reach = actor.GetProperty("reachDistance").GetDouble();
             if (!double.IsFinite(reach) || reach < 1) throw new InvalidDataException("Invalid native corpse interaction reach.");
-            await controller.TravelAsync(selected.Corpse.Position, Math.Min(10, reach - .5), catalog, token);
+            try
+            {
+                await controller.TravelAsync(selected.Corpse.Position, Math.Min(10, reach - .5), catalog, token, InspectApproachAsync);
+                await InspectApproachAsync(token); // The final leg may have completed between native operation polls.
+            }
+            catch (GuardedApproachException)
+            {
+                await controller.StopOwnedActionsAsync();
+                continue; // Reobserve and select another safe body; never replay the stopped movement.
+            }
             var stock = await new FactorySnapshotClient(game).CaptureAsync([selected.Item], cancellationToken: token);
             if (stock.Scope != scope || stock.CollectedTick < lastTick) throw new InvalidDataException("Actor or tick changed while checking corpse recovery capacity.");
             lastTick = stock.CollectedTick;
@@ -140,8 +144,17 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             if (available <= 0) continue;
             if (capacity == 0) { unavailable.Add((selected.Corpse.Id, selected.Item)); continue; }
             int count = checked((int)Math.Min(1000, Math.Min(available, capacity)));
-            var receipt = await controller.WorkAsync("take", new { entityId = selected.Corpse.Id, inventory = "corpse", item = selected.Item, count },
-                600, token: token);
+            OperationReceipt receipt;
+            try
+            {
+                receipt = await controller.WorkAsync("take", new { entityId = selected.Corpse.Id, inventory = "corpse", item = selected.Item, count },
+                    600, token: token, inspectDestination: InspectApproachAsync);
+            }
+            catch (GuardedApproachException)
+            {
+                await controller.StopOwnedActionsAsync();
+                continue;
+            }
             if (receipt.Status is not ("completed" or "partial")
                 || receipt.Effects.GetProperty("targetId").GetString() != selected.Corpse.Id
                 || receipt.Effects.GetProperty("item").GetString() != selected.Item)
@@ -149,8 +162,35 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             long moved = receipt.Effects.GetProperty("transferred").GetInt64();
             if (moved < 1 || moved > count) throw new InvalidDataException("Invalid native corpse transfer quantity.");
             collected[selected.Item] = checked(collected.GetValueOrDefault(selected.Item) + moved);
+
+            async Task InspectApproachAsync(CancellationToken inspectionToken)
+            {
+                var fresh = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = InspectionRadius,
+                    limit = 200, entityLimit = ProductionController.MaximumOwnEntities }), inspectionToken);
+                var observed = ReadObservedCorpses(fresh, death, scope, lastTick);
+                lastTick = fresh.Tick;
+                var body = observed.SingleOrDefault(c => c.Id == selected.Corpse.Id);
+                if (body is null) return; // The existing inventory read will notice native disappearance.
+                var guards = VisibleMobileThreats(fresh).Where(e => e.Position.DistanceTo(body.Position) <= DangerZones.Radius).ToArray();
+                if (guards.Length == 0) return;
+                await journal.AppendAsync("corpse-recovery-approach-deferred", new { fresh.Tick, corpse = body.Id, body.Position,
+                    observer = fresh.Data.GetProperty("agent").GetProperty("position"), observedRadius = InspectionRadius,
+                    guardRadius = DangerZones.Radius, visibleEnemies = guards }, inspectionToken);
+                throw new GuardedApproachException();
+            }
         }
         throw new TimeoutException("Corpse recovery exhausted its transfer budget; partial effects remain journaled.");
+    }
+
+    private sealed class GuardedApproachException : Exception { }
+
+    private static IReadOnlyList<VisibleThreat> VisibleMobileThreats(GameResponse response)
+    {
+        var safety = SafetyObservation.Parse(response);
+        var ids = response.Data.GetProperty("enemies") is { ValueKind: JsonValueKind.Array } enemies
+            ? enemies.EnumerateArray().Where(e => e.GetProperty("type").GetString() is "unit" or "unit-spawner")
+                .Select(e => e.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal) : [];
+        return safety.Enemies.Where(e => ids.Contains(e.Id)).ToArray();
     }
 
     /// <summary>Positions of known own industry in an observation; empty when the observation lists no own entity.</summary>
