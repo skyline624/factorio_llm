@@ -49,6 +49,8 @@ public sealed class BeltTransportBoundary
             var feeders = map.Entities.Where(e => e.DropTargetId == current).ToArray();
             if (endpoint.Recipe is not null || feeders.Length == 0) { root = endpoint; break; }
             if (feeders.Length != 1) throw new InvalidDataException("A replenished buffer requires exactly one verified upstream line.");
+            // A direct output chest is also downstream of the target, never a source of its ingredients.
+            if (feeders[0].PickupTargetId == targetId) return null;
             string? beltId = feeders[0].PickupTargetId;
             var belts = new HashSet<string>(StringComparer.Ordinal);
             SpatialEntity first;

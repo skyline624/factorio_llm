@@ -48,3 +48,11 @@ Les cinq liaisons conservent 27 tapis et dix bras, sans reconstruction pendant c
 La sélection et les routes sont locales, bornées et calculées successivement. La création et le remplissage automatiques de toutes les sources, le calcul conjoint de toutes les entrées, les branchements industriels généraux et la reprise durable d’une ligne détruite restent à intégrer. Faute de source exploitable, la production peut encore utiliser le personnage pour fournir un ingrédient. Un apport externe dans un flux déjà suivi exige une réconciliation.
 
 Cette preuve établit l’utilisation de deux alimentations par tapis dans la commande générale d’assemblage. Elle ne démontre ni une usine complète créée depuis le départ normal, ni une attaque sur ces liaisons, ni la chaîne de la fusée. Les trois campagnes finales restent à réaliser.
+
+# Sortie directe vers un coffre
+
+Une cellule peut décharger son assembleur dans un coffre par un seul bras, sans tapis. La collecte d'assemblage reconnaît cette connexion native et prélève dans le coffre, en comptant aussi les objets encore dans la main du bras. Un coffre vide connecté conserve donc la propriété de la sortie : l'acteur attend son alimentation au lieu de retirer directement les produits de la machine ou de fabriquer un lot supplémentaire.
+
+La connexion exige un seul extracteur natif, de la même force et raccordé à un réseau électrique. Les compartiments et le produit viennent de la photographie atomique ; une main absente, un autre produit en transit, un coffre réservé ou une identité d'acteur différente empêchent la collecte. Une sortie inconnue ou plusieurs extracteurs restent à réconcilier. Le 5 octobre 2026, deux échecs de préparation de l'équipement dans la partie normale de graine **20261072** ont montré ce refus alors que les machines déchargeaient réellement dans leurs coffres par des bras directs. Ce constat ne permet pas d'attribuer toute la mortalité à ce seul défaut.
+
+Le coffre de sortie directe ne peut pas servir de source d'ingrédients à sa propre machine. Il est écarté même quand il est vide, sans assouplir le refus des alimentations multiples ou inconnues.

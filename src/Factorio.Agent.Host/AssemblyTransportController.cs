@@ -71,13 +71,17 @@ internal sealed class AssemblyTransportController(IGameClient game, IControllerJ
             && map.Prototypes[e.Name].Type == "container"))
         {
             var line = BeltTransportNetwork.Find(map, machineId, container.Id);
-            if (line is null) continue;
+            // Factory cells also unload straight into their chest through one native inserter, without belts.
+            // That chest owns the output too; its hand must be included before deciding to make another batch.
+            var direct = line is null ? DirectOutput(map, machineId, container.Id) : null;
+            if (line is null && direct is null) continue;
             connected = true;
             if (ProductionReservations.Current.Contains(container.Id))
                 throw new InvalidOperationException("The machine output feeds a reserved stock and cannot be collected by nested production.");
             var endpoint = MaterialEndpoint.From(stock, catalog, container.Id, item, false);
             var source = MaterialEndpoint.From(stock, catalog, machineId, item, true);
-            var flow = BeltTransportReading.From(stock, source, endpoint, item, line.BeltIds, [line.SourceInserterId, line.TargetInserterId]);
+            var flow = BeltTransportReading.From(stock, source, endpoint, item, line?.BeltIds ?? [],
+                line is not null ? [line.SourceInserterId, line.TargetInserterId] : [direct!.Id]);
             pending = checked(flow.Source.Count + flow.Transit);
             inTransit = flow.Transit;
             long count = endpoint.Read(stock, item).Count;
@@ -91,6 +95,21 @@ internal sealed class AssemblyTransportController(IGameClient game, IControllerJ
         if (!connected && map.Entities.Any(e => e.PickupTargetId == machineId))
             throw new InvalidOperationException("An existing output extractor requires reconciliation before direct collection.");
         return new(connected, false, pending, inTransit);
+    }
+
+    private static SpatialEntity? DirectOutput(SpatialSnapshot map, string sourceId, string targetId)
+    {
+        var extractors = map.Entities.Where(e => e.PickupTargetId == sourceId).ToArray();
+        var matching = extractors.Where(e => e.DropTargetId == targetId).ToArray();
+        if (matching.Length == 0) return null;
+        if (extractors.Length != 1)
+            throw new InvalidDataException("Direct assembly output requires a single native extractor.");
+        var direct = matching[0];
+        var source = map.Entities.Single(e => e.Id == sourceId);
+        if (map.Prototypes[direct.Name].Type != "inserter" || direct.Force != source.Force
+            || direct.Power?.NetworkId is null)
+            throw new InvalidDataException("Direct assembly output requires one own powered native inserter with no competing extractor.");
+        return direct;
     }
 
     private Task LogAsync(BeltTransportFlow flow, BeltTransportMeasurement measurement, CancellationToken token) =>

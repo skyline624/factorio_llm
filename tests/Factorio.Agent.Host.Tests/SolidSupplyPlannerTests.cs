@@ -83,6 +83,31 @@ public sealed class SolidSupplyPlannerTests
         Assert.Empty(new SolidSupplyPlanner().Candidates(map, stock, BeltTransportBoundaryTests.Catalog(map), "root", "iron"));
     }
 
+    [Fact]
+    public void TheTargetsEmptyDirectOutputChestIsNotAnIngredientSource()
+    {
+        var map = DirectOutputMap();
+        var stock = BeltTransportBoundaryTests.Snapshot(0, 10, 0, 0, 0, 0);
+        Assert.Empty(new SolidSupplyPlanner().Candidates(map, stock, BeltTransportBoundaryTests.Catalog(map), "root", "iron"));
+    }
+
+    [Fact]
+    public void ADirectOutputChestWithAnotherFeederStillRequiresReconciliation()
+    {
+        var map = DirectOutputMap();
+        var arm = map.Entities.Single(e => e.Id == "feed");
+        map = map with { Entities = [.. map.Entities, arm with { Id = "extra", PickupTargetId = "unknown" }] };
+        var stock = BeltTransportBoundaryTests.Snapshot(0, 10, 0, 0, 0, 0);
+        Assert.Throws<InvalidDataException>(() => new SolidSupplyPlanner().Candidates(map, stock, BeltTransportBoundaryTests.Catalog(map), "root", "iron"));
+    }
+
+    private static SpatialSnapshot DirectOutputMap()
+    {
+        var map = BeltTransportBoundaryTests.Map();
+        var arm = map.Entities.Single(e => e.Id == "feed") with { DropTargetId = "source" };
+        return map with { Entities = [.. map.Entities.Where(e => e.Id == "root" || e.Id == "source" || e.Id == map.Actor.Id), arm] };
+    }
+
     [Theory]
     [InlineData(true, true)]
     [InlineData(false, false)]
