@@ -17,6 +17,7 @@ public sealed class EntityMissingException(string entityId, MapPosition knownPos
 /// <summary>Executes C# spatial plans while yielding actor operations to the deterministic defense loop.</summary>
 public sealed class SpatialController(IGameClient game, IControllerJournal journal, int maximumMoveDistance = 24) : IAsyncDisposable
 {
+    private const double NativeMoveTolerance = .15;
     private readonly SpatialClient spatial = new(game);
     private readonly OperationClient operations = new(game);
     private readonly DefenseController defense = new(game, journal);
@@ -77,6 +78,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         // A broad approach hands control back for another observation or interaction. A belt can push
         // the character outside that radius between RPCs, so choose a stable endpoint inside it.
         bool requireStableArrival = arrivalDistance > 0.4;
+        var unstableArrivals = new HashSet<MapPosition>();
+        (MapPosition Waypoint, OperationReceipt Receipt)? completedMove = null;
         SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: deadline.Token);
         RequireAi(initial);
         ActorScope scope = initial.Scope;
@@ -103,16 +106,30 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 throw new InvalidDataException("Navigation observation predates the previous view; reconcile before choosing a route.");
             latestObservationTick = map.CollectedTick;
             var field = new SpatialCollisionField(map);
+            if (completedMove is { } completed && requireStableArrival
+                && completed.Receipt.Effects.TryGetProperty("position", out var nativePosition)
+                && nativePosition.Deserialize<MapPosition>(Protocol.Json) is { } stopped
+                && stopped.DistanceTo(map.Actor.Position) <= .5 && !PlacementPlanner.CanStop(field, map.Actor.Position))
+            {
+                // A completed native move is known, but its actual stopping point cannot hand off work.
+                // Keep the endpoint available for transit; only another arrival is selected for this attempt.
+                unstableArrivals.Add(completed.Waypoint);
+                await journal.AppendAsync("unstable-movement-arrival", new { map.Scope, map.CollectedTick,
+                    completed.Receipt.OperationId, completed.Waypoint, nativeStoppedPosition = stopped,
+                    actualPosition = map.Actor.Position, excludedArrivals = unstableArrivals.Count }, deadline.Token);
+            }
+            completedMove = null;
             if (map.Actor.Position.DistanceTo(destination) <= arrivalDistance
                 && (!requireStableArrival || PlacementPlanner.CanStop(field, map.Actor.Position)))
                 return new(destination, map.Actor.Position, arrivalDistance, plans, receipts.AsReadOnly());
-            while (remaining.Count > 0 && map.Actor.Position.DistanceTo(remaining[0]) <= 0.15) remaining.RemoveAt(0);
+            while (remaining.Count > 0 && map.Actor.Position.DistanceTo(remaining[0]) <= NativeMoveTolerance) remaining.RemoveAt(0);
             bool reusable = remaining.Count > 0 && field.SegmentClear(map.Actor.Position, remaining[0], 0)
-                && (!requireStableArrival || PlacementPlanner.CanStop(field, remaining[^1]));
+                && (!requireStableArrival || PlacementPlanner.CanStop(field, remaining[^1]) && !unstableArrivals.Contains(remaining[^1]));
             RoutePlan route = reusable
                 ? new(RouteStatus.Found, remaining.ToArray(), 0, 0)
                 : new RoutePlanner().Find(field, destination, Math.Max(0, arrivalDistance - 0.2), token: deadline.Token,
-                    requireStableArrival: requireStableArrival);
+                    requireStableArrival: requireStableArrival, minimumFirstMoveDistance: NativeMoveTolerance,
+                    excludedArrivalPositions: unstableArrivals);
             if (!reusable && route.Status == RouteStatus.Found)
                 route = route with { Waypoints = Subdivide(map.Actor.Position, route.Waypoints) };
             plans++;
@@ -122,7 +139,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             {
                 // A short search budget is not proof that a known destination is unreachable. Deepen once, with
                 // defense still arbitrated, then observe again before executing any route from this photograph.
-                route = await DeepenRouteAsync(field, destination, arrivalDistance, deadline.Token);
+                route = await DeepenRouteAsync(field, destination, arrivalDistance, deadline.Token, unstableArrivals);
                 plans++;
                 if (route.Status == RouteStatus.Found && route.Waypoints.Count > 0)
                 {
@@ -160,11 +177,12 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (movePath.Count > 1)
                 await journal.AppendAsync("movement-path-plan", new { map.Scope, map.CollectedTick, waypoints = movePath }, deadline.Token);
             var submission = OperationSubmission.Create(map.Scope, "move", new
-                { position = waypoint, tolerance = 0.15, waypoints = movePath.Count > 1 ? movePath : null },
+                { position = waypoint, tolerance = NativeMoveTolerance, waypoints = movePath.Count > 1 ? movePath : null },
                 map.CollectedTick + 1800, new { position = map.Actor.Position, positionTolerance = 0.5 });
             OperationReceipt receipt = await ExecuteAsync(submission, deadline.Token,
                 movePath.Count > 1 || map.Actor.Position.DistanceTo(waypoint) > 8 ? movePath : null, inspectDestination);
             receipts.Add(receipt);
+            if (receipt.Status == "completed") completedMove = (waypoint, receipt);
             if (receipt.Status != "completed") remaining.Clear();
             if (receipt.Status != "completed" && receipt.Error?.Code is not ("path_blocked" or "deadline_exceeded" or "cancelled" or "actor_dead" or "stale_scope" or "position_precondition"))
                 throw new InvalidOperationException($"Navigation operation ended with {receipt.Status}: {receipt.Error?.Code}.");
@@ -174,11 +192,12 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     }
 
     internal async Task<RoutePlan> DeepenRouteAsync(SpatialCollisionField field, MapPosition destination, double arrivalDistance,
-        CancellationToken token)
+        CancellationToken token, IReadOnlySet<MapPosition>? excludedArrivals = null)
     {
         var route = await ControllerPlanning.RunAsync(t => new RoutePlanner().Find(field, destination,
             Math.Max(0, arrivalDistance - 0.2), timeBudget: TimeSpan.FromSeconds(2), token: t,
-            requireStableArrival: arrivalDistance > 0.4),
+            requireStableArrival: arrivalDistance > 0.4, minimumFirstMoveDistance: NativeMoveTolerance,
+            excludedArrivalPositions: excludedArrivals),
             this, TimeSpan.FromSeconds(3), token);
         await journal.AppendAsync("route-search-deepened", new { field.Map.Scope, field.Map.CollectedTick, destination,
             arrivalDistance, searchSeconds = 2, maximumNodes = 25000, route }, token);
@@ -340,7 +359,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     private static MapPosition SelectWaypoint(SpatialCollisionField field, RoutePlan route, MapPosition start, double maximumMoveDistance)
     {
         int index = 0;
-        while (index < route.Waypoints.Count && start.DistanceTo(route.Waypoints[index]) <= 0.15) index++;
+        while (index < route.Waypoints.Count && start.DistanceTo(route.Waypoints[index]) <= NativeMoveTolerance) index++;
         if (index == route.Waypoints.Count) throw new NavigationPlanningException(RouteStatus.StartBlocked, "No waypoint beyond native arrival tolerance.");
         MapPosition next = route.Waypoints[index];
         // The native move stops within 0.15 tiles. Do not repeatedly submit an already reached corner.

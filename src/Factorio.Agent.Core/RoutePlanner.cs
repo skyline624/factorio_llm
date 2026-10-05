@@ -20,7 +20,8 @@ public sealed class RoutePlanner
 
     public RoutePlan Find(SpatialCollisionField field, MapPosition destination, double goalRadius = 0.2,
         int maximumNodes = 25000, TimeSpan? timeBudget = null, CancellationToken token = default,
-        bool requireStableArrival = false, double minimumFirstMoveDistance = 0)
+        bool requireStableArrival = false, double minimumFirstMoveDistance = 0,
+        IReadOnlySet<MapPosition>? excludedArrivalPositions = null)
     {
         token.ThrowIfCancellationRequested();
         if (!double.IsFinite(destination.X) || !double.IsFinite(destination.Y) || goalRadius < 0
@@ -32,8 +33,9 @@ public sealed class RoutePlanner
         if (!field.Map.Bounds.Contains(destination)) return Failure(RouteStatus.GoalOutsideSnapshot);
         bool tightStart = !field.Walkable(start);
         if (tightStart && !field.Walkable(start, 0)) return Failure(RouteStatus.StartBlocked);
-        bool stableDestination = !requireStableArrival || PlacementPlanner.CanStop(field, destination);
-        if (start.DistanceTo(destination) <= goalRadius && (!requireStableArrival || PlacementPlanner.CanStop(field, start)))
+        bool EligibleArrival(MapPosition point) => excludedArrivalPositions?.Contains(point) != true;
+        bool stableDestination = EligibleArrival(destination) && (!requireStableArrival || PlacementPlanner.CanStop(field, destination));
+        if (start.DistanceTo(destination) <= goalRadius && EligibleArrival(start) && (!requireStableArrival || PlacementPlanner.CanStop(field, start)))
             return new(RouteStatus.Found, Array.Empty<MapPosition>(), 0, 0);
         if (stableDestination && start.DistanceTo(destination) > minimumFirstMoveDistance && field.SegmentClear(start, destination))
             return new(RouteStatus.Found, Array.AsReadOnly(new[] { destination }), 0, start.DistanceTo(destination));
@@ -68,7 +70,7 @@ public sealed class RoutePlanner
             if (++expanded > maximumNodes || Stopwatch.GetElapsedTime(began) > budget)
                 return Failure(RouteStatus.BudgetExceeded, expanded);
             MapPosition position = node.Cell.Position;
-            bool atGoal = position.DistanceTo(destination) <= goalRadius
+            bool atGoal = EligibleArrival(position) && position.DistanceTo(destination) <= goalRadius
                 && (!requireStableArrival || PlacementPlanner.CanStop(field, position));
             if (atGoal || stableDestination && field.SegmentClear(position, destination))
             {
