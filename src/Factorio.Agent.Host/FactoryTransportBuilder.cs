@@ -585,7 +585,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                     return map;
                 }
             }
-            if (stand is null) return null; // Observed endpoints still provide no known walkable vantage.
+            if (stand is null) return null; // Observed endpoints still provide no known stable vantage.
             await controller.TravelAsync(stand, 1, catalog, token);
             map = await spatial.CaptureAsync(items, FuelPlanningRadius, token);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame travel scope changed.");
@@ -609,7 +609,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             && map.Bounds.Contains(new WorldBox(new(entity.Bounds.Min.X - 4, entity.Bounds.Min.Y - 4),
                 new(entity.Bounds.Max.X + 4, entity.Bounds.Max.Y + 4))));
 
-    /// <summary>Choose known walkable ground inside the endpoint frame instead of insisting on its possibly occupied center.</summary>
+    /// <summary>Choose known stable ground inside the endpoint frame, including when its center lies on a walkable belt.</summary>
     internal static MapPosition? PlanningStand(SpatialSnapshot map, FactorySnapshot snapshot, IReadOnlyList<string> entityIds, int observationRadius = 48)
     {
         if (map.Scope != snapshot.Scope) throw new InvalidDataException("Fuel vantage observations span actor scopes.");
@@ -620,14 +620,15 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var feasible = new WorldBox(new(points.Max(p => p.X) - reach, points.Max(p => p.Y) - reach),
             new(points.Min(p => p.X) + reach, points.Min(p => p.Y) + reach));
         var field = new SpatialCollisionField(map);
-        if (field.Walkable(center)) return center;
+        if (PlacementPlanner.CanStop(field, center)) return center;
         var candidates = new List<MapPosition>();
         for (int y = (int)Math.Ceiling(Math.Max(feasible.Min.Y, map.Bounds.Min.Y) - .5);
             y + .5 <= Math.Min(feasible.Max.Y, map.Bounds.Max.Y); y++)
             for (int x = (int)Math.Ceiling(Math.Max(feasible.Min.X, map.Bounds.Min.X) - .5);
                 x + .5 <= Math.Min(feasible.Max.X, map.Bounds.Max.X); x++)
                 candidates.Add(new(x + .5, y + .5));
-        return candidates.OrderBy(p => p.DistanceTo(center)).ThenBy(p => p.DistanceTo(map.Actor.Position)).FirstOrDefault(p => field.Walkable(p));
+        return candidates.OrderBy(p => p.DistanceTo(center)).ThenBy(p => p.DistanceTo(map.Actor.Position))
+            .FirstOrDefault(p => PlacementPlanner.CanStop(field, p));
     }
 
     internal static MapPosition? Position(FactorySnapshot snapshot, string id) => snapshot.Records.FirstOrDefault(r => r.Kind == "entity" && r.EntityId == id)

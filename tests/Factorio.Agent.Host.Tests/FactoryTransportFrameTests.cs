@@ -120,6 +120,68 @@ public sealed class FactoryTransportFrameTests
             { Scope = map.Scope with { Generation = map.Scope.Generation + 1 } }, snapshot, ["source", "target"]));
     }
 
+    [Theory]
+    [InlineData("transport-belt")]
+    [InlineData("underground-belt")]
+    [InlineData("splitter")]
+    public void AWalkableMovingCenterChoosesStableGroundInsideTheEndpointFrame(string type)
+    {
+        var snapshot = Snapshot(("source", new(-41.5, .5)), ("target", new(42.5, .5)));
+        var map = MovingGround(FactoryMaps.Grass(48) with { Scope = snapshot.Scope }, type, -1, 2, -1, 2);
+        var field = new SpatialCollisionField(map);
+        var center = new MapPosition(.5, .5);
+        Assert.True(field.Walkable(center));
+        Assert.False(PlacementPlanner.CanStop(field, center));
+
+        var stand = FactoryTransportBuilder.PlanningStand(map, snapshot, ["source", "target"]);
+        Assert.NotNull(stand);
+        Assert.True(PlacementPlanner.CanStop(field, stand));
+        Assert.InRange(stand.X, -.5, 1.5);
+        Assert.InRange(stand.Y, -42.5, 43.5);
+    }
+
+    [Fact]
+    public void AnOccupiedCenterAlsoSkipsWalkableBeltsAmongFallbackCandidates()
+    {
+        var snapshot = Snapshot(("source", new(-42, 0)), ("target", new(42, 0)));
+        var map = MovingGround(FrameMap() with { Scope = snapshot.Scope }, "transport-belt", -2, 2, -2, 2);
+        var field = new SpatialCollisionField(map);
+        Assert.False(field.Walkable(new(0, 0)));
+        Assert.True(field.Walkable(new(.5, 1.5)));
+        Assert.False(PlacementPlanner.CanStop(field, new(.5, 1.5)));
+
+        var stand = FactoryTransportBuilder.PlanningStand(map, snapshot, ["source", "target"]);
+        Assert.NotNull(stand);
+        Assert.True(PlacementPlanner.CanStop(field, stand));
+        Assert.InRange(stand.X, -1, 1);
+    }
+
+    [Fact]
+    public void AnEntirelyMovingFeasibleFrameIsDeferredDespiteWalkableGroundOutsideIt()
+    {
+        var snapshot = Snapshot(("source", new(-42, 0)), ("target", new(42, 0)));
+        var map = MovingGround(FactoryMaps.Grass(48) with { Scope = snapshot.Scope }, "transport-belt", -2, 2, -44, 44);
+        var field = new SpatialCollisionField(map);
+        Assert.True(field.Walkable(new(0, 0)));
+        Assert.True(PlacementPlanner.CanStop(field, new(5, 0)));
+        Assert.Null(FactoryTransportBuilder.PlanningStand(map, snapshot, ["source", "target"]));
+    }
+
+    private static SpatialSnapshot MovingGround(SpatialSnapshot map, string type, int minX, int maxX, int minY, int maxY)
+    {
+        var moving = new EntityGeometry("moving-ground", type, new(new(-.4, -.4), new(.4, .4)),
+            new([], false, false, false), 1, 1);
+        var entities = new List<SpatialEntity>(map.Entities);
+        for (int y = minY; y < maxY; y++)
+            for (int x = minX; x < maxX; x++)
+            {
+                var position = new MapPosition(x + .5, y + .5);
+                entities.Add(new($"moving-{x}-{y}", moving.Name, position, moving.CollisionBox.Translate(position), 4, "own"));
+            }
+        return map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { [moving.Name] = moving },
+            Entities = entities };
+    }
+
     private static SpatialSnapshot FrameMap()
     {
         var map = FactoryMaps.Grass(48);

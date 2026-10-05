@@ -5,6 +5,8 @@ using Xunit;
 
 namespace Factorio.Agent.Host.Tests;
 
+// These controller checks use the real 20 ms retreat search; run with the other deadline-sensitive retreat tests.
+[Collection("Retreat progress")]
 public sealed class DefenseControllerTests
 {
     [Theory]

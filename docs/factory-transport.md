@@ -2,6 +2,8 @@
 
 `FactoryDirector` ajoute au plus deux liaisons par appel après la construction des étapes de production. C# choisit un producteur enregistré et un ingrédient solide de la recette destinataire, puis calcule les bras, les poteaux et les tapis depuis la géométrie native observée. Les ateliers conservent leurs coffres d'entrée et de sortie.
 
+Le point de préparation du cadrage de combustible doit permettre un arrêt stable du personnage. Un tapis, un tapis souterrain ou un répartiteur reste traversable, mais ne convient pas à cet arrêt. C# vérifie cette condition au centre puis sur les autres candidats observés, en conservant la marge de cadrage des extrémités. Si aucun point stable connu ne convient, le cadrage est différé ; les tapis ne sont pas retirés et aucun terrain inconnu n'est supposé libre.
+
 ## Corridors entre zones éloignées — développement
 
 La campagne normale de graine 20261072 a révélé un écart de 408 à 413 tuiles entre les quatre entrées de plastique et la sortie de charbon enregistrée la plus proche, sans bus les reliant. Un cadrage local unique ne couvre pas cette distance. La version en développement propose une reconnaissance par le même personnage : déplacements C#, photographies natives de rayon 48, puis assemblage d'un terrain de planification historique. Les tuiles non observées sont des obstacles. Une observation ultérieure remplace les anciennes entités seulement dans son périmètre ; les identités de monde, session, incarnation, génération et surface ainsi que l'ordre des ticks doivent rester cohérents.
