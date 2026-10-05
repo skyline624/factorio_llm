@@ -176,20 +176,38 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
 
         async Task<long> RearmAsync(InstalledTurret turret, string ammunition, long count)
         {
-            await controller.ApproachEntityAsync(turret.Id, turret.Position, catalog, token);
-            var receipt = await controller.WorkAsync("insert", new { entityId = turret.Id, inventory = "ammo", item = ammunition, count = checked((int)count) },
-                600, token: token);
+            long moved = await TransferTurretAmmunitionAsync(controller, catalog, turret, ammunition, checked((int)count), journal, token);
             actions++;
-            if (receipt.Status is not ("completed" or "partial"))
-            {
-                await journal.AppendAsync("factory-transfer-refused", new { kind = "insert", turret.Id, ammunition, count, receipt.Status, receipt.Error }, token);
-                return 0;
-            }
-            if (receipt.Effects.GetProperty("targetId").GetString() != turret.Id || receipt.Effects.GetProperty("item").GetString() != ammunition
-                || receipt.Effects.GetProperty("inventory").GetString() != "ammo" || receipt.Effects.GetProperty("direction").GetString() != "from_actor")
-                throw new InvalidDataException("Turret rearming lacks a matching native transfer receipt.");
-            return receipt.Effects.GetProperty("transferred").GetInt64();
+            return moved;
         }
+    }
+
+    internal static async Task<long> TransferTurretAmmunitionAsync(SpatialController controller, ProductionCatalog catalog,
+        InstalledTurret turret, string ammunition, int count, IControllerJournal journal, CancellationToken token)
+    {
+        await controller.ApproachEntityAsync(turret.Id, turret.Position, catalog, token);
+        var receipt = await controller.WorkAsync("insert", new { entityId = turret.Id, inventory = "ammo", item = ammunition, count },
+            600, token: token);
+        if (receipt.Status is not ("completed" or "partial"))
+        {
+            await journal.AppendAsync("factory-transfer-refused", new { kind = "insert", turret.Id, ammunition, count, receipt.Status, receipt.Error }, token);
+            return 0;
+        }
+        return TransferredAmmunition(receipt, turret.Id, ammunition, count);
+    }
+
+    internal static long TransferredAmmunition(OperationReceipt receipt, string turretId, string ammunition, int requested)
+    {
+        if (requested is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(requested));
+        var effects = receipt.Effects;
+        bool Matches(string name, string expected) => effects.TryGetProperty(name, out var value)
+            && value.ValueKind == JsonValueKind.String && value.GetString() == expected;
+        if (receipt.Kind != "insert" || receipt.Status is not ("completed" or "partial")
+            || !Matches("targetId", turretId) || !Matches("item", ammunition) || !Matches("inventory", "ammo")
+            || !Matches("direction", "from_actor") || !effects.TryGetProperty("transferred", out var count)
+            || count.ValueKind != JsonValueKind.Number || !count.TryGetInt64(out long moved) || moved < 1 || moved > requested)
+            throw new InvalidDataException("Turret rearming lacks a matching native transfer receipt.");
+        return moved;
     }
 
     internal static bool DeferResourceRebuild(FactoryCell cell, IReadOnlyList<NativeDeathTransition> zones) =>

@@ -239,9 +239,14 @@ public sealed class PerimeterDefenseController(IGameClient game, IControllerJour
             var cell = (current.Cells.SingleOrDefault(c => c.Id == cellId) ?? new(cellId, 0, new(0, nest.Index, true), kind, item, null,
                 new Dictionary<string, string>(), "building", map.CollectedTick)) with { Plan = planned.ToDictionary(e => e.Role, StringComparer.Ordinal) };
             var present = FactoryMaintenance.Present(await CaptureAsync(catalog, token));
+            string? turretToArm = null;
             foreach (var entity in planned)
             {
-                if (cell.Entities.TryGetValue(entity.Role, out var existing) && present.Contains(existing)) continue;
+                if (cell.Entities.TryGetValue(entity.Role, out var existing) && present.Contains(existing))
+                {
+                    if (kind == "turret") turretToArm = existing;
+                    continue;
+                }
                 // Stock beyond one production batch is procured again when the bag runs out.
                 if (carried.GetValueOrDefault(item) < 1) await EnsureAsync(item, remaining.GetValueOrDefault(item));
                 if (carried.GetValueOrDefault(item) < 1)
@@ -264,6 +269,7 @@ public sealed class PerimeterDefenseController(IGameClient game, IControllerJour
                 }
                 built++;
                 if (kind == "turret") nestsBuilt++;
+                if (kind == "turret") turretToArm = id;
                 carried[item] = carried.GetValueOrDefault(item) - 1;
                 cell = cell with { Entities = new Dictionary<string, string>(cell.Entities, StringComparer.Ordinal) { [entity.Role] = id } };
                 await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
@@ -271,7 +277,33 @@ public sealed class PerimeterDefenseController(IGameClient game, IControllerJour
             if (cell.Entities.Count > 0) cell = cell with { Status = "ready" };
             await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
             await journal.AppendAsync("perimeter-cell", cell, token);
+            // Each nest must defend the next placement; a distant ring may be attacked before its last turret exists.
+            if (turretToArm is not null) return await ArmAsync(turretToArm);
             return true;
+        }
+
+        async Task<bool> ArmAsync(string turretId)
+        {
+            var stock = await new FactorySnapshotClient(game).CaptureAsync([setup.Ammunition], cancellationToken: token);
+            RequireScope(stock.Scope, catalog);
+            var turret = DefenseFactoryState.Read(stock, catalog).Turrets.Single(t => t.Id == turretId);
+            if (!turret.Active || turret.Name != setup.Model.EntityName
+                || turret.Ammunition is not null && turret.Ammunition != setup.Ammunition)
+                throw new InvalidDataException("The perimeter turret changed before its immediate supply.");
+            long need = FactoryMaintenance.Magazines(turret.Rounds, setup.MagazineSize);
+            if (need == 0) return true;
+            carried = FactoryLogistics.Carried(stock);
+            var inventory = stock.Records.Single(r => r.Id == turret.InventoryId && r.Kind == "inventory");
+            long capacity = inventory.Data.GetProperty("capacityHints").GetProperty(setup.Ammunition).GetProperty("insertable").GetInt64();
+            int give = checked((int)Math.Min(need, Math.Min(capacity, carried.GetValueOrDefault(setup.Ammunition))));
+            long moved = give > 0 ? await FactoryMaintenance.TransferTurretAmmunitionAsync(controller, catalog, turret,
+                setup.Ammunition, give, journal, token) : 0;
+            carried[setup.Ammunition] = carried.GetValueOrDefault(setup.Ammunition) - moved;
+            await journal.AppendAsync("perimeter-turret-armed", new { turretId, ammunition = setup.Ammunition,
+                stock.SnapshotId, stock.CollectedTick, beforeRounds = turret.Rounds, requested = give, transferred = moved }, token);
+            if (moved >= need) return true;
+            shortfall[setup.Ammunition] = Math.Max(shortfall.GetValueOrDefault(setup.Ammunition), need - moved);
+            return false; // Preserve the registered turret and stop extending this ring without its reserve.
         }
     }
 

@@ -35,7 +35,7 @@ function M.measure(record, c)
   end
   if w.expected and w.accounting then effects.products = CraftAccounting.products(record, c) end
   if w.beforeRounds and not w.shotDeathTick then
-    effects.roundsConsumed = w.beforeRounds - U.ammo(c.get_inventory(defines.inventory.character_ammo))
+    ShotAccounting.update(record, c)
   end
 end
 
@@ -391,12 +391,13 @@ steps.shoot = function(r, c)
   local entity = r.work.target
   r.receipt.effects.ammoInventoryDelta = U.delta(r.work.beforeAmmo,
     U.inventory(c.get_inventory(defines.inventory.character_ammo)))
-  r.receipt.effects.roundsConsumed = r.work.beforeRounds - U.ammo(c.get_inventory(defines.inventory.character_ammo))
+  ShotAccounting.update(r, c)
   if not entity.valid then r.receipt.effects.targetGone = true; return "completed" end
   U.check(Visibility.is_visible(c, entity), "target_not_visible", "Lost current target visibility")
   r.receipt.effects.afterHealth = entity.health
   if game.tick >= r.work.endTick then
-    U.check(r.receipt.effects.roundsConsumed > 0, "no_shots_observed", "No ammunition consumption was observed")
+    U.check(r.receipt.effects.roundsConsumed and r.receipt.effects.roundsConsumed > 0,
+      "no_shots_observed", "No ammunition consumption was observed")
     return "completed"
   end
   c.shooting_state = {state = defines.shooting.shooting_enemies, position = entity.position}

@@ -163,6 +163,57 @@ public sealed class FactoryMaintenanceTests
         Assert.Empty(FactoryMaintenance.Degraded([planned], new HashSet<string> { "1", "2" }));
     }
 
+    [Theory]
+    [InlineData("completed", 10)]
+    [InlineData("partial", 4)]
+    public void RearmingCreditsOnlyMatchingNativeTransfers(string status, long transferred)
+    {
+        var receipt = AmmoReceipt(status, transferred);
+        Assert.Equal(transferred, FactoryMaintenance.TransferredAmmunition(receipt, "turret", "magazine", 10));
+    }
+
+    [Theory]
+    [InlineData("kind")]
+    [InlineData("status")]
+    [InlineData("target")]
+    [InlineData("item")]
+    [InlineData("compartment")]
+    [InlineData("direction")]
+    [InlineData("empty")]
+    [InlineData("negative")]
+    [InlineData("excess")]
+    [InlineData("missing")]
+    public void AnUnprovenAmmunitionTransferCannotCertifyANewTurret(string mutation)
+    {
+        var receipt = AmmoReceipt("completed", 10);
+        var effects = new Dictionary<string, object>
+        {
+            ["targetId"] = "turret", ["item"] = "magazine", ["inventory"] = "ammo", ["direction"] = "from_actor", ["transferred"] = 10
+        };
+        if (mutation == "kind") receipt = receipt with { Kind = "take" };
+        if (mutation == "status") receipt = receipt with { Status = "running" };
+        if (mutation == "target") effects["targetId"] = "other";
+        if (mutation == "item") effects["item"] = "other";
+        if (mutation == "compartment") effects["inventory"] = "output";
+        if (mutation == "direction") effects["direction"] = "to_actor";
+        if (mutation == "empty") effects["transferred"] = 0;
+        if (mutation == "negative") effects["transferred"] = -1;
+        if (mutation == "excess") effects["transferred"] = 11;
+        if (mutation == "missing") effects.Remove("transferred");
+        Assert.Throws<InvalidDataException>(() => FactoryMaintenance.TransferredAmmunition(
+            receipt with { Effects = Protocol.ToElement(effects) }, "turret", "magazine", 10));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1001)]
+    public void AmmunitionRequestsKeepTheNativeTransferBudget(int requested) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => FactoryMaintenance.TransferredAmmunition(AmmoReceipt("completed", 1), "turret", "magazine", requested));
+
+    private static OperationReceipt AmmoReceipt(string status, long transferred) =>
+        new("operation", "insert", status, 10, 10, Protocol.ToElement(new
+            { targetId = "turret", item = "magazine", inventory = "ammo", direction = "from_actor", transferred }), null, Protocol.ToElement(new { }));
+
     private static FactorySnapshot Snapshot(params FactoryRecord[] entities) =>
         new("snapshot", new("world", "session", "actor", 1, 2), 10, 3610, Protocol.ToElement(new { }), entities);
 

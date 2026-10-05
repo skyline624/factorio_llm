@@ -80,6 +80,12 @@ Ces essais sont des **fixtures préparées** en headless (`isAutonomousCampaign=
 
 Après le passage aux îlots, `verify-perimeter` réussit de nouveau sur une fixture neuve (graine 73106001, rapport `146445a693a9408a88cdbf662623c268`, `passed=true`) : un seul îlot, 8 nids, 96 murs, aucun trou de couverture, espacement 16, preuve de sortie et d'entrée, répétition reconnue complète sans construction, 6 biteurs sur 6 tués par les tourelles (24 coups), reconstruction de la tourelle, du mur et du poteau, réarmement prouvé de 100 coups, aucune fabrication ni minage. Les nids posés en réponse à une attaque utilisent les mêmes cellules ; voir la [réponse aux attaques](attack-response.md).
 
+## Réarmement pendant la pose
+
+Chaque tourelle posée ou retrouvée est alimentée depuis le sac avant de passer au nid suivant. Le besoin vient des coups natifs déjà chargés, avec capacité et stock relus ; seul un reçu de transfert correspondant à la tourelle, à sa munition et à son inventaire est crédité. Un manque laisse la cellule enregistrée pour la reprise et interrompt l'extension de cet anneau. La maintenance générale conserve son rôle après la pose.
+
+Le 5 octobre 2026, la partie normale de graine **20261072** a reconstruit deux tourelles avant une nouvelle mort, sans aucun transfert de munitions entre ces poses et la mort. La séquence précédente reportait le réarmement après la dernière tourelle. Ce constat ne suffit pas à attribuer toute la mortalité à ce seul délai.
+
 ## Limites
 
 - Un anneau par îlot, chaque îlot tenant dans une observation de 97 × 97 tuiles : un îlot dont l'anneau est refusé reste non protégé (`perimeter-cluster-skipped`) et ses entités sont rapportées comme telles. Une usine agrandie reçoit un nouvel anneau extérieur ; l'ancien est conservé, pas démonté. Les nids nouveaux gardent l'ouverture de 3 tuiles avec l'ancien anneau et réutilisent ses nids aux mêmes positions ; un emplacement sans position compatible est abandonné et apparaît dans `skippedTurrets` et `coverageGaps` (seul un test unitaire couvre ce cas, pas une exécution réelle).

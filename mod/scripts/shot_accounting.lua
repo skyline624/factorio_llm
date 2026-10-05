@@ -1,13 +1,27 @@
 local U = require("scripts.util")
 local M = {}
 
-function M.prepare(record, character)
+local function held_rounds(character)
   local rounds = 0
   for index = 1, character.get_max_inventory_index() do
     local inventory = character.get_inventory(index)
     if inventory then rounds = rounds + U.ammo(inventory) end
   end
-  record.work.beforeAllRounds = rounds
+  return rounds
+end
+
+function M.prepare(record, character)
+  record.work.beforeAllRounds = held_rounds(character)
+end
+
+function M.update(record, character)
+  if record.work.shotDeathTick then return end
+  local before, surviving = record.work.beforeAllRounds, held_rounds(character)
+  local known = before ~= nil and surviving <= before
+  record.receipt.effects.roundsConsumed = known and (before - surviving) or nil
+  record.receipt.effects.ammoAccounting = {status = known and "observed-native-actor" or "unresolved-native-actor",
+    collectedTick = game.tick, beforeRounds = before, survivingRounds = surviving,
+    collection = "actor-all-ammunition-rounds"}
 end
 
 function M.on_death(record)
