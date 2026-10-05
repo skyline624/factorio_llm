@@ -105,7 +105,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                     if ((state.Transports ?? []).Any(b => b.Item == ingredient.Name && b.SourceCellId == candidate.Cell.Id
                         && b.Consumers.Any(c => c.TargetCellId == target.Id))) continue;
                     var existingBus = (state.Transports ?? []).SingleOrDefault(b => b.SourceCellId == candidate.Cell.Id && b.Item == ingredient.Name);
-                    if (PlanningCenter(snapshot, FrameEntities(state, candidate.Cell, target, existingBus)) is null) continue;
+                    var candidateFrame = FrameEntities(state, candidate.Cell, target, existingBus);
+                    if (PlanningCenter(snapshot, candidateFrame) is null && !TransportCorridorSurvey.CanSurvey(snapshot, candidateFrame)) continue;
                     if (++considered > 8) return connected;
                     int limit = checked((int)Math.Clamp(ingredient.Amount!.Value * FactoryLogistics.CellBufferCrafts(target, shares, 40), 1, 10000));
                     if (await LinkAsync(candidate.Cell.Id, target.Id, ingredient.Name, limit, catalog, controller, token))
@@ -237,13 +238,16 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var frameEntities = FrameEntities(state, source, target, bus);
         int approachTiles = target.Kind == "power" ? 1 : 4;
         var frameCenter = PlanningCenter(snapshot, frameEntities, approachTiles, target.Kind == "power" ? FuelPlanningRadius : 48);
-        if (frameCenter is null) return false;
+        bool surveyed = frameCenter is null;
+        if (surveyed && (target.Kind == "power" || !TransportCorridorSurvey.CanSurvey(snapshot, frameEntities))) return false;
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
         SpatialSnapshot? map;
         if (target.Kind == "power") map = await CaptureFuelFrameAsync(state, snapshot, frameEntities, steam, catalog, controller, token);
+        else if (surveyed)
+            map = await new TransportCorridorSurvey(game, journal).CaptureAsync(snapshot, frameEntities, GeometryItems(state, steam), catalog, controller, token);
         else
         {
-            await controller.TravelAsync(frameCenter, approachTiles, catalog, token);
+            await controller.TravelAsync(frameCenter!, approachTiles, catalog, token);
             map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
         }
         if (map is null) return false;
@@ -255,7 +259,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         map = ProtectBands(map, state, steam, target.Kind == "power" && source.IsResource ? new HashSet<int> { source.Slot.Band } : null);
         if (bus is null)
         {
-            var plan = new BeltTransportPlanner().Find(map, Equipment, source.Entities["output-chest"], target.Entities["input-chest"], token);
+            var plan = new BeltTransportPlanner().Find(map, Equipment, source.Entities["output-chest"], target.Entities["input-chest"], token,
+                maximumBelts: surveyed ? TransportCorridorSurvey.MaximumBelts : 200, nodeBudget: surveyed ? 100000 : 12000);
             if (plan is null) return false;
             var record = NewBus(sourceCellId, targetCellId, item, maximum, plan, map.CollectedTick);
             await registry.SaveAsync(state.With(record.Cell).With(record.Bus), token);

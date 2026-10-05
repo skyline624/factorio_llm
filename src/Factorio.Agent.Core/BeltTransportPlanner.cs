@@ -7,8 +7,9 @@ public sealed record BeltTransportPlan(PlacementCandidate SourceInserter, Placem
 public sealed class BeltTransportPlanner
 {
     public BeltTransportPlan? Find(SpatialSnapshot map, BeltTransportEquipment equipment, string sourceId, string targetId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, int maximumBelts = 200, int nodeBudget = 12000)
     {
+        if (maximumBelts is < 1 or > 1536 || nodeBudget is < 1 or > 100000) throw new ArgumentOutOfRangeException(nameof(maximumBelts));
         var source = map.Entities.Single(e => e.Id == sourceId);
         var target = map.Entities.Single(e => e.Id == targetId);
         var arm = map.Prototypes[map.Items[equipment.Inserter].EntityName];
@@ -30,6 +31,9 @@ public sealed class BeltTransportPlanner
         foreach (var pair in pairs)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var start = BeltRoutePlanner.Cell(At(pair.Output, arm.InserterDrop));
+            var finish = BeltRoutePlanner.Cell(At(pair.Input, arm.InserterPickup));
+            if (Math.Abs(start.X - finish.X) + Math.Abs(start.Y - finish.Y) + 1 > maximumBelts) continue;
             var projected = clearMap with { Entities = [.. clearMap.Entities, ProjectArm("planned:source-arm", pair.Output)] };
             if (!new SpatialCollisionField(projected).PlacementClear(arm, pair.Input.Position, pair.Input.Direction)) continue;
             projected = projected with { Entities = [.. projected.Entities, ProjectArm("planned:target-arm", pair.Input)] };
@@ -58,10 +62,10 @@ public sealed class BeltTransportPlanner
                     extension.Position, pole.CollisionBox.Translate(extension.Position), extension.Direction, source.Force, Power: connection.Power)] };
             }
             if (!powered) continue;
-            var route = new BeltRoutePlanner().Find(projected, equipment.Belt, BeltRoutePlanner.Cell(At(pair.Output, arm.InserterDrop)),
-                BeltRoutePlanner.Cell(At(pair.Input, arm.InserterPickup)), cancellationToken: cancellationToken);
+            var route = new BeltRoutePlanner().Find(projected, equipment.Belt, start, finish,
+                nodeBudget: nodeBudget, cancellationToken: cancellationToken);
             if (route.Status == BeltRouteStatus.BudgetExceeded) throw new TimeoutException("Belt route search exhausted its node budget.");
-            if (route.Status == BeltRouteStatus.Found && route.Belts.Count <= 200)
+            if (route.Status == BeltRouteStatus.Found && route.Belts.Count <= maximumBelts)
                 return new(pair.Output, pair.Input, route.Belts, poles);
         }
         return null;
