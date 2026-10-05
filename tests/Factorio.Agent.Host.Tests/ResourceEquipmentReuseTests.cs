@@ -190,6 +190,25 @@ public sealed class ResourceEquipmentReuseTests
         Protocol.ToElement(new { targetId = "furnace", item = "coal", requested = 28, transferred = moved, direction = "to_actor" }),
         error is null ? null : new(error, "native refusal"), Protocol.ToElement(new { }));
 
+    [Theory]
+    [InlineData(120, true)]
+    [InlineData(400, false)]
+    public void AMiningStorageVisitCanUseAKnownProducerBeyondTheLocalEquipmentArea(int distance, bool reachable)
+    {
+        var (state, snapshot, catalog) = Fixture();
+        snapshot = Change(snapshot, "actor", new { role = "actor", mainInventoryId = "main", position = new MapPosition(0, 0) });
+        snapshot = Change(snapshot, "main", new { items = new Dictionary<string, long> { ["iron-plate"] = 900 } });
+        snapshot = Change(snapshot, "chest-stock", new { items = new { }, capacityHints =
+            new Dictionary<string, object> { ["iron-plate"] = new { insertable = 800, canInsertOne = true, certainty = "native-estimate" } } });
+        snapshot = snapshot with { Records = [.. snapshot.Records,
+            new("chest", "entity", "chest", "iron-chest", Protocol.ToElement(new { role = "factory", position = new MapPosition(distance, 0) }))] };
+        var retained = new Dictionary<string, int> { ["iron-plate"] = 450 };
+        Assert.Empty(ResourceEquipmentReuse.DepositOptions(state, snapshot, catalog, retained));
+        var homes = ResourceEquipmentReuse.DepositOptions(state, snapshot, catalog, retained, ResourceEquipmentReuse.MaximumStorageDistance);
+        if (reachable) Assert.Equal(450, Assert.Single(homes).Count);
+        else Assert.Empty(homes);
+    }
+
     private static FactorySnapshot Change(FactorySnapshot snapshot, string id, object data) => snapshot with
     { Records = snapshot.Records.Select(r => r.Id == id ? r with { Data = Protocol.ToElement(data) } : r).ToArray() };
 

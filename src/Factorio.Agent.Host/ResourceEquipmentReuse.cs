@@ -12,6 +12,7 @@ internal sealed class ResourceEquipmentReuse(IGameClient game, IControllerJourna
 {
     internal const int MaximumParts = 4;
     internal const double MaximumDistance = 96;
+    internal const double MaximumStorageDistance = 384;
     internal const int MaximumDeposits = 6;
 
     public async Task RecoverAsync(FactoryRegistry registry, ProductionCatalog catalog, IReadOnlyDictionary<string, int> needed,
@@ -140,8 +141,10 @@ internal sealed class ResourceEquipmentReuse(IGameClient game, IControllerJourna
 
     /// <summary>Returns only observed, compatible producer chests with native room; a full nearest chest cannot hide another.</summary>
     internal static IReadOnlyList<ResourceRecoveryDeposit> DepositOptions(FactoryState state, FactorySnapshot snapshot,
-        ProductionCatalog catalog, IReadOnlyDictionary<string, int> needed)
+        ProductionCatalog catalog, IReadOnlyDictionary<string, int> needed, double maximumDistance = MaximumDistance)
     {
+        if (!double.IsFinite(maximumDistance) || maximumDistance <= 0 || maximumDistance > MaximumStorageDistance)
+            throw new ArgumentOutOfRangeException(nameof(maximumDistance));
         if (snapshot.Scope != catalog.Scope || snapshot.Scope.WorldId != state.WorldId)
             throw new InvalidDataException("Resource recovery deposits require one observed world and actor.");
         var actor = snapshot.Records.Single(r => r.Kind == "entity" && r.Data.GetProperty("role").GetString() == "actor");
@@ -164,7 +167,7 @@ internal sealed class ResourceEquipmentReuse(IGameClient game, IControllerJourna
                 if (hint.GetProperty("certainty").GetString() != "native-estimate" || !hint.GetProperty("insertable").TryGetInt64(out long capacity)
                     || capacity < 0) throw new InvalidDataException("Invalid native surplus storage capacity.");
                 var position = entity.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
-                if (capacity == 0 || !hint.GetProperty("canInsertOne").GetBoolean() || position.DistanceTo(at) > MaximumDistance) continue;
+                if (capacity == 0 || !hint.GetProperty("canInsertOne").GetBoolean() || position.DistanceTo(at) > maximumDistance) continue;
                 result.Add(new(id, position, item, checked((int)Math.Min(1000, Math.Min(surplus, capacity)))));
             }
         }

@@ -17,18 +17,29 @@ internal sealed class CraftInventoryController(IGameClient game, IControllerJour
     }
 
     internal Task<bool> PrepareCollectionAsync(string item, long quantity, ProductionCatalog catalog,
-        SpatialController controller, CancellationToken token)
+        SpatialController controller, CancellationToken token) =>
+        PrepareIncomingAsync(item, quantity, catalog, controller, token, mining: false);
+
+    internal Task<bool> PrepareMiningAsync(string item, long quantity, ProductionCatalog catalog,
+        SpatialController controller, CancellationToken token) =>
+        PrepareIncomingAsync(item, quantity, catalog, controller, token, mining: true);
+
+    private Task<bool> PrepareIncomingAsync(string item, long quantity, ProductionCatalog catalog,
+        SpatialController controller, CancellationToken token, bool mining)
     {
         if (ProductionReservations.Factory is null) return Task.FromResult(false);
         if (string.IsNullOrWhiteSpace(item) || !catalog.Items.ContainsKey(item) || quantity is < 1 or > 1000)
             throw new InvalidDataException("Collection capacity requires a known item and a bounded quantity.");
-        return PrepareRoomAsync(new Dictionary<string, long>(StringComparer.Ordinal) { [item] = quantity },
+        // A native tree or rock may yield more than the requested bootstrap item.
+        long incoming = mining ? Math.Max(quantity, catalog.Items[item].StackSize) : quantity;
+        return PrepareRoomAsync(new Dictionary<string, long>(StringComparer.Ordinal) { [item] = incoming },
             new Dictionary<string, int>(CarriedStock.RetainedStock, StringComparer.Ordinal), null, item,
-            catalog, controller, token);
+            catalog, controller, token, mining);
     }
 
     private async Task<bool> PrepareRoomAsync(IReadOnlyDictionary<string, long> incoming, Dictionary<string, int> retained,
-        string? recipe, string? collectionItem, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
+        string? recipe, string? collectionItem, ProductionCatalog catalog, SpatialController controller, CancellationToken token,
+        bool mining = false)
     {
         var factory = ProductionReservations.Factory;
         if (factory is null) return false; // Standalone production has no registered storage to deposit into.
@@ -36,7 +47,8 @@ internal sealed class CraftInventoryController(IGameClient game, IControllerJour
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromMinutes(3));
         token = deadline.Token;
-        string purpose = collectionItem is null ? "craft" : "stock-collection";
+        string purpose = mining ? "mining" : collectionItem is null ? "craft" : "stock-collection";
+        double storageDistance = mining ? ResourceEquipmentReuse.MaximumStorageDistance : ResourceEquipmentReuse.MaximumDistance;
         var reader = new FactorySnapshotClient(game);
         long latestTick = 0;
         var snapshot = await CaptureAsync(incoming.Keys.ToArray());
@@ -55,7 +67,7 @@ internal sealed class CraftInventoryController(IGameClient game, IControllerJour
                 item => catalog.Items.TryGetValue(item, out var native) ? native.StackSize : 1))
             {
                 snapshot = await CaptureAsync(incoming.Keys.Append(item).Distinct(StringComparer.Ordinal).ToArray());
-                home = ResourceEquipmentReuse.DepositOptions(factory, snapshot, catalog, retained)
+                home = ResourceEquipmentReuse.DepositOptions(factory, snapshot, catalog, retained, storageDistance)
                     .FirstOrDefault(p => p.Item == item && !blocked.Contains((p.EntityId, p.Item)));
                 if (home is not null) break;
             }
@@ -69,7 +81,7 @@ internal sealed class CraftInventoryController(IGameClient game, IControllerJour
             changed = true;
             snapshot = await CaptureAsync(incoming.Keys.Append(home.Item).Distinct(StringComparer.Ordinal).ToArray());
             if (FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, incoming)) return changed;
-            var refreshed = ResourceEquipmentReuse.DepositOptions(factory, snapshot, catalog, retained)
+            var refreshed = ResourceEquipmentReuse.DepositOptions(factory, snapshot, catalog, retained, storageDistance)
                 .FirstOrDefault(p => p.EntityId == home.EntityId && p.Item == home.Item);
             if (refreshed is null) { blocked.Add((home.EntityId, home.Item)); continue; }
             var receipt = await controller.WorkAsync("insert", new { entityId = refreshed.EntityId, inventory = "chest",

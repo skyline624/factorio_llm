@@ -143,6 +143,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                         throw new InvalidOperationException($"Machine construction ended with {built.Status}: {built.Error?.Code}. Reconcile before replanning.");
                     break;
                 case "mine":
+                    if (await new CraftInventoryController(game, journal).PrepareMiningAsync(step.Item, step.Quantity, catalog, controller, deadline.Token))
+                        continue; // A storage visit changed the actor position and stock: select the native source again.
                     await TravelAsync(step.Source!.Position, MiningDistance(step.Source, map), catalog);
                     await ActAsync("mine", new { name = step.Source.Name, position = step.Source.Position, count = step.Quantity }, 36000);
                     break;

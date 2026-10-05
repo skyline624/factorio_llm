@@ -123,10 +123,55 @@ public sealed class CraftInventoryTests
         Assert.Equal(["factory_snapshot"], game.Actions);
     }
 
-    private sealed class CapacityGame(bool room, bool changedScope = false) : IGameClient
+    [Fact]
+    public async Task AMiningBootstrapWithNativeRoomDoesNotVisitStorage()
+    {
+        var game = new CapacityGame(room: true, probeItem: "wood", probeCapacity: 100);
+        var journal = new Journal();
+        using var factory = ProductionReservations.EnterFactory(new(1, game.Catalog.Scope.WorldId, [], []));
+        await using var controller = new SpatialController(game, journal);
+        Assert.False(await new CraftInventoryController(game, journal).PrepareMiningAsync("wood", 1, game.Catalog, controller, default));
+        Assert.Equal(["factory_snapshot"], game.Actions);
+        Assert.Empty(journal.Types);
+    }
+
+    [Fact]
+    public async Task MiningOneRequestedItemStillNeedsRoomForANativeTreeYield()
+    {
+        var game = new CapacityGame(room: true, probeItem: "wood", probeCapacity: 1);
+        var journal = new Journal();
+        using var factory = ProductionReservations.EnterFactory(new(1, game.Catalog.Scope.WorldId, [], []));
+        await using var controller = new SpatialController(game, journal);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new CraftInventoryController(game, journal)
+            .PrepareMiningAsync("wood", 1, game.Catalog, controller, default));
+        Assert.All(game.Actions, action => Assert.Equal("factory_snapshot", action));
+        Assert.Equal(["mining-inventory-room-unavailable"], journal.Types);
+    }
+
+    [Fact]
+    public async Task AChangedActorCannotAuthorizeMiningCapacity()
+    {
+        var game = new CapacityGame(room: true, changedScope: true, probeItem: "wood", probeCapacity: 100);
+        using var factory = ProductionReservations.EnterFactory(new(1, game.Catalog.Scope.WorldId, [], []));
+        await using var controller = new SpatialController(game, new Journal());
+        await Assert.ThrowsAsync<InvalidDataException>(() => new CraftInventoryController(game, new Journal())
+            .PrepareMiningAsync("wood", 1, game.Catalog, controller, default));
+        Assert.Equal(["factory_snapshot"], game.Actions);
+    }
+
+    [Fact]
+    public async Task StandaloneMiningKeepsItsNativeCapacityChecks()
+    {
+        var game = new CapacityGame(room: true, probeItem: "wood", probeCapacity: 100);
+        await using var controller = new SpatialController(game, new Journal());
+        Assert.False(await new CraftInventoryController(game, new Journal()).PrepareMiningAsync("wood", 1, game.Catalog, controller, default));
+        Assert.Empty(game.Actions);
+    }
+
+    private sealed class CapacityGame(bool room, bool changedScope = false, string probeItem = "underground-belt", int probeCapacity = 50) : IGameClient
     {
         public ProductionCatalog Catalog { get; } = Catalogs.Raw() with
-        { Items = new Dictionary<string, NativeItem>(Catalogs.Raw().Items) { ["underground-belt"] = new(0, 50) } };
+        { Items = new Dictionary<string, NativeItem>(Catalogs.Raw().Items) { ["underground-belt"] = new(0, 50), ["wood"] = new(0, 100) } };
         public List<string> Actions { get; } = [];
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
@@ -141,8 +186,8 @@ public sealed class CraftInventoryTests
                     items = room ? new Dictionary<string, long>() : new Dictionary<string, long> { ["iron-plate"] = 100 },
                     slots = 1, usableSlots = 1, filters = new { },
                     stacks = room ? [] : new[] { new { slot = 1, name = "iron-plate", quality = "normal", count = 100 } },
-                    capacityHints = new Dictionary<string, object> { ["underground-belt"] = new
-                    { insertable = room ? 50 : 0, canInsertOne = room, certainty = "native-estimate" } }
+                    capacityHints = new Dictionary<string, object> { [probeItem] = new
+                    { insertable = room ? probeCapacity : 0, canInsertOne = room, certainty = "native-estimate" } }
                 }))
             };
             return Task.FromResult(new GameResponse(1, request.RequestId, true, 100, Protocol.ToElement(new
