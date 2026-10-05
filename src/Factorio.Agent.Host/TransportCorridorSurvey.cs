@@ -7,13 +7,13 @@ namespace Factorio.Agent.Host;
 internal sealed class TransportCorridorSurvey(IGameClient game, IControllerJournal journal)
 {
     internal const int MaximumSpan = 1024;
-    internal const int Step = 48;
+    internal const int Step = 28;
     internal const int MaximumSamples = 32;
     internal const int MaximumBelts = 1000;
 
     internal static bool CanSurvey(FactorySnapshot snapshot, IReadOnlyList<string> required)
     {
-        if (required.Count < 2) return false;
+        if (required.Distinct(StringComparer.Ordinal).Count() < 2) return false;
         var positions = required.Distinct(StringComparer.Ordinal).Select(id => FactoryTransportBuilder.Position(snapshot, id)).ToArray();
         if (positions.Any(p => p is null || !double.IsFinite(p.X) || !double.IsFinite(p.Y))) return false;
         double width = positions.Max(p => p!.X) - positions.Min(p => p!.X);
@@ -34,13 +34,24 @@ internal sealed class TransportCorridorSurvey(IGameClient game, IControllerJourn
         var atlas = new SurveyedTransportFrame();
         var spatial = new SpatialClient(game);
         await controller.ApproachEntityAsync(required[0], source, catalog, token);
-        await ReadAsync();
-        int segments = Math.Max(1, (int)Math.Ceiling(source.DistanceTo(target) / Step));
-        for (int i = 1; i < segments; i++)
+        var observed = await ReadAsync();
+        var exploration = new ExplorationPlanner();
+        if (observed.Actor.Position.DistanceTo(target) > 24)
+            await new SurvivalKitController(game, journal).BeforeTripAsync("transport-survey", token);
+        while (observed.Actor.Position.DistanceTo(target) > 24)
         {
-            var waypoint = new MapPosition(source.X + (target.X - source.X) * i / segments, source.Y + (target.Y - source.Y) * i / segments);
-            await controller.TravelAsync(waypoint, 8, catalog, token);
-            await ReadAsync();
+            if (atlas.Samples >= MaximumSamples - 1)
+            {
+                await journal.AppendAsync("factory-transport-corridor-limited", new { observed.Scope, observed.CollectedTick,
+                    samples = atlas.Samples, maximumSamples = MaximumSamples, observed.Actor.Position, target,
+                    reason = "sample-budget", completeEndpoints = false }, token);
+                return null;
+            }
+            // A straight interpolated point can lie in a lake. Use the same observed, reachable local
+            // steps as ordinary travel, and photograph each completed step rather than its intended line.
+            var next = await controller.FindExplorationWaypointAsync(exploration, catalog, "", target, token);
+            await controller.NavigateAsync(next.Position, cancellationToken: token);
+            observed = await ReadAsync();
         }
         await controller.ApproachEntityAsync(required[1], target, catalog, token);
         await ReadAsync();
@@ -54,11 +65,12 @@ internal sealed class TransportCorridorSurvey(IGameClient game, IControllerJourn
         }, token);
         return completeEndpoints ? map : null;
 
-        async Task ReadAsync()
+        async Task<SpatialSnapshot> ReadAsync()
         {
             var observed = await spatial.CaptureAsync(items, 48, token);
             if (observed.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during transport survey.");
             atlas.Add(observed);
+            return observed;
         }
     }
 }
