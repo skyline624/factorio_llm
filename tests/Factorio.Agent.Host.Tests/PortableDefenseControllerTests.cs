@@ -9,6 +9,17 @@ namespace Factorio.Agent.Host.Tests;
 [Collection("Retreat progress")]
 public sealed class PortableDefenseControllerTests : IDisposable
 {
+    [Fact]
+    public async Task ARemotePackFromCorpseInspectionCannotSpendCarriedTurrets()
+    {
+        var game = new Game { EnemyDistance = 50 };
+        var result = await new DefenseController(game, new Journal(), registry: new FactoryRegistry(directory)).StepAsync();
+        Assert.Equal("observing", result.State);
+        Assert.Empty(game.Submissions);
+        Assert.DoesNotContain("spatial", game.Calls);
+        Assert.DoesNotContain("production_catalog", game.Calls);
+    }
+
     private readonly string directory = Path.Combine(Path.GetTempPath(), "portable-defense-" + Guid.NewGuid().ToString("N"));
     public PortableDefenseControllerTests() => Directory.CreateDirectory(directory);
 
@@ -345,6 +356,7 @@ public sealed class PortableDefenseControllerTests : IDisposable
         public string RefusalEvidence { get; init; } = "empty";
         public bool SupportsMovingFire { get; init; }
         public string? EnemyType { get; init; } = "unit";
+        public double EnemyDistance { get; init; } = 12;
         public double Health { get; init; } = 250;
         private readonly List<(string Id, MapPosition Position, long Rounds)> turrets = [];
         private bool responseLost;
@@ -382,7 +394,7 @@ public sealed class PortableDefenseControllerTests : IDisposable
                     enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility", enemiesTruncated = false,
                     movementFire = SupportsMovingFire ? "native-walking-and-shooting" : null },
                 ["agent"] = agent, ["enemies"] = Enumerable.Range(0, 3).Select(i => new
-                    { id = "biter-" + i, type = EnemyType, position = new MapPosition(12 + i, i), collectedTick = 100L }).ToArray(),
+                    { id = "biter-" + i, type = EnemyType, position = new MapPosition(EnemyDistance + i, i), collectedTick = 100L }).ToArray(),
                 ["defenses"] = turrets.Where(t => t.Rounds > 0).Select(t => new DefensiveRefuge(t.Id, t.Position, 18, t.Rounds, 100)).ToArray() };
             if (Active is { } active) frame["operation"] = active;
             return frame;

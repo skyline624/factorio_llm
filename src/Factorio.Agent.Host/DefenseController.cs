@@ -8,6 +8,7 @@ namespace Factorio.Agent.Host;
 public sealed class DefenseController(IGameClient game, IControllerJournal journal, ReflexEventLog? reflexes = null,
     FactoryRegistry? registry = null)
 {
+    internal const int ImmediateThreatRadius = 32;
     private readonly OperationClient operations = new(game);
     private readonly ReflexEventLog fights = reflexes ?? ReflexEventLog.Shared;
     private readonly PortableDefenseDeployment portable = new(game, journal,
@@ -55,9 +56,15 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
             return new("reconciled", reconciled.UpdatedTick, reconciled.OperationId);
         }
         SafetyObservation observation = SafetyObservation.Parse(
-            observed ?? await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 32, limit = 200 }), token));
+            observed ?? await game.ExecuteAsync(GameRequest.Create("observe", new { radius = ImmediateThreatRadius, limit = 200 }), token));
         if (observation.Tick < lastTick) throw new SessionDivergenceException("The safety observation tick regressed.");
         lastTick = observation.Tick;
+        // Recovery inspects corpse guards up to64tiles away. That complete native frame must not enlarge the
+        // ordinary immediate-defense horizon and spend turrets or reposition forever beside distant packs.
+        // Validate the full frame first; the caller retains its original enemies for guards and route avoidance.
+        if (observation.Position is { } position)
+            observation = observation with { Enemies = observation.Enemies
+                .Where(e => position.DistanceTo(e.Position) <= ImmediateThreatRadius).ToArray() };
         if (observation.Operation is { IsTerminal: true } finished && finished.OperationId == ownedOperation)
         {
             await journal.AppendAsync("receipt", finished, token);

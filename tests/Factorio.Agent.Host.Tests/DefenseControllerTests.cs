@@ -10,6 +10,37 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class DefenseControllerTests
 {
     [Theory]
+    [InlineData(40)]
+    [InlineData(50)]
+    public async Task AHealthyActorDoesNotSeekCoverFromEnemiesOnlyInABroadInspection(double distance)
+    {
+        var game = new GameStub { EnemyCount = 3, Distance = distance, Defenses = Refuge() };
+        var result = await new DefenseController(game, new JournalStub(), new ReflexEventLog()).StepAsync();
+        Assert.Equal("observing", result.State);
+        Assert.Null(game.Submission);
+        Assert.DoesNotContain("spatial", game.Calls);
+    }
+
+    [Fact]
+    public async Task DistantInspectionEnemiesDoNotTurnOneImmediateTargetIntoAnOutnumberedRetreat()
+    {
+        var game = new GameStub { EnemyCount = 3, Defenses = Refuge(),
+            EnemyPositions = [new(4,0),new(40,0),new(42,0)] };
+        await new DefenseController(game, new JournalStub(), new ReflexEventLog()).StepAsync();
+        Assert.Equal("shoot", game.Submission?.Kind);
+        Assert.Equal("near", game.Submission!.Args.GetProperty("entityId").GetString());
+    }
+
+    [Fact]
+    public async Task AVisiblePackAtTheOrdinaryObservationBoundaryStillSeeksCover()
+    {
+        var game = new GameStub { EnemyCount = 3, Defenses = Refuge(),
+            EnemyPositions = [new(32,0),new(31,1),new(31,-1)] };
+        await new DefenseController(game, new JournalStub(), new ReflexEventLog()).StepAsync();
+        Assert.Equal("move", game.Submission?.Kind);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task CriticalActorSeeksSeparationWithoutATurret(bool armed)
@@ -471,6 +502,7 @@ public sealed class DefenseControllerTests
         public bool Armed { get; init; } = true;
         public double Health { get; set; } = 250;
         public int EnemyCount { get; set; } = 1;
+        public IReadOnlyList<MapPosition>? EnemyPositions { get; init; }
         public object? Defenses { get; set; }
         public bool StaleSpatial { get; init; }
         public MapPosition SpatialPosition { get; set; } = new(0, 0);
@@ -507,7 +539,7 @@ public sealed class DefenseControllerTests
                             position = new MapPosition(0, 0), health = Health, maxHealth = 250, weapon = new { ready = Armed, rounds = Armed ? 100 : 0, range = 15 }, loadout = Loadout },
                         ["defenses"] = Defenses ?? new { },
                         ["enemies"] = EnemiesEmptyObject ? new { } : (object)Enumerable.Range(0, EnemyCount).Select(i =>
-                            new { id = i == 0 ? "near" : $"near-{i}", position = new MapPosition(Distance + i, 0), collectedTick = ObservationTick }).ToArray()
+                            new { id = i == 0 ? "near" : $"near-{i}", position = EnemyPositions?[i] ?? new MapPosition(Distance + i, 0), collectedTick = ObservationTick }).ToArray()
                     };
                     if (Active is not null) observed["operation"] = Active.Value;
                     data = observed;
