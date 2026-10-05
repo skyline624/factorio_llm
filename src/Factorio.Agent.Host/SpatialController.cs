@@ -583,9 +583,12 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         }
     }
 
-    private async Task<DefenseStep> DefenseStepAsync(CancellationToken token)
+    /// <summary>Arbitrates the already validated normal recovery view before inventory and destination reads.</summary>
+    internal Task<DefenseStep> DefendAsync(GameResponse observed, CancellationToken token) => DefenseStepAsync(token, observed);
+
+    private async Task<DefenseStep> DefenseStepAsync(CancellationToken token, GameResponse? observed = null)
     {
-        try { return await defense.StepAsync(token); }
+        try { return await defense.StepAsync(token, observed); }
         catch (OperationOutcomeUnknownException error)
         {
             await journal.AppendAsync("defense-outcome-unknown", new { error.OperationId, error.Message }, token);

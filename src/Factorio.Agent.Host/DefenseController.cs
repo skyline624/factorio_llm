@@ -15,7 +15,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
     private bool ownedStopRequested;
     private long lastTick = -1;
 
-    public async Task<DefenseStep> StepAsync(CancellationToken token = default)
+    public async Task<DefenseStep> StepAsync(CancellationToken token = default, GameResponse? observed = null)
     {
         if (uncertainOperation is not null)
         {
@@ -27,7 +27,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
             return new("reconciled", reconciled.UpdatedTick, reconciled.OperationId);
         }
         SafetyObservation observation = SafetyObservation.Parse(
-            await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 32, limit = 200 }), token));
+            observed ?? await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 32, limit = 200 }), token));
         if (observation.Tick < lastTick) throw new SessionDivergenceException("The safety observation tick regressed.");
         lastTick = observation.Tick;
         if (observation.Operation is { IsTerminal: true } finished && finished.OperationId == ownedOperation)

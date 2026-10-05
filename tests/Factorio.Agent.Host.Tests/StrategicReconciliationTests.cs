@@ -628,6 +628,9 @@ public sealed class StrategicReconciliationTests : IDisposable
             return Task.FromResult(new GameResponse(1, request.RequestId, true, 40000 + Calls.Count, Protocol.ToElement(new
             {
                 scope = current, collectedTick = 40000 + Calls.Count,
+                coverage = new { atomic = true, collectionStartTick = 40000 + Calls.Count, collectionEndTick = 40000 + Calls.Count,
+                    radius = 32, enemiesTruncated = false, enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
+                enemies = Array.Empty<object>(),
                 recovery = new { knownCorpsesComplete = true,
                     corpses = new[] { new { id = $"corpse:{NativeIncarnation + 15}:{LastDeathTick}:1", incarnation = NativeIncarnation - 1,
                         deathTick = LastDeathTick, actorUnitNumber = NativeIncarnation + 15, surfaceIndex = 1, position = new MapPosition(12, 8),
@@ -636,6 +639,8 @@ public sealed class StrategicReconciliationTests : IDisposable
                     { incarnation = NativeIncarnation - 1, tick = LastDeathTick, unitNumber = NativeIncarnation + 15,
                         surfaceIndex = 1, position = new MapPosition(12, 8) } },
                 agent = new { alive, controlMode = "ai", stopUnconfirmed = false,
+                    position = new MapPosition(0, 0), health = alive ? 250 : 0,
+                    weapon = new { ready = true, rounds = 100, range = 15 },
                     walking = Failure == "moving", mining = false, shooting = false, craftingQueueSize = Failure == "queue" ? 1 : 0,
                     inventory = new Dictionary<string, int> { ["automation-science-pack"] = 119 } },
                 operation = Failure is "absent" or "evicted" ? (object?)null : Receipt(), goal = new { rocketsLaunched = 0 }

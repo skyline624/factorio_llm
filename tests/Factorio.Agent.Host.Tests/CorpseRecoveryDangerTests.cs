@@ -10,6 +10,54 @@ public sealed class CorpseRecoveryDangerTests
     private static readonly ActorScope Scope = new("world", "session", "actor", 2, 4);
     private static readonly NativeDeathTransition Death = new(1, 49000, 17, 1, new(20, 0));
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnemyBesideTheActorIsDefendedBeforeReadingDeathZonesOrSelectingACorpse(bool lostReply)
+    {
+        // Seed 20261072: recovery observed enemies one tile away but began its inventory reads before defending.
+        var game = new Game { Tick = Death.DeathTick + DangerZones.LifetimeTicks, AllowDefense = true,
+            LoseDefenseReply = lostReply, Enemies = [("unit", new(1, 0)), ("unit-spawner", new(24, 0))] };
+        var journal = new Journal();
+        var result = await new CorpseRecoveryController(game, journal).RunAsync(Death, Scope, default);
+
+        Assert.Equal("unsafe-corpses-deferred", result.Outcome);
+        Assert.Empty(result.Collected);
+        Assert.Equal(40, result.Remaining["iron-plate"]);
+        Assert.Equal(1, game.Submissions);
+        Assert.Equal([1], game.SubmissionsAtDeathReads);
+        Assert.Equal(["observe", "submit"], game.Calls.Take(2));
+        Assert.DoesNotContain("production_catalog", game.Calls);
+        Assert.All(game.ObservedRadii, radius => Assert.Equal(CorpseRecoveryController.InspectionRadius, radius));
+        Assert.NotEmpty(journal.All("corpse-recovery-defense"));
+        if (lostReply) Assert.Contains("operation", game.Calls);
+    }
+
+    [Fact]
+    public async Task AChangedIncarnationAfterInitialDefenseCannotReceiveAnotherRecoveryIntent()
+    {
+        var game = new Game { AllowDefense = true, ChangeScopeAfterDefense = true, Enemies = [("unit", new(1, 0))] };
+        await Assert.ThrowsAsync<InvalidDataException>(() => new CorpseRecoveryController(game, new Journal()).RunAsync(Death, Scope, default));
+        Assert.Equal(1, game.Submissions);
+        Assert.Empty(game.SubmissionsAtDeathReads);
+        Assert.DoesNotContain("production_catalog", game.Calls);
+    }
+
+    [Fact]
+    public async Task ADeferredRecoveryStillProtectsTheActorWithoutCollectingTheUnsafeBody()
+    {
+        var game = new Game { AllowDefense = true, Enemies = [("unit", new(1, 0))] };
+        var result = await CorpseRecoveryController.DeferAsync(game, new Journal(), Death, Scope, 49000, default);
+        Assert.Equal("unsafe-corpses-deferred", result.Outcome);
+        Assert.Null(result.RetryTick);
+        Assert.Empty(result.Collected);
+        Assert.Equal(40, result.Remaining["iron-plate"]);
+        Assert.Equal(1, game.Submissions);
+        Assert.Equal(["observe", "submit", "observe"], game.Calls);
+        Assert.All(game.ObservedRadii, radius => Assert.Equal(32, radius));
+        Assert.Empty(game.SubmissionsAtDeathReads);
+    }
+
     [Fact]
     public async Task FreshDeathZoneWithAVisibleBiterDefersWithoutApproaching()
     {
@@ -242,6 +290,9 @@ public sealed class CorpseRecoveryDangerTests
         public bool EnemiesTruncated { get; init; }
         public bool LimitEnemiesToRequestedRadius { get; init; }
         public bool AllowTravel { get; init; }
+        public bool AllowDefense { get; init; }
+        public bool LoseDefenseReply { get; init; }
+        public bool ChangeScopeAfterDefense { get; init; }
         public bool LoseCancellation { get; init; }
         public bool CompleteMove { get; init; }
         public bool ChangeScopeDuringMove { get; init; }
@@ -256,9 +307,14 @@ public sealed class CorpseRecoveryDangerTests
         public ActorScope ObservedScope { get; init; } = Scope;
         public List<string> Calls { get; } = [];
         public List<int> ObservedRadii { get; } = [];
+        public List<int> SubmissionsAtDeathReads { get; } = [];
 
         public Task<IReadOnlyList<NativeDeathTransition>> ReadActiveDeathsAsync(ActorScope scope, int surfaceIndex, long tick,
-            CancellationToken token = default) => Task.FromResult(Zones.Active(surfaceIndex, tick));
+            CancellationToken token = default)
+        {
+            SubmissionsAtDeathReads.Add(Submissions);
+            return Task.FromResult(Zones.Active(surfaceIndex, tick));
+        }
 
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
@@ -266,6 +322,23 @@ public sealed class CorpseRecoveryDangerTests
             // Travel starts by reading the production catalog: stop there, the approach decision is made.
             long tick = ++Tick;
             var actor = Cancellations > 0 ? ActorAfterCancellation ?? Actor : Actor;
+            if (AllowDefense && request.Action is "submit" or "operation")
+            {
+                if (request.Action == "submit")
+                {
+                    Assert.Equal("shoot", request.Arguments.GetProperty("kind").GetString());
+                    Assert.Equal("enemy-0", request.Arguments.GetProperty("args").GetProperty("entityId").GetString());
+                    operationId = request.Arguments.GetProperty("operationId").GetString();
+                    Submissions++;
+                    if (LoseDefenseReply) throw new IOException("Shoot applied but response lost.");
+                }
+                else Assert.Equal(operationId, request.Arguments.GetProperty("operationId").GetString());
+                return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(new
+                {
+                    operationId, kind = "shoot", status = "completed", acceptedTick = tick, updatedTick = tick,
+                    effects = new { roundsConsumed = 3 }
+                })));
+            }
             if (AllowTravel && request.Action != "observe")
             {
                 var map = SpatialPlannerTests.Map([]) with
@@ -302,12 +375,13 @@ public sealed class CorpseRecoveryDangerTests
             ObservedRadii.Add(radius);
             return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(new
             {
-                scope = ChangeScopeDuringMove && operationId is not null ? ObservedScope with { Incarnation = ObservedScope.Incarnation + 1 } : ObservedScope, collectedTick = tick,
+                scope = (ChangeScopeDuringMove || ChangeScopeAfterDefense) && operationId is not null ? ObservedScope with { Incarnation = ObservedScope.Incarnation + 1 } : ObservedScope, collectedTick = tick,
                 coverage = new { atomic = true, collectionStartTick = tick, collectionEndTick = tick, radius, enemiesTruncated = EnemiesTruncated,
                     enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
                 agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = actor, health = 250.0,
                     weapon = new { ready = true, rounds = 100, range = 15.0 }, inventory = new { }, reachDistance = 10.0 },
                 enemies = Enemies.Where(e => (!AllowTravel || operationId is not null) && !(HideEnemiesAfterCancellation && Cancellations > 0)
+                    && !(AllowDefense && Submissions > 0 && e.Position.DistanceTo(Actor) <= 15)
                     && (!LimitEnemiesToRequestedRadius || e.Position.DistanceTo(actor) <= radius))
                     .Select((e, index) => new { id = $"enemy-{index}", type = e.Type, position = e.Position, collectedTick = tick }),
                 recovery = new

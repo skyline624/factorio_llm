@@ -59,6 +59,19 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             var corpses = ReadObservedCorpses(response, death, scope, lastTick);
             var industry = Industry(data);
             lastTick = response.Tick;
+            var holding = corpses.Where(c => c.Items.Values.Any(n => n > 0)).ToArray();
+            // Remember positive guard evidence even when defense moves the actor outside this view.
+            var guardedIds = GuardedCorpses(response, holding.ToDictionary(c => c.Id, c => c.Position, StringComparer.Ordinal),
+                rememberedGuards, scope, response.Tick);
+            var reflex = await controller.DefendAsync(response, token);
+            if (reflex.State != "observing")
+            {
+                // Defense may consume ammunition, move or equip: no stock or corpse choice uses the old frame.
+                await journal.AppendAsync("corpse-recovery-defense", new { scope, response.Tick, reflex }, token);
+                step--; // Fighting does not consume the transfer budget; the wall-clock deadline still bounds it.
+                await Task.Delay(150, token);
+                continue;
+            }
             if (step == 0)
             {
                 zones = game is IDangerZoneReader reader
@@ -75,15 +88,12 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             // A corpse in a recent death zone, or behind one on the straight way, waits unless this attempt saw the zone free.
             NativeDeathTransition[] Blocking(Corpse corpse) => zones.Where(z => verdicts.GetValueOrDefault(z) != "clear"
                 && (DangerZones.Covers(z, corpse.Position) || DangerZones.Crosses(z, position, corpse.Position))).ToArray();
-            var holding = corpses.Where(c => c.Items.Values.Any(n => n > 0)).ToArray();
             foreach (var zone in holding.SelectMany(Blocking).Distinct().Where(z => !verdicts.ContainsKey(z)).ToArray())
                 verdicts[zone] = await InspectAsync(zone, position, scope, lastTick, token);
             var blocked = holding.Where(c => Blocking(c).Length > 0).ToArray();
             var distant = holding.Except(blocked).Where(c => !NearIndustry(industry, c.Position)).ToArray();
             // Expiry removes a historical death warning; it does not remove enemies still observed around the body.
             var mobile = VisibleMobileThreats(response);
-            var guardedIds = GuardedCorpses(response, holding.ToDictionary(c => c.Id, c => c.Position, StringComparer.Ordinal),
-                rememberedGuards, scope, response.Tick);
             var guarded = holding.Except(blocked).Except(distant)
                 .Where(c => guardedIds.Contains(c.Id)).ToArray();
             var visibleGuarded = guarded.Where(c => mobile.Any(e => e.Position.DistanceTo(c.Position) <= DangerZones.Radius)).ToArray();
@@ -240,8 +250,22 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
     internal static async Task<CorpseRecoveryResult> DeferAsync(IGameClient game, IControllerJournal journal,
         NativeDeathTransition death, ActorScope scope, long earliestTick, CancellationToken token)
     {
-        var response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 32, limit = 200 }), token);
-        var corpses = ReadObservedCorpses(response, death, scope, earliestTick);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromMinutes(2));
+        token = deadline.Token;
+        await using var controller = new SpatialController(game, journal);
+        GameResponse response;
+        IReadOnlyList<Corpse> corpses;
+        while (true)
+        {
+            response = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 32, limit = 200 }), token);
+            corpses = ReadObservedCorpses(response, death, scope, earliestTick);
+            earliestTick = response.Tick;
+            var reflex = await controller.DefendAsync(response, token);
+            if (reflex.State == "observing") break;
+            await journal.AppendAsync("corpse-recovery-defense", new { scope, response.Tick, reflex }, token);
+            await Task.Delay(150, token);
+        }
         var remaining = corpses.SelectMany(c => c.Items).GroupBy(p => p.Key, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => checked(g.Sum(p => p.Value)), StringComparer.Ordinal);
         var result = new CorpseRecoveryResult(response.Tick, "unsafe-corpses-deferred",
