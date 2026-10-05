@@ -205,6 +205,22 @@ public sealed class CorpseRecoveryDangerTests
         Assert.Empty(journal.All("corpse-recovery-result"));
     }
 
+    [Fact]
+    public async Task AStoppedGuardedApproachIsNotRetriedWhenTheActorLosesSightOfTheGuard()
+    {
+        var game = new Game { AllowTravel = true, Tick = 120000, Enemies = [("unit", new(24, 0))],
+            HideEnemiesAfterCancellation = true, ActorAfterCancellation = new(-50, 0) };
+        var journal = new Journal();
+        var result = await new CorpseRecoveryController(game, journal).RunAsync(Death, Scope, default);
+        Assert.Equal("unsafe-corpses-deferred", result.Outcome);
+        Assert.Equal(1, game.Submissions);
+        Assert.Equal(1, game.Cancellations);
+        Assert.Equal(40, result.Remaining["iron-plate"]);
+        Assert.Empty(result.Collected);
+        Assert.Single(journal.All("corpse-recovery-remembered-threats"));
+        Assert.DoesNotContain("factory_snapshot", game.Calls);
+    }
+
     private sealed class Journal : IControllerJournal
     {
         private readonly List<(string Type, JsonElement Data)> rows = [];
@@ -229,6 +245,8 @@ public sealed class CorpseRecoveryDangerTests
         public bool LoseCancellation { get; init; }
         public bool CompleteMove { get; init; }
         public bool ChangeScopeDuringMove { get; init; }
+        public bool HideEnemiesAfterCancellation { get; init; }
+        public MapPosition? ActorAfterCancellation { get; init; }
         private string? operationId;
         private string operationStatus = "running";
         public int Submissions { get; private set; }
@@ -247,6 +265,7 @@ public sealed class CorpseRecoveryDangerTests
             Calls.Add(request.Action);
             // Travel starts by reading the production catalog: stop there, the approach decision is made.
             long tick = ++Tick;
+            var actor = Cancellations > 0 ? ActorAfterCancellation ?? Actor : Actor;
             if (AllowTravel && request.Action != "observe")
             {
                 var map = SpatialPlannerTests.Map([]) with
@@ -286,9 +305,10 @@ public sealed class CorpseRecoveryDangerTests
                 scope = ChangeScopeDuringMove && operationId is not null ? ObservedScope with { Incarnation = ObservedScope.Incarnation + 1 } : ObservedScope, collectedTick = tick,
                 coverage = new { atomic = true, collectionStartTick = tick, collectionEndTick = tick, radius, enemiesTruncated = EnemiesTruncated,
                     enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
-                agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = Actor, health = 250.0,
+                agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = actor, health = 250.0,
                     weapon = new { ready = true, rounds = 100, range = 15.0 }, inventory = new { }, reachDistance = 10.0 },
-                enemies = Enemies.Where(e => (!AllowTravel || operationId is not null) && (!LimitEnemiesToRequestedRadius || e.Position.DistanceTo(Actor) <= radius))
+                enemies = Enemies.Where(e => (!AllowTravel || operationId is not null) && !(HideEnemiesAfterCancellation && Cancellations > 0)
+                    && (!LimitEnemiesToRequestedRadius || e.Position.DistanceTo(actor) <= radius))
                     .Select((e, index) => new { id = $"enemy-{index}", type = e.Type, position = e.Position, collectedTick = tick }),
                 recovery = new
                 {

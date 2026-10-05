@@ -47,6 +47,7 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
         var unavailable = new HashSet<(string Corpse, string Item)>();
         // Verdicts of this attempt only: a later attempt observes the zones again.
         var verdicts = new Dictionary<NativeDeathTransition, string>();
+        var rememberedGuards = new HashSet<string>(StringComparer.Ordinal);
         IReadOnlyList<NativeDeathTransition> zones = [];
         long lastTick = death.DeathTick;
         for (int step = 0; step < 256; step++)
@@ -81,14 +82,24 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             var distant = holding.Except(blocked).Where(c => !NearIndustry(industry, c.Position)).ToArray();
             // Expiry removes a historical death warning; it does not remove enemies still observed around the body.
             var mobile = VisibleMobileThreats(response);
+            var guardedIds = GuardedCorpses(response, holding.ToDictionary(c => c.Id, c => c.Position, StringComparer.Ordinal),
+                rememberedGuards, scope, response.Tick);
             var guarded = holding.Except(blocked).Except(distant)
-                .Where(c => mobile.Any(e => e.Position.DistanceTo(c.Position) <= DangerZones.Radius)).ToArray();
-            if (guarded.Length > 0)
+                .Where(c => guardedIds.Contains(c.Id)).ToArray();
+            var visibleGuarded = guarded.Where(c => mobile.Any(e => e.Position.DistanceTo(c.Position) <= DangerZones.Radius)).ToArray();
+            if (visibleGuarded.Length > 0)
                 await journal.AppendAsync("corpse-recovery-visible-threats", new
                 {
                     response.Tick, radius = DangerZones.Radius,
-                    corpses = guarded.Select(c => new { c.Id, c.Position }),
-                    visibleEnemies = mobile.Where(e => guarded.Any(c => e.Position.DistanceTo(c.Position) <= DangerZones.Radius))
+                    corpses = visibleGuarded.Select(c => new { c.Id, c.Position }),
+                    visibleEnemies = mobile.Where(e => visibleGuarded.Any(c => e.Position.DistanceTo(c.Position) <= DangerZones.Radius))
+                }, token);
+            if (guarded.Except(visibleGuarded).Any())
+                await journal.AppendAsync("corpse-recovery-remembered-threats", new
+                {
+                    response.Tick, radius = DangerZones.Radius, observer = position,
+                    corpses = guarded.Except(visibleGuarded).Select(c => new { c.Id, c.Position }),
+                    interpretation = "A guard was observed during this attempt; the current view does not prove the whole corpse zone clear. No current enemy position is inferred."
                 }, token);
             var selected = corpses.Except(blocked).Except(distant).Except(guarded).OrderBy(c => c.Position.DistanceTo(position)).ThenBy(c => c.Id, StringComparer.Ordinal)
                 .SelectMany(c => c.Items.Where(p => p.Value > 0 && !unavailable.Contains((c.Id, p.Key)))
@@ -172,10 +183,12 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
                 var body = observed.SingleOrDefault(c => c.Id == selected.Corpse.Id);
                 if (body is null) return; // The existing inventory read will notice native disappearance.
                 var guards = VisibleMobileThreats(fresh).Where(e => e.Position.DistanceTo(body.Position) <= DangerZones.Radius).ToArray();
-                if (guards.Length == 0) return;
+                var guardedIds = GuardedCorpses(fresh, observed.Where(c => c.Items.Values.Any(n => n > 0))
+                    .ToDictionary(c => c.Id, c => c.Position, StringComparer.Ordinal), rememberedGuards, scope, lastTick);
+                if (!guardedIds.Contains(body.Id)) return;
                 await journal.AppendAsync("corpse-recovery-approach-deferred", new { fresh.Tick, corpse = body.Id, body.Position,
                     observer = fresh.Data.GetProperty("agent").GetProperty("position"), observedRadius = InspectionRadius,
-                    guardRadius = DangerZones.Radius, visibleEnemies = guards }, inspectionToken);
+                    guardRadius = DangerZones.Radius, visibleEnemies = guards, remembered = guards.Length == 0 }, inspectionToken);
                 throw new GuardedApproachException();
             }
         }
@@ -191,6 +204,26 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             ? enemies.EnumerateArray().Where(e => e.GetProperty("type").GetString() is "unit" or "unit-spawner")
                 .Select(e => e.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal) : [];
         return safety.Enemies.Where(e => ids.Contains(e.Id)).ToArray();
+    }
+
+    /// <summary>Guards stay historical until a current complete normal view covers the whole corpse zone and finds it free.</summary>
+    internal static IReadOnlySet<string> GuardedCorpses(GameResponse response, IReadOnlyDictionary<string, MapPosition> bodies,
+        HashSet<string> remembered, ActorScope scope, long earliestTick)
+    {
+        var safety = SafetyObservation.Parse(response);
+        double radius = response.Data.GetProperty("coverage").GetProperty("radius").GetDouble();
+        if (safety.Scope != scope || safety.Tick < earliestTick || !safety.Alive || safety.ControlMode != "ai"
+            || safety.StopUnconfirmed || safety.Position is null || !double.IsFinite(radius) || radius is < 1 or > InspectionRadius)
+            throw new InvalidDataException("Corpse guard memory requires a current living actor and normal local observation.");
+        var mobile = VisibleMobileThreats(response);
+        remembered.RemoveWhere(id => !bodies.ContainsKey(id));
+        foreach (var (id, position) in bodies)
+        {
+            if (mobile.Any(e => e.Position.DistanceTo(position) <= DangerZones.Radius)) remembered.Add(id);
+            else if (safety.LocalEnemiesComplete && safety.Position.DistanceTo(position) + DangerZones.Radius <= radius)
+                remembered.Remove(id);
+        }
+        return remembered;
     }
 
     /// <summary>Positions of known own industry in an observation; empty when the observation lists no own entity.</summary>

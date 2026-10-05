@@ -6,6 +6,8 @@ La mémoire conserve un marqueur de récupération avant les déplacements et tr
 
 Le mod fournit la provenance des corps, leur contenu et l'identifiant natif de l'inventaire principal du personnage. C# choisit les corps proches, calcule les routes et vérifie la capacité native avant chaque transfert. Il utilise l'identifiant du corps prouvé, jamais une simple recherche de corps à la même position. Les stocks et capacités sont relus après le trajet. Les quantités collectées sont celles des reçus terminaux et concernent la tentative courante ; elles ne sont pas des ressources créées.
 
+Pendant une tentative, un cadavre autour duquel un garde mobile a été observé reste écarté lorsque l'ennemi sort du champ de vision ou s'éloigne momentanément. Seule une observation native actuelle, complète et couvrant toute sa zone de 32 tuiles peut montrer qu'elle est libre et réautoriser ce corps. Cet avertissement conserve l'identité du cadavre, sans inventer une position actuelle d'ennemi. Il est également enregistré lorsqu'une approche est interrompue. Les autres corps sûrs peuvent être récupérés ; le reste est reporté avec la borne habituelle de réessai, sans compter ses objets comme acquis.
+
 Après une observation finale cohérente, le modèle reçoit `death-recovery-observed`, le résultat de récupération et les objets restant à récupérer. Il choisit son prochain objectif depuis l'état courant. Une absence de corps survivant ou une capacité insuffisante produit un résultat explicite ; ces objets ne sont pas annoncés comme récupérés.
 
 ## Essais natifs du 13 septembre 2026
