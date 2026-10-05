@@ -17,13 +17,15 @@ public sealed class BeltTransportBatchPlanner
 
     /// <summary>Plans assignments and route order for several consumers without promising one source twice.</summary>
     public BeltTransportBatchPlan Find(SpatialSnapshot map, BeltTransportEquipment equipment, IReadOnlyList<BeltTransportRequest> requests,
-        int maximumSearches = 48, CancellationToken token = default, bool stopAfterComplete = false)
+        int maximumSearches = 48, CancellationToken token = default, bool stopAfterComplete = false,
+        int maximumBelts = 200, int nodeBudget = 12000)
     {
         if (requests.Count is < 1 or > 8 || requests.Any(r => string.IsNullOrWhiteSpace(r.TargetId)
             || r.SourceIds.Count is < 1 or > 8 || r.SourceIds.Any(s => string.IsNullOrWhiteSpace(s) || s == r.TargetId)
             || r.SourceIds.Distinct(StringComparer.Ordinal).Count() != r.SourceIds.Count))
             throw new ArgumentException("A batch requires one to eight valid requests with distinct candidate sources.", nameof(requests));
         if (maximumSearches is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(maximumSearches));
+        if (maximumBelts is < 1 or > 1536 || nodeBudget is < 1 or > 100000) throw new ArgumentOutOfRangeException(nameof(maximumBelts));
         var best = new List<PlannedBeltLink>();
         var selected = new List<PlannedBeltLink>();
         int searches = 0, bestBelts = int.MaxValue, bestPoles = int.MaxValue;
@@ -51,7 +53,7 @@ public sealed class BeltTransportBatchPlanner
                 if (searches == maximumSearches) { exhausted = true; return; }
                 int identity = ++searches;
                 string targetId = requests[requestIndex].TargetId;
-                var plan = new BeltTransportPlanner().Find(current, equipment, sourceId, targetId, token);
+                var plan = new BeltTransportPlanner().Find(current, equipment, sourceId, targetId, token, maximumBelts, nodeBudget);
                 if (plan is null) continue;
                 var link = new PlannedBeltLink(sourceId, targetId, plan);
                 selected.Add(link);

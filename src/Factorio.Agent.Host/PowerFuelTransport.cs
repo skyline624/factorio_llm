@@ -190,7 +190,8 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         try
         {
             return new BeltTransportBatchPlanner().Find(planning, new("transport-belt", "inserter", "small-electric-pole"),
-                requests, maximumSearches: 64, token: planningToken, stopAfterComplete: true);
+                requests, maximumSearches: 64, token: planningToken, stopAfterComplete: true,
+                maximumBelts: 512, nodeBudget: 24000);
         }
         catch (OperationCanceledException error) when (planningToken.IsCancellationRequested
             && !callerToken.IsCancellationRequested && error.CancellationToken == planningToken)

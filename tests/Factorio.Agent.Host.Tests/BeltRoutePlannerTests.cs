@@ -31,6 +31,25 @@ public sealed class BeltRoutePlannerTests
     }
 
     [Theory]
+    [InlineData(4.5, 1.5, false, false, false)]
+    [InlineData(4.5, 1.5, true, false, true)]
+    [InlineData(4.5, .5, true, false, false)]
+    [InlineData(4.5, 1.5, false, true, true)]
+    [InlineData(3.5, .5, true, true, false)]
+    public void FlowIndexPreservesRetainedLineFrontAndNativeCollisionRules(double x, double y,
+        bool retained, bool inlet, bool allowed)
+    {
+        var map = Map();
+        var belt = map.Prototypes["belt"];
+        var position = new MapPosition(3.5, .5);
+        map = map with { Entities = [new("old-line", "belt", position, belt.CollisionBox.Translate(position), 4, "own")] };
+        var point = new MapPosition(x, y);
+        var route = new BeltRoutePlanner().Find(map, "belt", point, point,
+            inletBeltId: inlet ? "old-line" : null, existingBusBelts: retained ? new HashSet<string> { "old-line" } : null);
+        Assert.Equal(allowed ? BeltRouteStatus.Found : BeltRouteStatus.NoRouteInSnapshot, route.Status);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void LongOpenRoutesFitTheirNodeBudgetWithoutExploringEveryEqualCostTile(bool reverse)

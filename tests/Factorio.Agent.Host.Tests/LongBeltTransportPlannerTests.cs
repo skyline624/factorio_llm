@@ -22,6 +22,20 @@ public sealed class LongBeltTransportPlannerTests
         Assert.Null(new BeltTransportPlanner().Find(LongMap(), new("belt", "arm", "pole"), "source", "target"));
     }
 
+    [Fact]
+    public void JointAssignmentAcceptsAnExplicitLongRouteWithoutIncreasingOrdinaryBounds()
+    {
+        var map = LongMap();
+        var equipment = new BeltTransportEquipment("belt", "arm", "pole");
+        BeltTransportRequest[] requests = [new("target", ["source"])];
+        Assert.Empty(new BeltTransportBatchPlanner().Find(map, equipment, requests).Links);
+        var batch = new BeltTransportBatchPlanner().Find(map, equipment, requests, stopAfterComplete: true,
+            maximumBelts: 512, nodeBudget: 24000);
+        var link = Assert.Single(batch.Links);
+        Assert.InRange(link.Plan.Belts.Count, 390, 450);
+        Assert.False(batch.BudgetExhausted);
+    }
+
     private static SpatialSnapshot LongMap()
     {
         var map = BeltTransportPlannerTests.Map(true);
