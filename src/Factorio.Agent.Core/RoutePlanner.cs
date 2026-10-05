@@ -20,11 +20,13 @@ public sealed class RoutePlanner
 
     public RoutePlan Find(SpatialCollisionField field, MapPosition destination, double goalRadius = 0.2,
         int maximumNodes = 25000, TimeSpan? timeBudget = null, CancellationToken token = default,
-        bool requireStableArrival = false)
+        bool requireStableArrival = false, double minimumFirstMoveDistance = 0)
     {
         token.ThrowIfCancellationRequested();
         if (!double.IsFinite(destination.X) || !double.IsFinite(destination.Y) || goalRadius < 0
             || !double.IsFinite(goalRadius) || maximumNodes < 1) throw new ArgumentOutOfRangeException(nameof(destination));
+        if (!double.IsFinite(minimumFirstMoveDistance) || minimumFirstMoveDistance is < 0 or > .5)
+            throw new ArgumentOutOfRangeException(nameof(minimumFirstMoveDistance));
         MapPosition start = field.Map.Actor.Position;
         RoutePlan Failure(RouteStatus status, int count = 0) => new(status, Array.Empty<MapPosition>(), count, 0);
         if (!field.Map.Bounds.Contains(destination)) return Failure(RouteStatus.GoalOutsideSnapshot);
@@ -33,7 +35,7 @@ public sealed class RoutePlanner
         bool stableDestination = !requireStableArrival || PlacementPlanner.CanStop(field, destination);
         if (start.DistanceTo(destination) <= goalRadius && (!requireStableArrival || PlacementPlanner.CanStop(field, start)))
             return new(RouteStatus.Found, Array.Empty<MapPosition>(), 0, 0);
-        if (stableDestination && field.SegmentClear(start, destination))
+        if (stableDestination && start.DistanceTo(destination) > minimumFirstMoveDistance && field.SegmentClear(start, destination))
             return new(RouteStatus.Found, Array.AsReadOnly(new[] { destination }), 0, start.DistanceTo(destination));
         var frontier = new PriorityQueue<SearchNode, (double Score, double Heuristic, long Sequence)>();
         var costs = new Dictionary<Cell, double>();
@@ -42,12 +44,15 @@ public sealed class RoutePlanner
         double Heuristic(MapPosition p) => Math.Max(0, p.DistanceTo(destination) - goalRadius);
         // A collision stop can leave the actor within our extra steering margin. Escape locally using
         // the native body, then restore the normal margin for all subsequent edges.
-        int escapeCells = tightStart ? 4 : 0;
+        // A seed already inside native completion tolerance cannot start a retreat. Include adjacent
+        // half-tile seeds so an actor exactly on the grid still has an executable first segment.
+        int escapeCells = tightStart ? 4 : minimumFirstMoveDistance > 0 ? 1 : 0;
         for (int x = (int)Math.Floor(start.X * 2) - escapeCells; x <= Math.Ceiling(start.X * 2) + escapeCells; x++)
             for (int y = (int)Math.Floor(start.Y * 2) - escapeCells; y <= Math.Ceiling(start.Y * 2) + escapeCells; y++)
             {
                 token.ThrowIfCancellationRequested();
                 var cell = new Cell(x, y);
+                if (minimumFirstMoveDistance > 0 && start.DistanceTo(cell.Position) <= minimumFirstMoveDistance) continue;
                 if (!field.Walkable(cell.Position) || !field.SegmentClear(start, cell.Position, tightStart ? 0 : 0.18)) continue;
                 double cost = start.DistanceTo(cell.Position), h = Heuristic(cell.Position);
                 costs[cell] = cost;

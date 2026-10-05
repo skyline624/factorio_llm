@@ -83,7 +83,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
             var (map, plan) = cover ?? await PlanRetreatAsync(observation, token);
             if (plan.Status == "observation-changed") return new("defending", map.CollectedTick);
             if (plan.Next is not null)
-                submission = OperationSubmission.Create(map.Scope, "move", new { position = plan.Next, tolerance = .15 },
+                submission = OperationSubmission.Create(map.Scope, "move", new { position = plan.Next, tolerance = RetreatPlanner.MoveTolerance },
                     map.CollectedTick + 180, new { position = map.Actor.Position, positionTolerance = .5 });
         }
         if (submission is null && target is null && equipment is null) return new("observing", observation.Tick);

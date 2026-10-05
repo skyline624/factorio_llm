@@ -23,6 +23,8 @@ public sealed record RetreatPlan(string Status, string? RefugeId = null, MapPosi
 /// <summary>Bounded local route toward observed ammunition coverage; never a guarantee of escaping faster enemies.</summary>
 public sealed class RetreatPlanner
 {
+    /// <summary>Native movement completes inside this radius; the first retreat waypoint must lie beyond it.</summary>
+    public const double MoveTolerance = .15;
     /// <summary>Visible enemies from which the actor stops trading health for kills.</summary>
     public const int OutnumberedEnemies = 3;
     /// <summary>Route attempts toward turret refuges before local escapes are tried.</summary>
@@ -105,7 +107,7 @@ public sealed class RetreatPlanner
         {
             if (++attempted > 12 || Stopwatch.GetElapsedTime(began) > TimeSpan.FromMilliseconds(200)) return new("search-budget");
             var route = new RoutePlanner().Find(field, candidate.Destination, maximumNodes: 5000,
-                timeBudget: TimeSpan.FromMilliseconds(20), token: token);
+                timeBudget: TimeSpan.FromMilliseconds(20), token: token, minimumFirstMoveDistance: MoveTolerance);
             if (route.Status == RouteStatus.BudgetExceeded) limited = true;
             if (route.Status != RouteStatus.Found || route.Waypoints.Count == 0 || route.Length > 40) continue;
             var previous = start;
@@ -122,7 +124,7 @@ public sealed class RetreatPlanner
             var next = distance <= 2 ? first : new MapPosition(start.X + (first.X - start.X) * 2 / distance,
                 start.Y + (first.Y - start.Y) * 2 / distance);
             double clearance = route.UsesTightStartConnector ? 0 : .18;
-            if (distance < .1 || !field.SteeringRegionClear(start, next, clearance)) continue;
+            if (distance <= MoveTolerance || !field.SteeringRegionClear(start, next, clearance)) continue;
             return new(candidate.RefugeId is null ? "separation" : "found", candidate.RefugeId, candidate.Destination, next, route);
         }
         return new(limited ? "search-budget" : "no-safe-candidate");
