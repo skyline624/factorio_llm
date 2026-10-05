@@ -53,7 +53,7 @@ public sealed class OllamaConfigurationTests : IDisposable
     [Theory]
     [InlineData("{\"Ollama\":{\"ApiKey\":\"synthetic-secret", "synthetic-secret")]
     [InlineData("{\"Ollama\":{\"synthetic-secret\":true}}", "synthetic-secret")]
-    [InlineData("{\"Ollama\":{\"ApiKey\":42}}", "42")]
+    [InlineData("{\"Ollama\":{\"ApiKey\":7319052846094853176}}", "7319052846094853176")]
     [InlineData("{\"Ollama\":{\"ApiKey\":\"synthetic-secret\",\"ApiKey\":\"other\"}}", "synthetic-secret")]
     public async Task MalformedConfigurationNeverEchoesItsContents(string json, string secret)
     {

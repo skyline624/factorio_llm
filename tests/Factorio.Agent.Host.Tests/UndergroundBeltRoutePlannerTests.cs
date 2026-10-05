@@ -52,8 +52,41 @@ public sealed class UndergroundBeltRoutePlannerTests
         Assert.Equal(BeltRouteStatus.NoRouteInSnapshot, route.Status);
     }
 
-    [Fact]
-    public void AForeignPartnerCannotBeClaimedByANewTunnel()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [InlineData(8)]
+    [InlineData(12)]
+    public void ConsecutiveNativePairsCanShareAnAdjacentSurfaceConnection(int direction)
+    {
+        var map = Map();
+        bool horizontal = direction is 4 or 12;
+        MapPosition start = new(.5,.5), end = horizontal ? new(11.5,.5) : new(.5,11.5);
+        if (direction is 0 or 12) (start,end) = (end,start);
+        var first = horizontal ? new WorldBox(new(1,0),new(5,1)) : new(new(0,1),new(1,5));
+        var second = horizontal ? new WorldBox(new(7,0),new(11,1)) : new(new(0,7),new(1,11));
+        map = map with
+        {
+            Bounds = horizontal ? new(new(0,0),new(12,1)) : new(new(0,0),new(1,12)),
+            Rows = horizontal ? [new(0,0,12,"grass")] : Enumerable.Range(0,12).Select(y=>new TileRun(0,y,1,"grass")).ToArray(),
+            Entities = [new("first-barrier","wall",horizontal ? new(3,.5) : new(.5,3),first,0,"own"),
+                new("second-barrier","wall",horizontal ? new(9,.5) : new(.5,9),second,0,"own")]
+        };
+        Assert.Equal(BeltRouteStatus.NoRouteInSnapshot,new BeltRoutePlanner().Find(map,"belt",start,end).Status);
+        var route = new UndergroundBeltRoutePlanner().Find(map,"belt","underground",start,end);
+        Assert.Equal(BeltRouteStatus.Found,route.Status);
+        Assert.Equal(4,route.Belts.Count);
+        Assert.Equal(new[] {"input","output","input","output"},route.Belts.Select(p=>p.UndergroundType));
+        Assert.All(route.Belts,p=>Assert.Equal(direction,p.Direction));
+        Assert.Equal(1,route.Belts[1].Position.DistanceTo(route.Belts[2].Position));
+        Assert.Equal(5,route.Belts[0].Position.DistanceTo(route.Belts[1].Position));
+        Assert.Equal(5,route.Belts[2].Position.DistanceTo(route.Belts[3].Position));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("outside-frame")]
+    public void AForeignPartnerCannotBeClaimedByANewTunnel(string? partnerId)
     {
         var map = Map();
         var geometry = map.Prototypes["underground"];
@@ -64,7 +97,7 @@ public sealed class UndergroundBeltRoutePlannerTests
             Rows = [new(-4, 0, 9, "grass")],
             Entities = [new("barrier", "wall", new(.5, .5), new(new(-.1, 0), new(1.1, 1)), 0, "own"),
                 new("foreign", "underground", new(4.5, .5), geometry.CollisionBox.Translate(new(4.5, .5)), 4, "own",
-                    Underground: new("output", 1, 2))]
+                    Underground: new("output", 1, 2, partnerId))]
         };
         Assert.Equal(BeltRouteStatus.NoRouteInSnapshot,
             new UndergroundBeltRoutePlanner().Find(map, "belt", "underground", new(-3.5, .5), new(2.5, .5)).Status);
@@ -77,6 +110,27 @@ public sealed class UndergroundBeltRoutePlannerTests
         map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
             { ["underground"] = map.Prototypes["underground"] with { MaxUndergroundDistance = null } } };
         Assert.Throws<InvalidDataException>(() => new UndergroundBeltRoutePlanner().Find(map, "belt", "underground", new(-3.5, .5), new(4.5, .5)));
+    }
+
+    [Fact]
+    public void ACompletedPairBehindTheNewInputDoesNotCompeteForItsPartner()
+    {
+        var map = Map();
+        var geometry = map.Prototypes["underground"];
+        MapPosition oldInput = new(-6.5,.5), oldOutput = new(-1.5,.5);
+        map = map with
+        {
+            Bounds = new(new(-7,0),new(6,1)),
+            Rows = [new(-7,0,13,"grass")],
+            Entities = [new("barrier","wall",new(3,.5),new(new(1,0),new(5,1)),0,"own"),
+                new("old-input","underground",oldInput,geometry.CollisionBox.Translate(oldInput),4,"own",Underground:new("input",1,2,"old-output")),
+                new("old-output","underground",oldOutput,geometry.CollisionBox.Translate(oldOutput),4,"own",Underground:new("output",1,2,"old-input"))]
+        };
+        var route = new UndergroundBeltRoutePlanner().Find(map,"belt","underground",new(.5,.5),new(5.5,.5));
+        Assert.Equal(BeltRouteStatus.Found,route.Status);
+        Assert.Equal(2,route.Belts.Count);
+        Assert.Equal("input",route.Belts[0].UndergroundType);
+        Assert.Equal("output",route.Belts[1].UndergroundType);
     }
 
     [Fact]

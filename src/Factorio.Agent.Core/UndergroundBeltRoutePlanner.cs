@@ -29,6 +29,7 @@ public sealed class UndergroundBeltRoutePlanner
         var collision = collisionField ?? new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
         var surface = new BeltRoutingField(map, belt, start, token,collisionField:collision);
         var conveyors = map.Entities.Where(e => map.Prototypes[e.Name].Type is "transport-belt" or "underground-belt" or "splitter").ToArray();
+        var conveyorIds = conveyors.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
         var occupied = conveyors.Select(e => BeltRoutePlanner.Cell(e.Position)).ToHashSet();
         var incoming = conveyors.Where(e => map.Prototypes[e.Name].Type != "underground-belt" || e.Underground?.Type != "input")
             .Select(e => BeltRoutingField.Front(BeltRoutePlanner.Cell(e.Position), e.Direction)).ToHashSet();
@@ -61,7 +62,11 @@ public sealed class UndergroundBeltRoutePlanner
                     && new WorldBox(new(e.Bounds.Min.X - 1, e.Bounds.Min.Y - 1), new(e.Bounds.Max.X + 1, e.Bounds.Max.Y + 1)).Contains(p))
                 && !conveyors.Any(e => e.Name == tunnel.Name && e.Direction == direction
                     && Parallel(p, BeltRoutePlanner.Cell(e.Position), direction)
-                    && Distance(p, e.Position) <= tunnel.MaxUndergroundDistance.Value);
+                    && Distance(p, e.Position) <= tunnel.MaxUndergroundDistance.Value
+                    && (e.Underground is null || e.Underground.NeighbourCount > 0
+                            && (e.Underground.NeighbourId is null || !conveyorIds.Contains(e.Underground.NeighbourId)) || (input
+                        ? e.Underground.Type == "output" && ForwardDistance(p,e.Position,direction) > 0
+                        : e.Underground.Type == "input" && ForwardDistance(e.Position,p,direction) > 0)));
             return endpoints[key] = allowed;
         }
 
@@ -137,16 +142,33 @@ public sealed class UndergroundBeltRoutePlanner
             {
                 if (parts[i].UndergroundType != "input") continue;
                 if (i + 1 >= parts.Count || parts[i + 1].UndergroundType != "output" || parts[i].Direction != parts[i + 1].Direction) return false;
+                double span = ForwardDistance(parts[i].Position, parts[i + 1].Position, parts[i].Direction);
+                if (!Parallel(parts[i].Position, parts[i + 1].Position, parts[i].Direction)
+                    || span < 2 || span > tunnel.MaxUndergroundDistance.Value) return false;
                 for (int j = 0; j < parts.Count; j++)
                     if (j != i && j != i + 1 && parts[j].UndergroundType is not null && parts[j].Direction == parts[i].Direction
-                        && Parallel(parts[i].Position, parts[j].Position, parts[i].Direction)
-                        && (Distance(parts[i].Position, parts[j].Position) <= tunnel.MaxUndergroundDistance.Value
-                            || Distance(parts[i + 1].Position, parts[j].Position) <= tunnel.MaxUndergroundDistance.Value)) return false;
+                        && Parallel(parts[i].Position, parts[j].Position, parts[i].Direction))
+                    {
+                        // An output looks backward for an input; an input looks forward for an output.
+                        // A following pair is safe even when its input is adjacent to this pair's output.
+                        double competing = parts[j].UndergroundType == "output"
+                            ? ForwardDistance(parts[i].Position, parts[j].Position, parts[i].Direction)
+                            : ForwardDistance(parts[j].Position, parts[i + 1].Position, parts[i].Direction);
+                        if (competing > 0 && competing <= span) return false;
+                    }
             }
             return true;
         }
     }
 
     private static bool Parallel(MapPosition a, MapPosition b, int direction) => direction is 0 or 8 ? a.X == b.X : a.Y == b.Y;
+    private static double ForwardDistance(MapPosition a, MapPosition b, int direction) => direction switch
+    {
+        0 => a.Y - b.Y,
+        4 => b.X - a.X,
+        8 => b.Y - a.Y,
+        12 => a.X - b.X,
+        _ => throw new InvalidDataException("Underground pairs require cardinal directions.")
+    };
     private static double Distance(MapPosition a, MapPosition b) => Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y);
 }

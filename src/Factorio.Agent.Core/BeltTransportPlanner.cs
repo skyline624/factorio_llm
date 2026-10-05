@@ -7,7 +7,8 @@ public sealed record BeltTransportPlan(PlacementCandidate SourceInserter, Placem
 public sealed class BeltTransportPlanner
 {
     public BeltTransportPlan? Find(SpatialSnapshot map, BeltTransportEquipment equipment, string sourceId, string targetId,
-        CancellationToken cancellationToken = default, int maximumBelts = 200, int nodeBudget = 12000)
+        CancellationToken cancellationToken = default, int maximumBelts = 200, int nodeBudget = 12000,
+        Func<BeltTransportPlan, bool>? eligible = null)
     {
         if (maximumBelts is < 1 or > 1536 || nodeBudget is < 1 or > 100000) throw new ArgumentOutOfRangeException(nameof(maximumBelts));
         var source = map.Entities.Single(e => e.Id == sourceId);
@@ -69,7 +70,10 @@ public sealed class BeltTransportPlanner
             var route = new BeltRoutePlanner().FindWithField(projectedField,equipment.Belt,start,finish,nodeBudget,cancellationToken);
             if (route.Status == BeltRouteStatus.BudgetExceeded) throw new TimeoutException("Belt route search exhausted its node budget.");
             if (route.Status == BeltRouteStatus.Found && route.Belts.Count <= maximumBelts)
-                return new(pair.Output, pair.Input, route.Belts, poles);
+            {
+                var plan = new BeltTransportPlan(pair.Output, pair.Input, route.Belts, poles);
+                if (eligible?.Invoke(plan) != false) return plan;
+            }
             if (equipment.UndergroundBelt is not null)
                 crossings.Add((pair.Output, pair.Input, projectedField, poles, start, finish, nodeBudget - route.ExpandedNodes));
         }
@@ -83,8 +87,11 @@ public sealed class BeltTransportPlanner
                 crossing.Start, crossing.Finish, crossing.Remaining, cancellationToken);
             if (route.Status == BeltRouteStatus.BudgetExceeded) { crossingBudgetExceeded = true; continue; }
             if (route.Status == BeltRouteStatus.Found && route.Belts.Count <= maximumBelts)
-                return new(crossing.Output, crossing.Input, route.Belts, crossing.Poles,
+            {
+                var plan = new BeltTransportPlan(crossing.Output, crossing.Input, route.Belts, crossing.Poles,
                     route.Belts.Any(p => p.UndergroundType is not null) ? equipment.UndergroundBelt : null);
+                if (eligible?.Invoke(plan) != false) return plan;
+            }
         }
         if (crossingBudgetExceeded) throw new TimeoutException("Underground belt route search exhausted its shared node budget.");
         return null;

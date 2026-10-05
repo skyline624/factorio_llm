@@ -48,21 +48,13 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
                 if (stopAfterComplete && best.Count == requests.Count) complete = true;
             }
             var field = new SpatialCollisionField(current with { Entities = current.Entities.Where(e => e.Id != current.Actor.Id).ToArray() });
-            var arm = current.Prototypes[current.Items[equipment.Inserter].EntityName];
             var belt = current.Prototypes[current.Items[equipment.Belt].EntityName];
-            var tunnel = equipment.UndergroundBelt is null ? null : current.Prototypes[current.Items[equipment.UndergroundBelt].EntityName];
             var routing = new BeltRoutingField(current,belt,current.Actor.Position,token,collisionField:field);
             (int Ports,int Region) Access(int index)
             {
-                var target = current.Entities.Single(e => e.Id == requests[index].TargetId);
-                var candidates = new PlacementPlanner().FindCandidates(field,equipment.Inserter,target.Position,requireBuildReach:false,
-                    eligible:p => target.Bounds.Contains(At(p,arm.InserterDrop ?? throw new InvalidDataException("Missing native inserter drop.")))
-                        && PortClear(BeltRoutePlanner.Cell(At(p,arm.InserterPickup ?? throw new InvalidDataException("Missing native inserter pickup.")))),
-                    cancellationToken:token);
-                return (candidates.Count,candidates.Sum(p=>Region(BeltRoutePlanner.Cell(At(p,arm.InserterPickup!)))));
+                var ports = NativePorts(current,field,equipment,requests[index].TargetId,false,token);
+                return (ports.Count,ports.Sum(Region));
             }
-            bool PortClear(MapPosition p) => field.PlacementClear(belt,p,0)
-                || tunnel is not null && new[] {0,4,8,12}.Any(d=>field.PlacementClear(tunnel,p,d));
             int Region(MapPosition start)
             {
                 if (!routing.SurfaceClear(start)) return 0;
@@ -89,7 +81,8 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
                 string targetId = requests[requestIndex].TargetId;
                 progress?.Invoke(new(identity,selected.Count,sourceId,targetId,"started"));
                 BeltTransportPlan? plan;
-                try { plan = new BeltTransportPlanner().Find(current, equipment, sourceId, targetId, token, maximumBelts, nodeBudget); }
+                try { plan = new BeltTransportPlanner().Find(current, equipment, sourceId, targetId, token, maximumBelts, nodeBudget,
+                    eligible: LeavesAccess); }
                 catch (TimeoutException) { exhausted = true; progress?.Invoke(new(identity,selected.Count,sourceId,targetId,"node-budget")); continue; }
                 progress?.Invoke(new(identity,selected.Count,sourceId,targetId,plan is null ? "missing" : "found",plan?.Belts.Count));
                 if (plan is null) continue;
@@ -99,8 +92,38 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
                 Search(Project(current, equipment, link, identity), remaining.Where(i => i != requestIndex).ToArray());
                 used.Remove(sourceId);
                 selected.RemoveAt(selected.Count - 1);
+
+                bool LeavesAccess(BeltTransportPlan candidate)
+                {
+                    var future = Project(current,equipment,new(sourceId,targetId,candidate),identity);
+                    var projected = field.AppendEntities(future.Entities.Skip(current.Entities.Count).ToArray());
+                    return remaining.Where(i=>i!=requestIndex).All(i=>
+                    {
+                        var suppliers = requests[i].SourceIds.Where(s=>s!=sourceId && !used.Contains(s)).ToArray();
+                        // An insufficient source count still permits the established partial result contract.
+                        return NativePorts(future,projected,equipment,requests[i].TargetId,false,token).Count > 0
+                            && (suppliers.Length == 0 || suppliers.Any(s=>NativePorts(future,projected,equipment,s,true,token).Count > 0));
+                    });
+                }
             }
         }
+    }
+
+    private static IReadOnlyList<MapPosition> NativePorts(SpatialSnapshot map,SpatialCollisionField field,
+        BeltTransportEquipment equipment,string entityId,bool output,CancellationToken token)
+    {
+        var endpoint = map.Entities.Single(e=>e.Id==entityId);
+        var arm = map.Prototypes[map.Items[equipment.Inserter].EntityName];
+        var belt = map.Prototypes[map.Items[equipment.Belt].EntityName];
+        var tunnel = equipment.UndergroundBelt is null ? null : map.Prototypes[map.Items[equipment.UndergroundBelt].EntityName];
+        var routing = new BeltRoutingField(map,belt,map.Actor.Position,token,collisionField:field);
+        var inside = (output ? arm.InserterPickup : arm.InserterDrop) ?? throw new InvalidDataException("Missing native inserter endpoint.");
+        var outside = (output ? arm.InserterDrop : arm.InserterPickup) ?? throw new InvalidDataException("Missing native inserter material port.");
+        bool Clear(MapPosition p) => routing.SurfaceClear(p)
+            || tunnel is not null && new[] {0,4,8,12}.Any(d=>field.PlacementClear(tunnel,p,d));
+        return new PlacementPlanner().FindCandidates(field,equipment.Inserter,endpoint.Position,requireBuildReach:false,
+                eligible:p=>endpoint.Bounds.Contains(At(p,inside)) && Clear(BeltRoutePlanner.Cell(At(p,outside))),
+                cancellationToken:token).Select(p=>BeltRoutePlanner.Cell(At(p,outside))).ToArray();
     }
 
     private static SpatialSnapshot Project(SpatialSnapshot map, BeltTransportEquipment equipment, PlannedBeltLink link, int identity)

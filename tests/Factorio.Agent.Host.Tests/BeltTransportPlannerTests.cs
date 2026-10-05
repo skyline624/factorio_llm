@@ -139,6 +139,36 @@ public sealed class BeltTransportPlannerTests
         Assert.False(batch.BudgetExhausted);
     }
 
+    [Fact]
+    public void ALocallyValidRouteMustLeaveTheOtherConsumersNativePortOpen()
+    {
+        var map = Map(true);
+        var chest = map.Prototypes["chest"];
+        var wall = map.Prototypes["wall"];
+        MapPosition firstTarget = new(12.5,.5), secondTarget = new(8.5,2.5), secondSource = new(.5,8.5);
+        var obstacles = new[] {new MapPosition(12.5,-.5),new(12.5,1.5),new(13.5,.5),
+                new(7.5,2.5),new(9.5,2.5),new(8.5,3.5)}
+            .Select((p,i)=>new SpatialEntity($"port-wall:{i}","wall",p,wall.CollisionBox.Translate(p),0,"own"));
+        map = map with
+        {
+            Prototypes = new Dictionary<string,EntityGeometry>(map.Prototypes) { ["pole"] = map.Prototypes["pole"] with { SupplyArea = 32 } },
+            Entities = [..map.Entities.Select(e=>e.Id=="target" ? e with { Position = firstTarget, Bounds = chest.CollisionBox.Translate(firstTarget) } : e),
+                new("second-target","chest",secondTarget,chest.CollisionBox.Translate(secondTarget),0,"own"),
+                new("second-source","chest",secondSource,chest.CollisionBox.Translate(secondSource),0,"own"),..obstacles]
+        };
+        var ordinary = new BeltTransportPlanner().Find(map,new("belt","arm","pole"),"source","target");
+        Assert.NotNull(ordinary);
+        Assert.Contains(ordinary.Belts,p=>p.Position==new MapPosition(8.5,.5));
+        var batch = new BeltTransportBatchPlanner().Find(map,new("belt","arm","pole"),
+            [new BeltTransportRequest("target",["source"]),new("second-target",["second-source"])],
+            maximumSearches:2,stopAfterComplete:true);
+        Assert.Equal(2,batch.Links.Count);
+        Assert.Equal(2,batch.Searches);
+        Assert.False(batch.BudgetExhausted);
+        Assert.Equal("target",batch.Links[0].TargetId);
+        Assert.DoesNotContain(batch.Links[0].Plan.Belts,p=>p.Position==new MapPosition(8.5,.5));
+    }
+
     internal static SpatialSnapshot Map(bool power)
     {
         var map = BeltRoutePlannerTests.Map();
