@@ -158,7 +158,7 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         if (endpoints.Any(id => !map.Entities.Any(e => e.Id == id))
             || map.Prototypes[map.Items["inserter"].EntityName].FilterSlots is not > 0) return (0, true);
         var planning = FactoryTransportBuilder.ProtectBands(map, state, steam, sources.Select(c => c.Slot.Band).ToHashSet());
-        var plan = await ControllerPlanning.RunAsync(t => SearchBatch(planning, equipment, requests, t, token),
+        var plan = await ControllerPlanning.RunAsync(t => SearchBatch(planning, equipment, requests, t, token, maximumLinks),
             controller, TimeSpan.FromSeconds(45), token);
         if (plan is null)
         {
@@ -168,8 +168,8 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         }
         await journal.AppendAsync("power-fuel-batch-search", new { targets = targets.Length, sources = sources.Length,
             links = plan.Links.Count, plan.Searches, plan.BudgetExhausted, plan.AssignmentUpperBound, equipment,
-            selection = "first-feasible-maximum-assignment", map.CollectedTick }, token);
-        if (plan.Links.Count == 0 || plan.Links.Count != plan.AssignmentUpperBound) return (0, true);
+            selection = "first-feasible-delivery-batch", maximumLinks, map.CollectedTick }, token);
+        if (plan.Links.Count == 0 || plan.Links.Count != Math.Min(maximumLinks, plan.AssignmentUpperBound ?? targets.Length)) return (0, true);
         var records = plan.Links.Select(link => FactoryTransportBuilder.NewBus(
             sources.Single(c => c.Entities["output-chest"] == link.SourceId).Id,
             targets.Single(c => c.Entities["input-chest"] == link.TargetId).Id, FactoryLogistics.Fuel,
@@ -197,13 +197,13 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
 
     internal static BeltTransportBatchPlan? SearchBatch(SpatialSnapshot planning, BeltTransportEquipment equipment,
         IReadOnlyList<BeltTransportRequest> requests,
-        CancellationToken planningToken, CancellationToken callerToken)
+        CancellationToken planningToken, CancellationToken callerToken, int maximumLinks = 2)
     {
         try
         {
             return new BeltTransportBatchPlanner().Find(planning, equipment,
                 requests, maximumSearches: 64, token: planningToken, stopAfterComplete: true,
-                maximumBelts: 512, nodeBudget: 24000, stopAfterMaximumAssignments: true);
+                maximumBelts: 512, nodeBudget: 24000, stopAfterMaximumAssignments: true, maximumLinks: maximumLinks);
         }
         catch (OperationCanceledException error) when (planningToken.IsCancellationRequested
             && !callerToken.IsCancellationRequested && error.CancellationToken == planningToken)

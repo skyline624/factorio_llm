@@ -20,7 +20,7 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
     /// <summary>Plans assignments and route order for several consumers without promising one source twice.</summary>
     public BeltTransportBatchPlan Find(SpatialSnapshot map, BeltTransportEquipment equipment, IReadOnlyList<BeltTransportRequest> requests,
         int maximumSearches = 48, CancellationToken token = default, bool stopAfterComplete = false,
-        int maximumBelts = 200, int nodeBudget = 12000, bool stopAfterMaximumAssignments = false)
+        int maximumBelts = 200, int nodeBudget = 12000, bool stopAfterMaximumAssignments = false, int? maximumLinks = null)
     {
         if (requests.Count is < 1 or > 8 || requests.Any(r => string.IsNullOrWhiteSpace(r.TargetId)
             || r.SourceIds.Count is < 1 or > 8 || r.SourceIds.Any(s => string.IsNullOrWhiteSpace(s) || s == r.TargetId)
@@ -28,7 +28,9 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
             throw new ArgumentException("A batch requires one to eight valid requests with distinct candidate sources.", nameof(requests));
         if (maximumSearches is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(maximumSearches));
         if (maximumBelts is < 1 or > 1536 || nodeBudget is < 1 or > 100000) throw new ArgumentOutOfRangeException(nameof(maximumBelts));
+        if (maximumLinks is < 1 or > 8) throw new ArgumentOutOfRangeException(nameof(maximumLinks));
         int? assignmentUpperBound = stopAfterMaximumAssignments ? AssignmentBound(map, equipment, requests, token) : null;
+        int? assignmentLimit = maximumLinks is { } limit ? Math.Min(limit, assignmentUpperBound ?? requests.Count) : assignmentUpperBound;
         var best = new List<PlannedBeltLink>();
         var selected = new List<PlannedBeltLink>();
         int searches = 0, bestBelts = int.MaxValue, bestPoles = int.MaxValue;
@@ -47,8 +49,9 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
                 best = [.. selected];
                 bestBelts = belts;
                 bestPoles = poles;
-                if (stopAfterComplete && best.Count == requests.Count || assignmentUpperBound == best.Count) complete = true;
+                if (stopAfterComplete && best.Count == requests.Count || assignmentLimit == best.Count) complete = true;
             }
+            if (complete) return;
             var field = new SpatialCollisionField(current with { Entities = current.Entities.Where(e => e.Id != current.Actor.Id).ToArray() });
             var belt = current.Prototypes[current.Items[equipment.Belt].EntityName];
             var routing = new BeltRoutingField(current,belt,current.Actor.Position,token,collisionField:field);

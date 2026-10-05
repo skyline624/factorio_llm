@@ -193,6 +193,30 @@ public sealed class FactoryBandTransportTests
         Assert.False(plan.BudgetExhausted);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void FuelBatchPlansOnlyItsConstructionQuantumAndLeavesTheNextRouteAvailable(int maximumLinks)
+    {
+        var map = SeveralConsumers();
+        var equipment = new BeltTransportEquipment("transport-belt", "inserter", "small-electric-pole");
+        BeltTransportRequest[] requests = [new("first-target", ["first-source"]), new("second-target", ["second-source"])];
+        var plan = PowerFuelTransport.SearchBatch(map, equipment, requests,
+            CancellationToken.None, CancellationToken.None, maximumLinks);
+        Assert.NotNull(plan);
+        Assert.Equal(2, plan.AssignmentUpperBound);
+        Assert.Equal(maximumLinks, plan.Links.Count);
+        Assert.Equal(maximumLinks, plan.Searches);
+        Assert.False(plan.BudgetExhausted);
+        if (maximumLinks == 1)
+        {
+            var selected = Assert.Single(plan.Links);
+            var remaining = Assert.Single(requests, r => r.TargetId != selected.TargetId);
+            Assert.NotNull(new BeltTransportPlanner().Find(ProjectBus(map, "reserved", selected.Plan), equipment,
+                Assert.Single(remaining.SourceIds), remaining.TargetId));
+        }
+    }
+
     [Fact]
     public void AnAlreadyBlockedConsumerDoesNotPreventAnIndependentFuelLink()
     {
