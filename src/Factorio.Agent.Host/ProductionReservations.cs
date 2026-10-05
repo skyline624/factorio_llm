@@ -9,11 +9,13 @@ internal static class ProductionReservations
     private static readonly AsyncLocal<IReadOnlySet<string>?> Active = new();
     private static readonly AsyncLocal<IReadOnlySet<string>?> Sources = new();
     private static readonly AsyncLocal<IReadOnlyList<ExtractionPair>?> Miners = new();
+    private static readonly AsyncLocal<FactoryState?> KnownFactory = new();
     private static readonly IReadOnlySet<string> Empty = new HashSet<string>();
     public static IReadOnlySet<string> Current => Active.Value ?? Empty;
     public static IReadOnlySet<string> Collectable => Sources.Value ?? Empty;
     internal sealed record ExtractionPair(string Item, string DrillId, string ChestId);
     internal static IReadOnlyList<ExtractionPair> Extractors => Miners.Value ?? [];
+    internal static FactoryState? Factory => KnownFactory.Value;
 
     /// <summary>Whether collection may take this entity's output.</summary>
     public static bool Collects(string entityId) => !Current.Contains(entityId) || Collectable.Contains(entityId);
@@ -22,9 +24,10 @@ internal static class ProductionReservations
         => Enter(entityIds, collectable, []);
 
     private static IDisposable Enter(IReadOnlySet<string>? entityIds, IReadOnlySet<string>? collectable,
-        IReadOnlyList<ExtractionPair> extractors)
+        IReadOnlyList<ExtractionPair> extractors, FactoryState? factory = null)
     {
-        var previous = (Active.Value, Sources.Value, Miners.Value);
+        var previous = (Active.Value, Sources.Value, Miners.Value, KnownFactory.Value);
+        if (factory is not null) KnownFactory.Value = factory;
         Active.Value = Current.Concat(entityIds ?? Empty).ToHashSet(StringComparer.Ordinal);
         Sources.Value = Collectable.Concat(collectable ?? Empty).ToHashSet(StringComparer.Ordinal);
         // An explicit inner reservation or a fresher factory state can revoke an inherited ready connection.
@@ -43,15 +46,16 @@ internal static class ProductionReservations
         FactoryLogistics.OutputChests(state.Cells).ToHashSet(StringComparer.Ordinal),
         state.Cells.Where(c => c.Kind == "miner" && c.Status == "ready" && c.Recipe is not null
             && c.Entities.ContainsKey("drill") && c.Entities.ContainsKey("output-chest"))
-            .Select(c => new ExtractionPair(c.Recipe!, c.Entities["drill"], c.Entities["output-chest"])).ToArray());
+            .Select(c => new ExtractionPair(c.Recipe!, c.Entities["drill"], c.Entities["output-chest"])).ToArray(), state);
 
-    private sealed class Scope((IReadOnlySet<string>? Active, IReadOnlySet<string>? Sources, IReadOnlyList<ExtractionPair>? Miners) previous) : IDisposable
+    private sealed class Scope((IReadOnlySet<string>? Active, IReadOnlySet<string>? Sources, IReadOnlyList<ExtractionPair>? Miners,
+        FactoryState? Factory) previous) : IDisposable
     {
         private bool disposed;
         public void Dispose()
         {
             if (disposed) return;
-            (Active.Value, Sources.Value, Miners.Value) = previous;
+            (Active.Value, Sources.Value, Miners.Value, KnownFactory.Value) = previous;
             disposed = true;
         }
     }

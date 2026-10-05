@@ -122,6 +122,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     await ActAsync("mine", new { name = step.Source.Name, position = step.Source.Position, count = step.Quantity }, 36000);
                     break;
                 case "craft":
+                    if (await new CraftInventoryController(game, journal).PrepareAsync(step.Recipe!, step.Quantity, catalog, controller, deadline.Token))
+                        continue; // Travel/deposits changed the photograph: replan before submitting a craft.
                     await ActAsync("craft", new { recipe = step.Recipe!.Name, count = step.Quantity },
                         HandcraftTiming.DeadlineTicks(step.Recipe, step.Quantity));
                     break;

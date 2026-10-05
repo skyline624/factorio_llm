@@ -9,7 +9,9 @@ namespace Factorio.Agent.Host;
 internal static class CarriedStock
 {
     private static readonly AsyncLocal<bool> Procuring = new();
+    private static readonly AsyncLocal<IReadOnlyDictionary<string, int>?> Retained = new();
     internal static bool IsProcuringConstructionStock => Procuring.Value;
+    internal static IReadOnlyDictionary<string, int> RetainedStock => Retained.Value ?? new Dictionary<string, int>();
 
     /// <summary>Items of the layout parts that no recorded native entity stands for yet.</summary>
     public static IReadOnlyDictionary<string, int> Unplaced(CellLayout layout, IReadOnlyDictionary<string, string> recorded) => layout.Entities
@@ -33,9 +35,16 @@ internal static class CarriedStock
             .SelectMany(e => e.Items("output")).Where(p => p.Value > 0).Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
         var plan = ConstructionSupplyPlanner.Plan(catalog, needed, initial.Inventory, outputs);
         await journal.AppendAsync("construction-supply-plan", new { initial.Scope, initial.Tick, needed, bundled = plan is not null, plan }, token);
-        foreach (var target in plan?.Materials ?? []) await SupplyAsync(target);
-        foreach (var target in plan?.Equipment ?? needed.Select(p => new ConstructionStock(p.Key, p.Value)).ToArray())
-            await SupplyAsync(target);
+        var previous = Retained.Value;
+        Retained.Value = RetainedStock.Concat(needed).Concat((plan?.Materials ?? []).Select(p => new KeyValuePair<string, int>(p.Item, p.TargetStock)))
+            .GroupBy(p => p.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Max(p => p.Value), StringComparer.Ordinal);
+        try
+        {
+            foreach (var target in plan?.Materials ?? []) await SupplyAsync(target);
+            foreach (var target in plan?.Equipment ?? needed.Select(p => new ConstructionStock(p.Key, p.Value)).ToArray())
+                await SupplyAsync(target);
+        }
+        finally { Retained.Value = previous; }
         var final = await production.ObserveAsync(token);
         Require(final);
         if (needed.Any(p => final.Inventory.GetValueOrDefault(p.Key) < p.Value))
