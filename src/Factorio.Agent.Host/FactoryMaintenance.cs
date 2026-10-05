@@ -42,6 +42,26 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
             await registry.SaveAsync(state, token);
             foreach (var cell in recovered) await journal.AppendAsync("factory-cell-plan-recovered", new { cell.Id, cell.Kind, cell.Plan }, token);
         }
+        // Another cell's replacement chain can already feed this cell. Keep the damage evidence above,
+        // but do not rebuild absent legacy links once every structural part and consumer is verified.
+        var obsolete = ObsoletePowerLinks(state, snapshot, catalog);
+        foreach (var group in obsolete.GroupBy(m => m.Cell.Id))
+        {
+            var cell = group.First().Cell;
+            var roles = group.Select(m => m.Role).ToHashSet(StringComparer.Ordinal);
+            await journal.AppendAsync("factory-power-links-retired", new
+            {
+                cell = cell.Id, snapshot.SnapshotId, snapshot.Scope, snapshot.CollectedTick,
+                links = group.Select(m => new { m.Role, m.PreviousId, m.Plan }).ToArray(),
+                reason = "complete-cell-consumers-generator-connected"
+            }, token);
+            state = state.With(cell with
+            {
+                Entities = cell.Entities.Where(p => !roles.Contains(p.Key)).ToDictionary(StringComparer.Ordinal),
+                Plan = cell.Plan!.Where(p => !roles.Contains(p.Key)).ToDictionary(StringComparer.Ordinal)
+            });
+        }
+        if (obsolete.Count > 0) await registry.SaveAsync(state, token);
         var carried = FactoryLogistics.Carried(snapshot);
         var registered = state.Cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
         var zones = game is IDangerZoneReader reader
@@ -214,6 +234,38 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
             .Select(e => new MissingEntity(c, e.Key, e.Value, c.Plan![e.Key])))
         .OrderBy(m => m.Cell.Kind switch { "turret" => 0, "wall" => 1, _ => 2 })
         .ThenBy(m => m.Cell.Id, StringComparer.Ordinal).ThenBy(m => m.Role, StringComparer.Ordinal).ToArray();
+
+    /// <summary>Absent link poles made redundant by native generator connectivity of a complete retained cell.
+    /// Standing poles, structural losses, unknown connectivity and power-source cells remain registered.</summary>
+    internal static IReadOnlyList<MissingEntity> ObsoletePowerLinks(FactoryState state, FactorySnapshot snapshot, ProductionCatalog catalog)
+    {
+        if (state.WorldId != snapshot.Scope.WorldId || snapshot.Scope != catalog.Scope
+            || snapshot.CollectedTick < catalog.CollectedTick || snapshot.Coverage.ValueKind != JsonValueKind.Object
+            || !snapshot.Coverage.TryGetProperty("atomic", out var atomic) || atomic.ValueKind != JsonValueKind.True)
+            return [];
+        var all = snapshot.Records.Where(r => r.Kind == "entity").ToDictionary(r => r.EntityId, StringComparer.Ordinal);
+        var own = all.Values.Where(r => r.Data.TryGetProperty("role", out var role) && role.GetString() == "factory")
+            .ToDictionary(r => r.EntityId, StringComparer.Ordinal);
+        var ownPower = snapshot with { Records = own.Values.ToArray() };
+        var result = new List<MissingEntity>();
+        foreach (var cell in state.Cells.Where(c => c.Status == "ready" && c.Kind != "power" && c.Plan is not null
+            && c.Tick <= snapshot.CollectedTick))
+        {
+            bool Link(string role) => role.StartsWith("link-", StringComparison.Ordinal)
+                && cell.Plan!.TryGetValue(role, out var plan) && catalog.Items.TryGetValue(plan.Item, out var item)
+                && item.PlaceEntityType == "electric-pole";
+            var parts = cell.Entities.Where(p => !Link(p.Key)).ToArray();
+            if (parts.Length == 0 || parts.Any(p => !own.ContainsKey(p.Value))
+                || cell.Entities.Values.Any(id => all.ContainsKey(id) && !own.ContainsKey(id))) continue;
+            var consumers = parts.Select(p => own[p.Value]).Where(r => r.Data.TryGetProperty("power", out var power)
+                && power.ValueKind == JsonValueKind.Object && r.Data.TryGetProperty("type", out var type)
+                && type.GetString() != "electric-pole" && !FactoryCellBuilder.IsPowerSource(type.GetString() ?? "")).ToArray();
+            if (consumers.Length == 0 || consumers.Any(r => FactoryPower.IsFed(ownPower, r.EntityId) != true)) continue;
+            result.AddRange(cell.Entities.Where(p => Link(p.Key) && !all.ContainsKey(p.Value))
+                .Select(p => new MissingEntity(cell, p.Key, p.Value, cell.Plan![p.Key])));
+        }
+        return result;
+    }
 
     /// <summary>
     /// Plans for ready cells registered without one, read while every entity is present: the item placing the observed
