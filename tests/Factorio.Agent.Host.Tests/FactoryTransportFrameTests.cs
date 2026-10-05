@@ -130,6 +130,28 @@ public sealed class FactoryTransportFrameTests
             new("obstacle", tree.Name, new(0, 0), tree.CollisionBox, 0, "neutral")] };
     }
 
+    [Fact]
+    public void ARemoteActorNeedsAReobservedOwnEndpointBeforeChoosingAWalkableFuelVantage()
+    {
+        var snapshot = Snapshot(("source", new(-12.5, -10.5)), ("target", new(66.5, -5.5)));
+        var initial = FactoryMaps.Grass(48);
+        var map = initial with { Scope = snapshot.Scope, Bounds = new(new(-120, -48), new(-24, 48)),
+            Actor = initial.Actor with { Position = new(-72, 0) }, Rows = initial.Rows.Select(r => r with { X = r.X - 72 }).ToArray() };
+        Assert.Null(FactoryTransportBuilder.PlanningStand(map, snapshot, ["source", "target"]));
+        snapshot = snapshot with { Records = snapshot.Records.Select(r => r with
+            { Data = Protocol.ToElement(new { role = "factory", position = FactoryTransportBuilder.Position(snapshot, r.EntityId) }) }).ToArray() };
+        Assert.Equal("source", FactoryTransportBuilder.PlanningAnchors(snapshot, ["source", "target"], new(27, -8))[0]);
+    }
+
+    [Fact]
+    public void FuelVantageTravelUsesOnlyKnownFactoryEndpoints()
+    {
+        var snapshot = Snapshot(("source", new(0, 0)), ("target", new(30, 0)), ("actor", new(15, 0)));
+        snapshot = snapshot with { Records = snapshot.Records.Select(r => r with { Data = Protocol.ToElement(new
+            { role = r.EntityId == "actor" ? "actor" : "factory", position = FactoryTransportBuilder.Position(snapshot, r.EntityId) }) }).ToArray() };
+        Assert.Equal(["source", "target"], FactoryTransportBuilder.PlanningAnchors(snapshot, ["source", "source", "target", "actor", "missing"], new(15, 0)));
+    }
+
     private static FactorySnapshot Snapshot(params (string Id, MapPosition Position)[] entities) =>
         new("synthetic", new("world", "session", "actor", 1, 1), 100, 3700, Protocol.ToElement(new { }),
             entities.Select(e => new FactoryRecord(e.Id, "entity", e.Id, "iron-chest", Protocol.ToElement(new { position = e.Position }))).ToArray());

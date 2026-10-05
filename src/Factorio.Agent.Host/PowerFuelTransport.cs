@@ -3,6 +3,11 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
+internal sealed record PowerFuelSourceNeed(int Targets, int Sources, double PerMinute)
+{
+    public int Missing => Math.Max(0, Targets - Sources);
+}
+
 /// <summary>Connects observed coal producers to registered native boiler feeders within the existing belt planner's bounds.</summary>
 internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal journal, string directory)
 {
@@ -64,6 +69,60 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         return connected;
     }
 
+    internal async Task<PowerFuelSourceNeed> ObserveSourceNeedAsync(ProductionCatalog catalog, CancellationToken token)
+    {
+        var state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
+        var power = await new PowerExpansionController(game, journal, directory).ObserveAsync(token);
+        var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        var need = SourceNeed(state, snapshot, catalog, power);
+        if (need.Missing > 0)
+            await journal.AppendAsync("power-fuel-source-shortfall", new { need, snapshot.Scope, snapshot.CollectedTick }, token);
+        return need;
+    }
+
+    internal static PowerFuelSourceNeed SourceNeed(FactoryState state, FactorySnapshot snapshot, ProductionCatalog catalog, PowerState power)
+    {
+        if (snapshot.Scope != catalog.Scope || power.Scope != catalog.Scope || state.WorldId != catalog.Scope.WorldId)
+            throw new InvalidDataException("Fuel source need requires one native actor and world.");
+        // Finish already reserved links before adding suppliers; unfinished buses still own the source capacity.
+        if ((state.Transports ?? []).Any(b => state.Cells.Single(c => c.Id == b.CellId).Status == "building"
+            && b.Consumers.Any(c => state.Cells.Any(target => target.Id == c.TargetCellId && target.Kind == "power"))))
+            return new(0, 0, 0);
+        var shares = FactoryLogistics.CellShares(catalog, state);
+        var targets = BatchTargets(state, snapshot, catalog, shares, power);
+        if (targets.Length < 2) return new(targets.Length, targets.Length, 0); // Single consumers retain the multi-source path.
+        double demand = targets.Max(c => PowerFuelPolicy.Demand(catalog, c, FactoryLogistics.Fuel, power)!.Value);
+        int sources = LocalSources(state, snapshot, targets).Count(c =>
+            FactoryTransportCoverage.Capacity(state, catalog, shares, c, FactoryLogistics.Fuel, snapshot) + 1e-9 >= demand);
+        return new(targets.Length, sources, demand);
+    }
+
+    private static FactoryCell[] BatchTargets(FactoryState state, FactorySnapshot snapshot, ProductionCatalog catalog,
+        IReadOnlyDictionary<string, double>? shares, PowerState power)
+    {
+        var covered = FactoryTransportCoverage.Connected(state, snapshot, catalog, shares, power);
+        var targets = state.Cells.Where(c => c.Kind == "power" && c.Status == "ready"
+            && PowerFuelPolicy.Demand(catalog, c, FactoryLogistics.Fuel, power) is > 0
+            && FactoryLogistics.Missing(snapshot, c).Length == 0
+            && !covered.Contains((c.Entities["input-chest"], FactoryLogistics.Fuel))).ToArray();
+        if (targets.Length == 0) return [];
+        var anchor = FactoryTransportBuilder.Position(snapshot, targets.OrderBy(c => c.Tick).First().Entities["input-chest"])!;
+        return targets.OrderByDescending(c => FactoryTransportBuilder.Position(snapshot, c.Entities["input-chest"])!.DistanceTo(anchor)).Take(8).ToArray();
+    }
+
+    internal static FactoryCell[] LocalSources(FactoryState state, FactorySnapshot snapshot, IReadOnlyList<FactoryCell> targets)
+    {
+        if (snapshot.Scope.WorldId != state.WorldId) throw new InvalidDataException("Fuel sources belong to another world.");
+        if (targets.Count == 0) return [];
+        var anchor = FactoryTransportBuilder.Position(snapshot, targets.OrderBy(c => c.Tick).First().Entities["input-chest"])!;
+        var targetIds = targets.Select(c => c.Entities["input-chest"]).ToArray();
+        return state.Cells.Where(c => c.IsResource && c.Recipe == FactoryLogistics.Fuel && c.Status == "ready"
+            && FactoryLogistics.Missing(snapshot, c).Length == 0 && PowerFuelPolicy.ProducerActive(c, snapshot)
+            && !(state.Transports ?? []).Any(b => b.SourceCellId == c.Id)
+            && FactoryTransportBuilder.PlanningCenter(snapshot, [.. targetIds, c.Entities["output-chest"]], 1) is not null)
+            .OrderBy(c => FactoryTransportBuilder.Position(snapshot, c.Entities["output-chest"])!.DistanceTo(anchor)).Take(8).ToArray();
+    }
+
     private async Task<(int Connected, bool Handled)> PlanBatchAsync(ProductionCatalog catalog, SpatialController controller,
         int maximumLinks, CancellationToken token)
     {
@@ -74,21 +133,11 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Fuel batch actor scope changed.");
         var shares = FactoryLogistics.CellShares(catalog, state);
-        var covered = FactoryTransportCoverage.Connected(state, snapshot, catalog, shares, power);
-        var targets = state.Cells.Where(c => c.Kind == "power" && c.Status == "ready"
-            && PowerFuelPolicy.Demand(catalog, c, FactoryLogistics.Fuel, power) is > 0
-            && FactoryLogistics.Missing(snapshot, c).Length == 0
-            && !covered.Contains((c.Entities["input-chest"], FactoryLogistics.Fuel))).ToArray();
+        var targets = BatchTargets(state, snapshot, catalog, shares, power);
         if (targets.Length < 2) return (0, false);
-        var anchor = FactoryTransportBuilder.Position(snapshot, targets.OrderBy(c => c.Tick).First().Entities["input-chest"])!;
-        targets = targets.OrderByDescending(c => FactoryTransportBuilder.Position(snapshot, c.Entities["input-chest"])!.DistanceTo(anchor)).Take(8).ToArray();
         foreach (var target in targets) PowerExpansionController.ValidateRegisteredFeeder(snapshot, target);
         var targetIds = targets.Select(c => c.Entities["input-chest"]).ToArray();
-        var sources = state.Cells.Where(c => c.IsResource && c.Recipe == FactoryLogistics.Fuel && c.Status == "ready"
-            && FactoryLogistics.Missing(snapshot, c).Length == 0 && PowerFuelPolicy.ProducerActive(c, snapshot)
-            && !(state.Transports ?? []).Any(b => b.SourceCellId == c.Id)
-            && FactoryTransportBuilder.PlanningCenter(snapshot, [.. targetIds, c.Entities["output-chest"]], 1) is not null)
-            .OrderBy(c => FactoryTransportBuilder.Position(snapshot, c.Entities["output-chest"])!.DistanceTo(anchor)).Take(8).ToArray();
+        var sources = LocalSources(state, snapshot, targets);
         if (sources.Length < targets.Length) return (0, true);
         var requests = targets.Select(target => new BeltTransportRequest(target.Entities["input-chest"], sources
             .Where(source => FactoryTransportCoverage.Capacity(state, catalog, shares, source, FactoryLogistics.Fuel, snapshot) + 1e-9

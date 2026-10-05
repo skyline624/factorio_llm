@@ -290,6 +290,8 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
 
     /// <summary>Resource cells built per raw item and automation call before the assemblers; growth adds the rest later.</summary>
     public const int SeedCellsPerItem = 2;
+    /// <summary>Additional coal suppliers per call when the joint boiler plan lacks local, unpromised sources.</summary>
+    public const int PowerFuelSeedCells = 2;
 
     /// <summary>
     /// Raw items the plan draws faster than ready resource cells supply and carried stock cannot cover for the horizon, plus coal
@@ -363,7 +365,35 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 await journal.AppendAsync("factory-raw-seed-failed", new { item, perMinute, error = error.GetType().Name, error.Message }, token);
             }
         }
+        await SeedPowerFuelSourcesAsync(catalog, token, isObjectiveComplete);
         await new PowerFuelTransport(game, journal, directory).ConnectAsync(catalog, token);
+    }
+
+    internal async Task SeedPowerFuelSourcesAsync(ProductionCatalog catalog, CancellationToken token,
+        Func<CancellationToken, Task<bool>>? isObjectiveComplete = null)
+    {
+        // Early burner-only factories keep the existing shared-source path and raw-growth budget.
+        if (!Enabled(catalog, "electric-mining-drill")) return;
+        var transport = new PowerFuelTransport(game, journal, directory);
+        for (int built = 0; built < PowerFuelSeedCells; built++)
+        {
+            if (isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
+            var need = await transport.ObserveSourceNeedAsync(catalog, token);
+            if (need.Missing == 0) return;
+            try
+            {
+                var cell = await new ResourceCellBuilder(game, journal, directory).BuildNextAsync(FactoryLogistics.Fuel,
+                    need.PerMinute, token, explorationBudget: 4);
+                await ExpandPowerAsync(catalog.Scope, token);
+                await journal.AppendAsync("power-fuel-source-added", new { need, cell.Id, cell.Entities, cell.Tick }, token);
+            }
+            catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+            {
+                if (ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token)).Scope != catalog.Scope) throw;
+                await journal.AppendAsync("power-fuel-source-seed-failed", new { need, error = error.GetType().Name, error.Message }, token);
+                return;
+            }
+        }
     }
 
     internal static IReadOnlyList<FactoryCell> RawStartupCells(ProductionCatalog catalog, FactoryState state,

@@ -534,7 +534,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         SpatialController controller, CancellationToken token)
     {
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame factory scope changed.");
-        if (PlanningCenter(snapshot, entityIds, 1) is null) return null;
+        if (PlanningCenter(snapshot, entityIds, 1) is not { } center) return null;
         var spatial = new SpatialClient(game);
         var items = GeometryItems(state, steam);
         var map = await spatial.CaptureAsync(items, 48, token);
@@ -543,7 +543,30 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         if (!FrameCovered(map, entityIds))
         {
             var stand = PlanningStand(map, snapshot, entityIds);
-            if (stand is null) return null; // No known walkable vantage; keep fuel delivery active.
+            if (stand is null)
+            {
+                // A remote actor's photograph need not include the feasible vantage rectangle. Approach a known own
+                // endpoint first, then choose ground from the new native view; never walk blindly onto the center.
+                foreach (string id in PlanningAnchors(snapshot, entityIds, center).Take(2))
+                {
+                    var position = Position(snapshot, id)!;
+                    await journal.AppendAsync("power-fuel-frame-approach", new { id, position, map.CollectedTick }, token);
+                    await controller.ApproachEntityAsync(id, position, catalog, token);
+                    map = await spatial.CaptureAsync(items, 48, token);
+                    if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel endpoint travel scope changed.");
+                    moved = true;
+                    if (FrameCovered(map, entityIds)) break;
+                    stand = PlanningStand(map, snapshot, entityIds);
+                    if (stand is not null) break;
+                }
+                if (FrameCovered(map, entityIds))
+                {
+                    await journal.AppendAsync("power-fuel-frame", new { map.Scope, map.CollectedTick, map.Actor.Position,
+                        map.Bounds, moved, requiredEntities = entityIds.Count }, token);
+                    return map;
+                }
+            }
+            if (stand is null) return null; // Observed endpoints still provide no known walkable vantage.
             await controller.TravelAsync(stand, 1, catalog, token);
             map = await spatial.CaptureAsync(items, 48, token);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame travel scope changed.");
@@ -554,6 +577,12 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             map.Bounds, moved, requiredEntities = entityIds.Count }, token);
         return map;
     }
+
+    internal static IReadOnlyList<string> PlanningAnchors(FactorySnapshot snapshot, IReadOnlyList<string> entityIds, MapPosition center) =>
+        entityIds.Distinct(StringComparer.Ordinal).Select(id => snapshot.Records.SingleOrDefault(r => r.Kind == "entity" && r.EntityId == id))
+            .Where(r => r?.Data.TryGetProperty("role", out var role) == true && role.GetString() == "factory")
+            .OrderBy(r => Position(snapshot, r!.EntityId)!.DistanceTo(center)).ThenBy(r => r!.EntityId, StringComparer.Ordinal)
+            .Select(r => r!.EntityId).ToArray();
 
     internal static bool FrameCovered(SpatialSnapshot map, IReadOnlyList<string> entityIds) =>
         map.Coverage.Atomic && map.Coverage.Complete && entityIds.Count > 0 && entityIds.All(id =>

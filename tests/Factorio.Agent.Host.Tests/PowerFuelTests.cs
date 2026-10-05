@@ -115,6 +115,107 @@ public sealed class PowerFuelTests
         Assert.Equal(new[] { ("coal", 180.0) }, seeds);
     }
 
+    [Fact]
+    public void SixWorkingSourcesDoNotCoverFiveBoilersWhenTwoAreOutsideTheNativeFrame()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        var need = PowerFuelTransport.SourceNeed(state, snapshot, catalog, power);
+        Assert.Equal(new PowerFuelSourceNeed(5, 4, 27), need);
+        Assert.Equal(1, need.Missing);
+        Assert.DoesNotContain(PowerFuelTransport.LocalSources(state, snapshot, state.Cells.Where(c => c.Kind == "power").ToArray()),
+            c => c.Id is "source-0" or "source-1");
+    }
+
+    [Fact]
+    public void OneMoreCompatibleLocalMinerCompletesTheJointSourcePool()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame(extra: true);
+        var need = PowerFuelTransport.SourceNeed(state, snapshot, catalog, power);
+        Assert.Equal(new PowerFuelSourceNeed(5, 5, 27), need);
+        Assert.Equal(0, need.Missing);
+    }
+
+    [Fact]
+    public void ASourceMustCoverNativeDemandRatherThanMerelyCountAsALocalCell()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        state = state with { Rows = state.Rows!.Select(r => r.Id == 5 ? r with { CellPerMinute = 26 } : r).ToArray() };
+        Assert.Equal(2, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).Missing);
+        snapshot = snapshot with { Records = snapshot.Records.Select(r => r.EntityId == "source-4-drill" && r.Kind == "work"
+            ? r with { Data = Protocol.ToElement(new { statusName = "no_minable_resources" }) } : r).ToArray() };
+        Assert.Equal(3, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).Missing);
+    }
+
+    [Fact]
+    public void UnfinishedFuelLinksRetainTheirSourcesWithoutStartingUnnecessaryNewMiners()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        state = state.With(new FactoryCell("line", 0, new(0, 0, true), "transport", "transport-belt", null,
+            new Dictionary<string, string>(), "building", 1)).With(new FactoryTransportBus("bus", "source-5", "coal", "line",
+                [new("target-0", "receiver", 100)]));
+        Assert.Equal(0, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).Missing);
+    }
+
+    [Fact]
+    public void ASourcePromisedToAnotherLinkIsNotCountedAgain()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        state = state.With(new FactoryCell("line", 0, new(0, 0, true), "transport", "transport-belt", null,
+            new Dictionary<string, string>(), "ready", 1)).With(new FactoryTransportBus("bus", "source-5", "coal", "line", []));
+        Assert.Equal(2, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).Missing);
+    }
+
+    [Fact]
+    public void OneBoilerStillUsesTheExistingMultiSourceConnectionInsteadOfGrowingForABatch()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        state = state with { Cells = state.Cells.Where(c => c.Kind != "power" || c.Id == "target-0").ToArray() };
+        Assert.Equal(0, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).Missing);
+    }
+
+    [Fact]
+    public void SourceGrowthCannotUseThePreviousActorsNativePowerOrInventory()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        Assert.Throws<InvalidDataException>(() => PowerFuelTransport.SourceNeed(state,
+            snapshot with { Scope = snapshot.Scope with { Generation = 20 } }, catalog, power));
+        Assert.Throws<InvalidDataException>(() => PowerFuelTransport.SourceNeed(state, snapshot, catalog,
+            power with { Scope = power.Scope with { Generation = 20 } }));
+    }
+
+    private static (FactoryState State, FactorySnapshot Snapshot, ProductionCatalog Catalog, PowerState Power) SourceFrame(bool extra = false)
+    {
+        var (catalog, _, template) = Native();
+        var cells = new List<FactoryCell>();
+        var records = new List<FactoryRecord>();
+        var rows = new List<ResourceRow>();
+        void Entity(string id, MapPosition position) => records.Add(new(id, "entity", id, "native",
+            Protocol.ToElement(new { role = "factory", position })));
+        for (int target = 0; target < 5; target++)
+        {
+            string id = $"target-{target}";
+            var parts = new Dictionary<string, string> { ["boiler"] = id + "-boiler", ["input-chest"] = id + "-in", ["input-inserter"] = id + "-arm" };
+            var position = new MapPosition(target % 2 == 0 ? 70.5 : 66.5, -2.5 - 3 * target);
+            foreach (string part in parts.Values) Entity(part, position);
+            cells.Add(new(id, 0, new(0, target, true), "power", "boiler", null, parts, "ready", target + 1));
+        }
+        double[] xs = extra ? [-23.5, -20.5, -13.5, -13.5, -15.5, -12.5, -9.5] : [-23.5, -20.5, -13.5, -13.5, -15.5, -12.5];
+        for (int source = 0; source < xs.Length; source++)
+        {
+            string id = $"source-{source}";
+            var position = new MapPosition(xs[source], -10.5);
+            var parts = new Dictionary<string, string> { ["drill"] = id + "-drill", ["output-chest"] = id + "-out" };
+            foreach (string part in parts.Values) Entity(part, position);
+            cells.Add(new(id, 0, new(source, 0, true), "miner", "electric-mining-drill", "coal", parts, "ready", 1));
+            rows.Add(new(source, "miner", "coal", "coal", new("electric-mining-drill", "iron-chest"), position, 8, 3, 1, 30));
+            records.Add(new(id + "-work", "work", id + "-drill", "native-mining", Protocol.ToElement(new { statusName = "working" })));
+        }
+        var state = new FactoryState(1, catalog.Scope.WorldId, [], cells, rows, Transports: []);
+        var snapshot = new FactorySnapshot("native", catalog.Scope, 10, 100, Protocol.ToElement(new { atomic = true }), records);
+        var power = template with { Boilers = cells.Where(c => c.Kind == "power").Select(c => template.Boilers[0] with { Id = c.Entities["boiler"] }).ToArray() };
+        return (state, snapshot, catalog, power);
+    }
+
     private static (ProductionCatalog Catalog, FactoryCell Cell, PowerState Power) Native(double usage = 30000, double value = 4000000, double effectivity = 1)
     {
         var original = Catalogs.Early();
