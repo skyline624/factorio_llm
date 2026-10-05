@@ -208,8 +208,9 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 var existing = RawCapacity(state, item);
                 return new(item, supply.Kind, existing.Cells, existing.PerMinute, built);
             }
-            foreach (var producer in state.Cells.Where(c => c.IsResource && c.Recipe == item && c.Status == "ready"))
-                await new ResourceCellStartup(game, journal).StartAsync(producer, catalog, startupController, token);
+            await new ResourceCellStartup(game, journal).StartManyAsync(
+                state.Cells.Where(c => c.IsResource && c.Recipe == item && c.Status == "ready"),
+                catalog, startupController, token, isObjectiveComplete);
             var (cells, current) = RawCapacity(state, item);
             if (current >= perMinute - 1e-9 || built >= maximumNewCells)
             {
@@ -345,11 +346,9 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         var startupRaw = new Dictionary<string, double>(raw, StringComparer.Ordinal);
         if (powerFuel > 0) startupRaw[FactoryLogistics.Fuel] = startupRaw.GetValueOrDefault(FactoryLogistics.Fuel) + powerFuel;
         await using (var controller = new SpatialController(game, journal))
-            foreach (var producer in RawStartupCells(catalog, await registry.LoadAsync(catalog.Scope.WorldId, token), startupRaw))
-            {
-                if (isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
-                await new ResourceCellStartup(game, journal).StartAsync(producer, catalog, controller, token);
-            }
+            await new ResourceCellStartup(game, journal).StartManyAsync(
+                RawStartupCells(catalog, await registry.LoadAsync(catalog.Scope.WorldId, token), startupRaw),
+                catalog, controller, token, isObjectiveComplete);
         var carried = FactoryLogistics.Carried(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token));
         foreach (var (item, perMinute) in RawSeeds(catalog, await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token), raw, carried, powerFuel))
         {

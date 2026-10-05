@@ -7,6 +7,24 @@ namespace Factorio.Agent.Host;
 /// <summary>Starts cold resource-cell burners before subsequent construction waits on their output.</summary>
 internal sealed class ResourceCellStartup(IGameClient game, IControllerJournal journal)
 {
+    /// <summary>One native census skips already supplied equipment; each selected cell is reobserved before any transfer.</summary>
+    public async Task StartManyAsync(IEnumerable<FactoryCell> cells, ProductionCatalog catalog, SpatialController controller,
+        CancellationToken token, Func<CancellationToken, Task<bool>>? isObjectiveComplete = null)
+    {
+        var producers = cells.Where(c => c.IsResource).ToArray();
+        if (producers.Length == 0 || isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
+        var snapshot = await new FactorySnapshotClient(game).CaptureAsync([FactoryLogistics.Fuel], cancellationToken: token);
+        if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while inspecting retained resource producers.");
+        var cold = producers.Where(c => BurnerEntities(c).Any(id => Cold(snapshot, id))).ToArray();
+        await journal.AppendAsync("resource-startup-scan", new { snapshot.Scope, snapshot.CollectedTick,
+            inspectedCells = producers.Length, selectedCells = cold.Select(c => c.Id).ToArray() }, token);
+        foreach (var cell in cold)
+        {
+            if (isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
+            await StartAsync(cell, catalog, controller, token);
+        }
+    }
+
     public async Task StartAsync(FactoryCell cell, ProductionCatalog catalog, SpatialController controller, CancellationToken token)
     {
         if (!cell.IsResource) return;

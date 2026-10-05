@@ -73,6 +73,103 @@ public sealed class ResourceCellStartupTests
         Assert.Empty(FactoryDirector.RawStartupCells(Catalogs.Raw(), state, new Dictionary<string, double>()));
     }
 
+    [Fact]
+    public async Task ALoadedFleetDoesNotRepeatTheFactoryCensusOrRequestAnyActorWork()
+    {
+        var cells = Enumerable.Range(0, 24).Select(i => Cell with { Id = $"smelter-{i}", Kind = "smelter",
+            Entities = new Dictionary<string, string> { ["drill"] = $"drill-{i}", ["furnace"] = $"furnace-{i}" } }).ToArray();
+        var game = new CensusGame(cells.SelectMany(ResourceCellStartup.BurnerEntities).SelectMany(id => Records(id, 1)).ToArray());
+        var journal = new ScanJournal();
+        await using var controller = new SpatialController(game, journal);
+
+        await new ResourceCellStartup(game, journal).StartManyAsync(cells, Catalogs.Raw(), controller, default);
+
+        Assert.Equal(1, game.Photos);
+        Assert.Empty(journal.Selected);
+        Assert.Equal(24, journal.Inspected);
+    }
+
+    [Fact]
+    public async Task AProducerThatBecomesLoadedAfterTheCensusIsReobservedWithoutAnotherTransfer()
+    {
+        var game = new CensusGame(Records("drill", 0), warmAfterCensus: true);
+        var journal = new ScanJournal();
+        await using var controller = new SpatialController(game, journal);
+
+        await new ResourceCellStartup(game, journal).StartManyAsync([Cell], Catalogs.Raw(), controller, default);
+
+        Assert.Equal([Cell.Id], journal.Selected);
+        Assert.Equal(2, game.Photos); // The first cold observation is never used as authority to insert.
+    }
+
+    [Fact]
+    public async Task ResearchCompletingDuringTheCensusPreventsStartingItsSelectedColdProducer()
+    {
+        var game = new CensusGame(Records("drill", 0));
+        var journal = new ScanJournal();
+        await using var controller = new SpatialController(game, journal);
+        int reads = 0;
+
+        await new ResourceCellStartup(game, journal).StartManyAsync([Cell], Catalogs.Raw(), controller, default,
+            _ => Task.FromResult(++reads == 2));
+
+        Assert.Equal(1, game.Photos);
+        Assert.Equal([Cell.Id], journal.Selected);
+    }
+
+    [Fact]
+    public async Task ALoadedFleetFromAnotherIncarnationIsRejectedBeforeItCanBeSkipped()
+    {
+        var game = new CensusGame(Records("drill", 1), changedActor: true);
+        var journal = new ScanJournal();
+        await using var controller = new SpatialController(game, journal);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => new ResourceCellStartup(game, journal)
+            .StartManyAsync([Cell], Catalogs.Raw(), controller, default));
+
+        Assert.Equal(1, game.Photos);
+        Assert.Equal(0, journal.Inspected);
+    }
+
+    private static FactoryRecord[] Records(string id, long loaded) =>
+        [new(id, "entity", id, "burner-mining-drill", Protocol.ToElement(new { burnerRemainingJoules = 0, fuelInventoryId = id + "-fuel" })),
+         new(id + "-fuel", "inventory", id, "fuel", Protocol.ToElement(new { items = new Dictionary<string, long> { ["coal"] = loaded } }))];
+
+    private sealed class ScanJournal : IControllerJournal
+    {
+        public string[] Selected { get; private set; } = [];
+        public int Inspected { get; private set; }
+        public Task AppendAsync(string type, object data, CancellationToken token)
+        {
+            Assert.Equal("resource-startup-scan", type);
+            var scan = Protocol.ToElement(data);
+            Selected = scan.GetProperty("selectedCells").EnumerateArray().Select(c => c.GetString()!).ToArray();
+            Inspected = scan.GetProperty("inspectedCells").GetInt32();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CensusGame(FactoryRecord[] records, bool warmAfterCensus = false, bool changedActor = false) : IGameClient
+    {
+        public int Photos { get; private set; }
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            Assert.Equal("factory_snapshot", request.Action); // Any observation for procurement, movement or transfer fails the test.
+            Photos++;
+            var scope = Catalogs.Raw().Scope;
+            if (changedActor) scope = scope with { Incarnation = scope.Incarnation + 1 };
+            var current = warmAfterCensus && Photos > 1 ? records.Select(r => r.Kind == "inventory"
+                ? r with { Data = Protocol.ToElement(new { items = new Dictionary<string, long> { ["coal"] = 1L } }) } : r).ToArray() : records;
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, 100 + Photos, Protocol.ToElement(new
+            {
+                snapshotId = "census-" + Photos, scope, snapshotScope = scope, collectedTick = 100 + Photos, expiresTick = 3700 + Photos,
+                totalRecords = current.Length, offset = 0, nextOffset = current.Length, complete = true,
+                coverage = new { atomic = true, knownInventoriesComplete = true, knownBeltAndInserterTransitComplete = true, fluidSegmentsDeduplicated = true },
+                records = current
+            })));
+        }
+    }
+
     private static FactorySnapshot Snapshot(double burning, long loaded, string fuel = "coal") => new("fixture",
         ConstructionSupplyPlannerTests.Catalog().Scope, 1, 100, JsonSerializer.SerializeToElement(new { }),
         [new("drill", "entity", "drill", "burner-mining-drill", JsonSerializer.SerializeToElement(new { burnerRemainingJoules = burning, fuelInventoryId = "fuel" })),
