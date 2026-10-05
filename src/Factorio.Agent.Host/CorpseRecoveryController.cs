@@ -28,6 +28,7 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
     public const double IndustryReach = 48;
     /// <summary>Retry a body guarded by currently visible mobile enemies after one game minute.</summary>
     public const long VisibleThreatRetryTicks = 60 * 60;
+    internal const int MaximumApproachDeferrals = 3;
 
     /// <summary>Own entity types that make a place worth defending: production, power, storage and turrets, not poles or corpses.</summary>
     private static readonly HashSet<string> IndustryTypes = new(StringComparer.Ordinal)
@@ -48,6 +49,7 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
         // Verdicts of this attempt only: a later attempt observes the zones again.
         var verdicts = new Dictionary<NativeDeathTransition, string>();
         var rememberedGuards = new HashSet<string>(StringComparer.Ordinal);
+        var deferredApproaches = new HashSet<string>(StringComparer.Ordinal);
         IReadOnlyList<NativeDeathTransition> zones = [];
         long lastTick = death.DeathTick;
         for (int step = 0; step < 256; step++)
@@ -111,7 +113,8 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
                     corpses = guarded.Except(visibleGuarded).Select(c => new { c.Id, c.Position }),
                     interpretation = "A guard was observed during this attempt; the current view does not prove the whole corpse zone clear. No current enemy position is inferred."
                 }, token);
-            var selected = corpses.Except(blocked).Except(distant).Except(guarded).OrderBy(c => c.Position.DistanceTo(position)).ThenBy(c => c.Id, StringComparer.Ordinal)
+            var selected = corpses.Except(blocked).Except(distant).Except(guarded).Where(c => !deferredApproaches.Contains(c.Id))
+                .OrderBy(c => c.Position.DistanceTo(position)).ThenBy(c => c.Id, StringComparer.Ordinal)
                 .SelectMany(c => c.Items.Where(p => p.Value > 0 && !unavailable.Contains((c.Id, p.Key)))
                     .OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => (Corpse: c, Item: p.Key, Count: p.Value)))
                 .FirstOrDefault();
@@ -121,6 +124,13 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
                 if (guarded.Length > 0)
                 {
                     var deferred = new CorpseRecoveryResult(response.Tick, "unsafe-corpses-deferred", collected, remaining,
+                        corpses.Select(c => c.Id).ToArray(), response.Tick + VisibleThreatRetryTicks);
+                    await journal.AppendAsync("corpse-recovery-result", deferred, token);
+                    return deferred;
+                }
+                if (deferredApproaches.Count > 0)
+                {
+                    var deferred = new CorpseRecoveryResult(response.Tick, "unreachable-corpses-deferred", collected, remaining,
                         corpses.Select(c => c.Id).ToArray(), response.Tick + VisibleThreatRetryTicks);
                     await journal.AppendAsync("corpse-recovery-result", deferred, token);
                     return deferred;
@@ -150,6 +160,36 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             {
                 await controller.StopOwnedActionsAsync();
                 continue; // Reobserve and select another safe body; never replay the stopped movement.
+            }
+            catch (Exception error) when (error is NavigationPlanningException
+                || error is OperationCanceledException && !token.IsCancellationRequested)
+            {
+                // A local navigation deadline is not the recovery deadline. Reconcile the owned movement/defense first;
+                // an uncertain stop, changed actor or parent cancellation must still escape this attempt.
+                await controller.StopOwnedActionsAsync();
+                token.ThrowIfCancellationRequested();
+                var fresh = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = InspectionRadius,
+                    limit = 200, entityLimit = ProductionController.MaximumOwnEntities }), token);
+                var known = ReadObservedCorpses(fresh, death, scope, lastTick);
+                var safety = SafetyObservation.Parse(fresh);
+                if (safety.StopUnconfirmed || safety.Operation is { IsTerminal: false })
+                    throw new InvalidDataException("Corpse approach deferral requires a confirmed idle native actor.", error);
+                lastTick = fresh.Tick;
+                deferredApproaches.Add(selected.Corpse.Id);
+                await journal.AppendAsync("corpse-recovery-navigation-deferred", new { scope, fresh.Tick,
+                    corpse = selected.Corpse.Id, selected.Corpse.Position, exceptionType = error.GetType().FullName,
+                    message = error.Message[..Math.Min(error.Message.Length, 256)], deferredApproaches = deferredApproaches.Count,
+                    maximumApproachDeferrals = MaximumApproachDeferrals }, token);
+                if (deferredApproaches.Count >= MaximumApproachDeferrals)
+                {
+                    var remainingNow = known.SelectMany(c => c.Items).GroupBy(p => p.Key, StringComparer.Ordinal)
+                        .ToDictionary(g => g.Key, g => checked(g.Sum(p => p.Value)), StringComparer.Ordinal);
+                    var deferred = new CorpseRecoveryResult(lastTick, "unreachable-corpses-deferred", collected, remainingNow,
+                        known.Select(c => c.Id).ToArray(), lastTick + VisibleThreatRetryTicks);
+                    await journal.AppendAsync("corpse-recovery-result", deferred, token);
+                    return deferred;
+                }
+                continue;
             }
             var stock = await new FactorySnapshotClient(game).CaptureAsync([selected.Item], cancellationToken: token);
             if (stock.Scope != scope || stock.CollectedTick < lastTick) throw new InvalidDataException("Actor or tick changed while checking corpse recovery capacity.");

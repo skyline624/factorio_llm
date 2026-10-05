@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Factorio.Agent.Core;
 using Xunit;
 
@@ -7,6 +8,65 @@ namespace Factorio.Agent.Host.Tests;
 /// <summary>Campaign 2026-10-01 (seed 20261002): every recovery walked back to the fresh corpse and died near it.</summary>
 public sealed class CorpseRecoveryDangerTests
 {
+    [Theory]
+    [InlineData("route")]
+    [InlineData("local-deadline")]
+    public async Task OneFailedApproachIsDeferredAfterIdleProofInsteadOfRestartingRecovery(string failure)
+    {
+        var game = new Game { AllowTravel = true, Tick = 120000, ApproachFailure = failure };
+        var journal = new Journal();
+        var result = await new CorpseRecoveryController(game, journal).RunAsync(Death, Scope, default);
+        Assert.Equal("unreachable-corpses-deferred", result.Outcome);
+        Assert.Equal(result.Tick + CorpseRecoveryController.VisibleThreatRetryTicks, result.RetryTick);
+        Assert.Empty(result.Collected);
+        Assert.Equal(40, result.Remaining["iron-plate"]);
+        Assert.Equal(1, game.Calls.Count(c => c == "spatial"));
+        Assert.Equal(0, game.Submissions);
+        Assert.Single(journal.All("corpse-recovery-navigation-deferred"));
+        Assert.DoesNotContain("factory_snapshot", game.Calls);
+    }
+
+    [Fact]
+    public async Task DistinctInaccessibleBodiesHaveOneAttemptEachAndYieldAfterThreeApproaches()
+    {
+        var bodies = Enumerable.Range(0, 4).Select(i => Death with { ActorUnitNumber = Death.ActorUnitNumber + i,
+            Position = new(20 + i, 0) }).ToArray();
+        var game = new Game { AllowTravel = true, Tick = 120000, ApproachFailure = "route", Corpses = bodies };
+        var journal = new Journal();
+        var result = await new CorpseRecoveryController(game, journal).RunAsync(Death, Scope, default);
+        Assert.Equal("unreachable-corpses-deferred", result.Outcome);
+        Assert.Equal(160, result.Remaining["iron-plate"]);
+        Assert.Equal(3, game.Calls.Count(c => c == "spatial"));
+        Assert.Equal(3, journal.All("corpse-recovery-navigation-deferred").Select(r => r.GetProperty("corpse").GetString()).Distinct().Count());
+        Assert.Equal(0, game.Submissions);
+    }
+
+    [Theory]
+    [InlineData("scope")]
+    [InlineData("manual")]
+    [InlineData("unconfirmed")]
+    [InlineData("running")]
+    public async Task AnApproachFailureCannotHideLostActorOrUnconfirmedNativeState(string state)
+    {
+        var game = new Game { AllowTravel = true, Tick = 120000, ApproachFailure = "route", StateAfterApproachFailure = state };
+        var journal = new Journal();
+        await Assert.ThrowsAsync<InvalidDataException>(() => new CorpseRecoveryController(game, journal).RunAsync(Death, Scope, default));
+        Assert.Empty(journal.All("corpse-recovery-navigation-deferred"));
+        Assert.Equal(0, game.Submissions);
+    }
+
+    [Fact]
+    public async Task ParentCancellationCannotBecomeADeferredApproach()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var game = new Game { AllowTravel = true, Tick = 120000, ApproachFailure = "local-deadline",
+            BeforeApproachFailure = cancellation.Cancel };
+        var journal = new Journal();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new CorpseRecoveryController(game, journal).RunAsync(Death, Scope, cancellation.Token));
+        Assert.Empty(journal.All("corpse-recovery-navigation-deferred"));
+        Assert.Equal(0, game.Submissions);
+    }
+
     private static readonly ActorScope Scope = new("world", "session", "actor", 2, 4);
     private static readonly NativeDeathTransition Death = new(1, 49000, 17, 1, new(20, 0));
 
@@ -290,6 +350,10 @@ public sealed class CorpseRecoveryDangerTests
         public bool EnemiesTruncated { get; init; }
         public bool LimitEnemiesToRequestedRadius { get; init; }
         public bool AllowTravel { get; init; }
+        public string? ApproachFailure { get; init; }
+        public string? StateAfterApproachFailure { get; init; }
+        public Action? BeforeApproachFailure { get; init; }
+        private bool approachFailed;
         public bool AllowDefense { get; init; }
         public bool LoseDefenseReply { get; init; }
         public bool ChangeScopeAfterDefense { get; init; }
@@ -321,6 +385,13 @@ public sealed class CorpseRecoveryDangerTests
             Calls.Add(request.Action);
             // Travel starts by reading the production catalog: stop there, the approach decision is made.
             long tick = ++Tick;
+            if (request.Action == "spatial" && ApproachFailure is not null)
+            {
+                approachFailed = true;
+                BeforeApproachFailure?.Invoke();
+                if (ApproachFailure == "local-deadline") throw new OperationCanceledException("Local navigation deadline.");
+                throw new NavigationPlanningException(RouteStatus.NoRouteOnKnownGrid, "Native destination is inaccessible.");
+            }
             var actor = Cancellations > 0 ? ActorAfterCancellation ?? Actor : Actor;
             if (AllowDefense && request.Action is "submit" or "operation")
             {
@@ -373,17 +444,22 @@ public sealed class CorpseRecoveryDangerTests
             if (request.Action != "observe") throw new InvalidOperationException($"Approach requested with {request.Action}.");
             int radius = request.Arguments.GetProperty("radius").GetInt32();
             ObservedRadii.Add(radius);
-            return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(new
+            var observation = JsonSerializer.SerializeToNode(new
             {
-                scope = (ChangeScopeDuringMove || ChangeScopeAfterDefense) && operationId is not null ? ObservedScope with { Incarnation = ObservedScope.Incarnation + 1 } : ObservedScope, collectedTick = tick,
+                scope = (ChangeScopeDuringMove || ChangeScopeAfterDefense) && operationId is not null
+                    || approachFailed && StateAfterApproachFailure == "scope" ? ObservedScope with { Incarnation = ObservedScope.Incarnation + 1 } : ObservedScope, collectedTick = tick,
                 coverage = new { atomic = true, collectionStartTick = tick, collectionEndTick = tick, radius, enemiesTruncated = EnemiesTruncated,
                     enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
-                agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = actor, health = 250.0,
+                agent = new { alive = true, controlMode = approachFailed && StateAfterApproachFailure == "manual" ? "manual" : "ai",
+                    stopUnconfirmed = approachFailed && StateAfterApproachFailure == "unconfirmed", position = actor, health = 250.0,
                     weapon = new { ready = true, rounds = 100, range = 15.0 }, inventory = new { }, reachDistance = 10.0 },
                 enemies = Enemies.Where(e => (!AllowTravel || operationId is not null) && !(HideEnemiesAfterCancellation && Cancellations > 0)
                     && !(AllowDefense && Submissions > 0 && e.Position.DistanceTo(Actor) <= 15)
                     && (!LimitEnemiesToRequestedRadius || e.Position.DistanceTo(actor) <= radius))
                     .Select((e, index) => new { id = $"enemy-{index}", type = e.Type, position = e.Position, collectedTick = tick }),
+                operation = approachFailed && StateAfterApproachFailure == "running"
+                    ? (object)new { operationId = "unknown-native-operation", kind = "move", status = "running", acceptedTick = tick,
+                        updatedTick = tick, effects = new { } } : new { },
                 recovery = new
                 {
                     knownCorpsesComplete = true,
@@ -394,7 +470,9 @@ public sealed class CorpseRecoveryDangerTests
                         inventories = new { corpse = new { items = new Dictionary<string, long> { ["iron-plate"] = 40 } } }
                     })
                 }
-            })));
+            }, Protocol.Json)!.AsObject();
+            if (!(approachFailed && StateAfterApproachFailure == "running")) observation.Remove("operation");
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(observation)));
         }
     }
 }
