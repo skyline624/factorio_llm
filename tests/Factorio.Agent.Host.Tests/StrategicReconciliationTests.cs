@@ -473,6 +473,50 @@ public sealed class StrategicReconciliationTests : IDisposable
         Assert.Equal(original, await File.ReadAllTextAsync(Memory));
     }
 
+    [Fact]
+    public async Task LongAttemptsUseANativeConfirmedReceiptRecordedBeforeTheUnknownIntent()
+    {
+        var game = await PrepareAsync(false);
+        game.AcceptedTick = 36000;
+        var journal = new ControllerJournal(Journal);
+        await journal.AppendAsync("receipt", game.Receipt(), default);
+        var unsent = OperationSubmission.Create(Scope, "move", new { position = new MapPosition(40, -8), tolerance = .15 }, 36200);
+        await journal.AppendAsync("submission", unsent, default);
+        game.UnknownId = unsent.OperationId;
+        game.WindowOldest = 36000;
+        var result = await new StrategicReconciliationController(game, Memory).ReconcileAsync(Journal);
+        Assert.False((await ReadMemoryAsync()).Pending);
+        Assert.Contains("never_dispatched", (await ReadMemoryAsync()).PreviousResult);
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(result.ReportPath));
+        var proof = Assert.Single(report.RootElement.GetProperty("absenceProofs").EnumerateArray());
+        Assert.Equal(game.OperationId, proof.GetProperty("predecessorOperationId").GetString());
+        Assert.Equal(36100, proof.GetProperty("lowerBoundTick").GetInt64());
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
+    [Theory]
+    [InlineData("receipt-after-intent")]
+    [InlineData("changed-native-receipt")]
+    [InlineData("window-advances")]
+    public async Task ANewerBoundaryCannotHideAnOlderOrUncertainSubmission(string scenario)
+    {
+        var game = await PrepareAsync(false);
+        game.AcceptedTick = 36000;
+        var journal = new ControllerJournal(Journal);
+        var unsent = OperationSubmission.Create(Scope, "move", new { position = new MapPosition(40, -8), tolerance = .15 }, 36200);
+        if (scenario != "receipt-after-intent") await journal.AppendAsync("receipt", game.Receipt(), default);
+        await journal.AppendAsync("submission", unsent, default);
+        if (scenario == "receipt-after-intent") await journal.AppendAsync("receipt", game.Receipt(), default);
+        game.UnknownId = unsent.OperationId;
+        game.WindowOldest = 36000;
+        if (scenario == "changed-native-receipt") game.Failure = "different-effects";
+        if (scenario == "window-advances") game.LaterWindowOldest = 36101;
+        string original = await File.ReadAllTextAsync(Memory);
+        await Assert.ThrowsAsync<InvalidDataException>(() => new StrategicReconciliationController(game, Memory).ReconcileAsync(Journal));
+        Assert.Equal(original, await File.ReadAllTextAsync(Memory));
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
     [Theory]
     [InlineData("world")]
     [InlineData("incarnation")]
@@ -540,6 +584,8 @@ public sealed class StrategicReconciliationTests : IDisposable
         public string? Failure;
         public string? UnknownId;
         public bool Bounded;
+        public long? WindowOldest, LaterWindowOldest;
+        private int windowReads;
         public bool AfterDeath;
         public int DeadObservations;
         public long NativeIncarnation = 2, LastDeathTick = 37000;
@@ -555,6 +601,10 @@ public sealed class StrategicReconciliationTests : IDisposable
         {
             Calls.Add(request.Action);
             Assert.Contains(request.Action, new[] { "observe", "operation", "receipt_window" });
+            if (request.Action == "receipt_window" && WindowOldest is { } boundary)
+                return Task.FromResult(new GameResponse(1, request.RequestId, true, 40000 + Calls.Count,
+                    Protocol.ToElement(new { count = 2048, capacity = 2048, evicted = true,
+                        oldestAcceptedTick = ++windowReads > 1 ? LaterWindowOldest ?? boundary : boundary })));
             if (request.Action == "receipt_window")
                 return Task.FromResult(new GameResponse(1, request.RequestId, true, 40000 + Calls.Count, Protocol.ToElement(Failure == "absent" || Bounded
                     ? new { count = 12, capacity = 2048, evicted = false, oldestAcceptedTick = 50L }

@@ -34,6 +34,7 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         var beforeScope = before.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
         var operations = new OperationClient(game);
         var queried = new List<OperationReceipt>();
+        var absenceProofs = new List<object>();
         var unresolved = audit.Submissions.Values.Where(s => !audit.Receipts.TryGetValue(s.OperationId, out var r) || !r.IsTerminal)
             .Select(s => s.OperationId).ToHashSet(StringComparer.Ordinal);
         bool lastIsJournaled = false;
@@ -100,7 +101,7 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         {
             kind = "read-only-strategic-reconciliation", previousMemory = memory, journalPath,
             journalSha256 = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(contents))),
-            operations = audit.Submissions.Count, queriedReceipts = queried, observation = after.Data,
+            operations = audit.Submissions.Count, queriedReceipts = queried, absenceProofs, observation = after.Data,
             executionDiagnostic = audit.Diagnostic, death, feedback
         }, token);
         if (await File.ReadAllTextAsync(memoryPath, token) != original
@@ -117,6 +118,8 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
         // every operation accepted during the attempt is still retained, so an unknown id was never accepted.
         async Task ProveNeverDispatchedAsync(string id)
         {
+            long boundary = memory.Tick;
+            string? predecessorId = null;
             for (int reading = 0; reading < 2; reading++)
             {
                 if (reading > 0)
@@ -133,10 +136,28 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
                 if (!window.Ok) throw new GameRpcException(window.Error!);
                 bool evicted = window.Data.GetProperty("evicted").GetBoolean();
                 bool bounded = window.Data.TryGetProperty("oldestAcceptedTick", out var oldest) && oldest.ValueKind == JsonValueKind.Number
-                    && oldest.GetInt64() <= memory.Tick;
+                    && oldest.GetInt64() <= boundary;
+                if (evicted && !bounded && audit.Predecessors.TryGetValue(id, out var predecessor))
+                {
+                    // A long attempt can outlive the FIFO window. A terminal receipt recorded BEFORE this intent
+                    // supplies a later causal boundary only after the engine confirms the exact recorded receipt.
+                    OperationReceipt? confirmed = null;
+                    try { confirmed = await operations.QueryAsync(predecessor.OperationId, token); }
+                    catch (GameRpcException error) when (error.Error.Code == "operation_unknown") { }
+                    if (confirmed is not null)
+                    {
+                        ValidateReceipt(audit.Submissions[predecessor.OperationId], confirmed, memory.Tick);
+                        if (!confirmed.IsTerminal || !Equivalent(predecessor, confirmed))
+                            throw new InvalidDataException("The prior native receipt no longer confirms this submission's boundary.");
+                        boundary = Math.Max(boundary, confirmed.UpdatedTick);
+                        predecessorId = confirmed.OperationId;
+                        bounded = oldest.ValueKind == JsonValueKind.Number && oldest.GetInt64() <= boundary;
+                    }
+                }
                 if (evicted && !bounded)
                     throw new InvalidDataException("An unknown operation may have been evicted from the native receipt window.");
             }
+            absenceProofs.Add(new { operationId = id, lowerBoundTick = boundary, predecessorOperationId = predecessorId });
         }
     }
 
@@ -166,6 +187,7 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
     private static JournalAudit ReadJournal(string contents, StrategicMemory memory)
     {
         var audit = new JournalAudit();
+        OperationReceipt? predecessor = null;
         bool selected = false;
         foreach (string line in contents.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
@@ -200,6 +222,7 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
                 if (submission.Scope != memory.Scope || submission.DeadlineTick <= memory.Tick
                     || !audit.Submissions.TryAdd(submission.OperationId, submission))
                     throw new InvalidDataException("Journal submission identity, scope or time is inconsistent.");
+                if (predecessor is not null) audit.Predecessors.Add(submission.OperationId, predecessor);
             }
             if (type is "receipt" or "cancel-receipt" or "final-receipt" or "reconciled")
             {
@@ -218,6 +241,7 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
                     && (receipt.UpdatedTick < prior.UpdatedTick || prior.IsTerminal && !Equivalent(prior, receipt)))
                     throw new InvalidDataException("Journal receipts conflict or regress.");
                 audit.Receipts[id] = receipt;
+                if (receipt.IsTerminal) predecessor = receipt;
             }
         }
         if (!selected && (contents.Length > 0 || memory.PendingJournal is null))
@@ -245,6 +269,7 @@ public sealed class StrategicReconciliationController(IGameClient game, string m
     {
         public Dictionary<string, OperationSubmission> Submissions { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, OperationReceipt> Receipts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, OperationReceipt> Predecessors { get; } = new(StringComparer.Ordinal);
         public JsonElement? Goal { get; set; }
         public string? FailureCode { get; set; }
         public JsonElement? Diagnostic { get; set; }
