@@ -7,7 +7,7 @@ internal sealed record RecipeGraph(IReadOnlyList<RecipeDemand> Stages, IReadOnly
 internal static class ProductionRecipeGraph
 {
     public static RecipeGraph Plan(IReadOnlyDictionary<string, double> targets,
-        Func<string, (NativeRecipe Recipe, string MachineItem)?> choose)
+        Func<string, (NativeRecipe Recipe, string MachineItem)?> choose, string? priorityTarget = null)
     {
         var choices = new Dictionary<string, (NativeRecipe Recipe, string MachineItem)?>(StringComparer.Ordinal);
         var simultaneous = new Dictionary<string, (NativeRecipe Recipe, string MachineItem)>(StringComparer.Ordinal);
@@ -23,6 +23,21 @@ internal static class ProductionRecipeGraph
         var inputs = new Dictionary<string, double>(StringComparer.Ordinal);
         var order = new List<string>();
         foreach (var (target, rate) in targets.OrderBy(p => p.Key, StringComparer.Ordinal)) Add(target, rate, []);
+        if (priorityTarget is not null)
+        {
+            // Reorder the already sized graph, so shared demand and co-product credits stay exactly the same.
+            var first = new List<string>();
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            Visit(priorityTarget);
+            order = [.. first, .. order.Where(name => !visited.Contains(name))];
+
+            void Visit(string product)
+            {
+                if (Choice(product) is not { } selected || !visited.Add(selected.Recipe.Name)) return;
+                foreach (var input in selected.Recipe.Ingredients) Visit(input.Name);
+                first.Add(selected.Recipe.Name);
+            }
+        }
         return new(order.Select(name => stages[name]).ToArray(), inputs);
 
         (NativeRecipe Recipe, string MachineItem)? Choice(string product)

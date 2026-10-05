@@ -64,7 +64,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         var registered = (await registry.LoadAsync(catalog.Scope.WorldId, token)).WithTarget(item, perMinute);
         await registry.SaveAsync(registered, token);
         // Every registered target shares the stages: a second science pack adds its gears to the first one's.
-        var plan = AutomationPlanner.Plan(catalog, registered.Targets!, machines, fluidMachineItems: fluidMachines);
+        var plan = AutomationPlanner.Plan(catalog, registered.Targets!, machines, fluidMachineItems: fluidMachines, priorityItem: item);
         await journal.AppendAsync("factory-automation-plan", new { item, perMinute, targets = registered.Targets, plan }, token);
         if (await DeferAsync()) return plan;
         await SeedRawAsync(catalog, plan.RawPerMinute, token, isObjectiveComplete);

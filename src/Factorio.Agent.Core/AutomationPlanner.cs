@@ -21,18 +21,21 @@ public static class AutomationPlanner
         IReadOnlySet<string>? fluidMachineItems = null) => Plan(catalog,
             new Dictionary<string, double>(StringComparer.Ordinal) { [item] = perMinute }, machineItems, fluidMachineItems);
 
-    /// <summary>Targets share intermediate demand and simultaneous recipe outputs before machines are counted.</summary>
+    /// <summary>Targets share intermediate demand and simultaneous recipe outputs before machines are counted.
+    /// An optional requested target visits its suppliers first without reducing any registered demand.</summary>
     public static AutomationPlan Plan(ProductionCatalog catalog, IReadOnlyDictionary<string, double> targets, IReadOnlySet<string> machineItems,
-        IReadOnlySet<string>? fluidMachineItems = null)
+        IReadOnlySet<string>? fluidMachineItems = null, string? priorityItem = null)
     {
         if (targets.Count == 0 || targets.Values.Any(rate => !double.IsFinite(rate) || rate <= 0 || rate > 10000))
             throw new ArgumentOutOfRangeException(nameof(targets));
+        if (priorityItem is not null && !targets.ContainsKey(priorityItem)) throw new ArgumentException("Priority must be a registered target.", nameof(priorityItem));
         var graph = ProductionRecipeGraph.Plan(targets, name => Choose(catalog, name, machineItems)
-            ?? (fluidMachineItems is null ? null : FluidChainPlanner.Choose(catalog, name, fluidMachineItems)));
+            ?? (fluidMachineItems is null ? null : FluidChainPlanner.Choose(catalog, name, fluidMachineItems)), priorityItem);
         bool Fluid(string name) => fluidMachineItems is not null
             && catalog.Recipes.SelectMany(r => r.Ingredients.Concat(r.Products)).Any(m => m.Name == name && m.DeterministicFluid);
         var raw = graph.Inputs.Where(p => !Fluid(p.Key)).ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
-        IEnumerable<RecipeDemand> ordered = fluidMachineItems is null ? graph.Stages.OrderBy(s => s.Recipe.Name, StringComparer.Ordinal) : graph.Stages;
+        IEnumerable<RecipeDemand> ordered = fluidMachineItems is null && priorityItem is null
+            ? graph.Stages.OrderBy(s => s.Recipe.Name, StringComparer.Ordinal) : graph.Stages;
         var stages = ordered.Select(stage =>
         {
             string kind = stage.Recipe.Ingredients.Concat(stage.Recipe.Products).Any(i => i.DeterministicFluid)

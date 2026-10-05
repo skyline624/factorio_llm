@@ -54,6 +54,8 @@ public sealed class NavigationObservationTests
         else
             await Assert.ThrowsAsync<InvalidDataException>(() => controller.NavigateAsync(new(4.5, .5)));
         Assert.Empty(game.Movements);
+        Assert.Empty(game.SubmittedAfterChangedView);
+        Assert.Single(game.Radii, radius => radius == 48);
         Assert.Equal(0, game.CatalogReads);
     }
 
@@ -102,8 +104,10 @@ public sealed class NavigationObservationTests
         private object? lastReceipt;
         private string? lastOperationId;
         private bool replyLost;
+        private bool changedViewDelivered;
         public List<int> Radii { get; } = [];
         public List<string> SubmittedKinds { get; } = [];
+        public List<string> SubmittedAfterChangedView { get; } = [];
         public List<MapPosition> Movements { get; } = [];
         public int CatalogReads { get; private set; }
         public int ReceiptQueries { get; private set; }
@@ -133,6 +137,7 @@ public sealed class NavigationObservationTests
                             _ => photograph
                         };
                     responseTick = photograph.CollectedTick;
+                    if (radius == 48 && change is not null) changedViewDelivered = true;
                     data = photograph;
                     break;
                 case "observe":
@@ -150,6 +155,7 @@ public sealed class NavigationObservationTests
                 case "submit":
                     var operation = request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!;
                     SubmittedKinds.Add(operation.Kind);
+                    if (changedViewDelivered) SubmittedAfterChangedView.Add(operation.Kind);
                     if (operation.Kind == "move")
                     {
                         Assert.Equal(position, operation.Preconditions.GetProperty("position").Deserialize<MapPosition>(Protocol.Json));
@@ -209,7 +215,12 @@ public sealed class NavigationObservationTests
                         start = column;
                         name = Tile(column);
                     }
-                string Tile(int column) => column is >= -8 and <= 8 ? "grass" : "water";
+                // Observation guards need the bounded wider read, not thousands of nodes of detour search.
+                // Keep the long navigable corridor for the route tests; disconnected narrow strips make
+                // the changed/manual/older/cancelled read deterministic before any actor submission.
+                string Tile(int column) => (change is not null || interruption is not null
+                    ? column is >= -5 and <= -4 or >= 4 and <= 5
+                    : column is >= -8 and <= 8) ? "grass" : "water";
             }
             double halfHeight = blockBothViews ? 60 : 35;
             return map with
