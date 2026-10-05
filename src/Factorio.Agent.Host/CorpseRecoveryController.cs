@@ -26,6 +26,8 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
     /// (96.6, -114.6).
     /// </summary>
     public const double IndustryReach = 48;
+    /// <summary>Retry a body guarded by currently visible mobile enemies after one game minute.</summary>
+    public const long VisibleThreatRetryTicks = 60 * 60;
 
     /// <summary>Own entity types that make a place worth defending: production, power, storage and turrets, not poles or corpses.</summary>
     private static readonly HashSet<string> IndustryTypes = new(StringComparer.Ordinal)
@@ -77,13 +79,36 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
                 verdicts[zone] = await InspectAsync(zone, position, scope, lastTick, token);
             var blocked = holding.Where(c => Blocking(c).Length > 0).ToArray();
             var distant = holding.Except(blocked).Where(c => !NearIndustry(industry, c.Position)).ToArray();
-            var selected = corpses.Except(blocked).Except(distant).OrderBy(c => c.Position.DistanceTo(position)).ThenBy(c => c.Id, StringComparer.Ordinal)
+            // Expiry removes a historical death warning; it does not remove enemies still observed around the body.
+            var safety = SafetyObservation.Parse(response);
+            var mobileIds = data.GetProperty("enemies") is { ValueKind: JsonValueKind.Array } enemies
+                ? enemies.EnumerateArray().Where(e => e.GetProperty("type").GetString() is "unit" or "unit-spawner")
+                    .Select(e => e.GetProperty("id").GetString()!).ToHashSet(StringComparer.Ordinal)
+                : [];
+            var mobile = safety.Enemies.Where(e => mobileIds.Contains(e.Id)).ToArray();
+            var guarded = holding.Except(blocked).Except(distant)
+                .Where(c => mobile.Any(e => e.Position.DistanceTo(c.Position) <= DangerZones.Radius)).ToArray();
+            if (guarded.Length > 0)
+                await journal.AppendAsync("corpse-recovery-visible-threats", new
+                {
+                    response.Tick, radius = DangerZones.Radius,
+                    corpses = guarded.Select(c => new { c.Id, c.Position }),
+                    visibleEnemies = mobile.Where(e => guarded.Any(c => e.Position.DistanceTo(c.Position) <= DangerZones.Radius))
+                }, token);
+            var selected = corpses.Except(blocked).Except(distant).Except(guarded).OrderBy(c => c.Position.DistanceTo(position)).ThenBy(c => c.Id, StringComparer.Ordinal)
                 .SelectMany(c => c.Items.Where(p => p.Value > 0 && !unavailable.Contains((c.Id, p.Key)))
                     .OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => (Corpse: c, Item: p.Key, Count: p.Value)))
                 .FirstOrDefault();
             if (selected.Corpse is null)
             {
                 if (blocked.Length > 0) return await DeferBlockedAsync(response.Tick, blocked, Blocking, verdicts, collected, remaining, corpses, token);
+                if (guarded.Length > 0)
+                {
+                    var deferred = new CorpseRecoveryResult(response.Tick, "unsafe-corpses-deferred", collected, remaining,
+                        corpses.Select(c => c.Id).ToArray(), response.Tick + VisibleThreatRetryTicks);
+                    await journal.AppendAsync("corpse-recovery-result", deferred, token);
+                    return deferred;
+                }
                 if (distant.Length > 0)
                     await journal.AppendAsync("corpse-recovery-distance-deferral", new { response.Tick, reach = IndustryReach,
                         corpses = distant.Select(c => new { c.Id, c.Position, c.Items }) }, token);

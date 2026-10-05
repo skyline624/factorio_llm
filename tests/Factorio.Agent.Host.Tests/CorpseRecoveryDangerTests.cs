@@ -53,14 +53,41 @@ public sealed class CorpseRecoveryDangerTests
     }
 
     [Fact]
-    public async Task ExpiredZoneNoLongerBlocksTheCorpse()
+    public async Task ExpiredZoneWithoutVisibleMobileEnemiesNoLongerBlocksTheCorpse()
     {
-        var game = new Game { Tick = Death.DeathTick + DangerZones.LifetimeTicks, Enemies = [("unit", new(24, 0))] };
+        var game = new Game { Tick = Death.DeathTick + DangerZones.LifetimeTicks };
         var journal = new Journal();
         var travel = await Assert.ThrowsAsync<InvalidOperationException>(() => new CorpseRecoveryController(game, journal).RunAsync(Death, Scope, default));
         Assert.Contains("production_catalog", travel.Message);
         Assert.Equal(["observe", "production_catalog"], game.Calls);
         Assert.Empty(journal.All("danger-zone-inspection"));
+    }
+
+    [Theory]
+    [InlineData("unit")]
+    [InlineData("unit-spawner")]
+    public async Task ExpiredZoneWithCurrentMobileThreatsStillDefersWithoutApproaching(string type)
+    {
+        var game = new Game { Tick = Death.DeathTick + DangerZones.LifetimeTicks, Enemies = [(type, new(24, 0))] };
+        var journal = new Journal();
+        var result = await new CorpseRecoveryController(game, journal).RunAsync(Death, Scope, default);
+        Assert.Equal("unsafe-corpses-deferred", result.Outcome);
+        Assert.Equal(result.Tick + CorpseRecoveryController.VisibleThreatRetryTicks, result.RetryTick);
+        Assert.Equal(40, result.Remaining["iron-plate"]);
+        Assert.Empty(result.Collected);
+        Assert.Equal(["observe"], game.Calls);
+        Assert.Empty(journal.All("danger-zone-inspection"));
+        Assert.Single(journal.All("corpse-recovery-visible-threats"));
+    }
+
+    [Fact]
+    public async Task TruncatedEnemyObservationStillDefersOnPositiveMobileEvidence()
+    {
+        var game = new Game { Tick = Death.DeathTick + DangerZones.LifetimeTicks, Enemies = [("unit", new(24, 0))], EnemiesTruncated = true };
+        var result = await new CorpseRecoveryController(game, new Journal()).RunAsync(Death, Scope, default);
+        Assert.Equal("unsafe-corpses-deferred", result.Outcome);
+        Assert.Empty(result.Collected);
+        Assert.Equal(["observe"], game.Calls);
     }
 
     [Fact]
@@ -131,6 +158,7 @@ public sealed class CorpseRecoveryDangerTests
         public long Tick { get; set; } = 50000;
         public long? Lifetime { get; init; } = 0;
         public IReadOnlyList<(string Type, MapPosition Position)> Enemies { get; init; } = [];
+        public bool EnemiesTruncated { get; init; }
         public IReadOnlyList<NativeDeathTransition> Corpses { get; init; } = [Death];
         public DangerZones Zones { get; init; } = DangerZones.Empty("world").Record(Death);
         public ActorScope ObservedScope { get; init; } = Scope;
@@ -149,7 +177,7 @@ public sealed class CorpseRecoveryDangerTests
             return Task.FromResult(new GameResponse(1, request.RequestId, true, tick, Protocol.ToElement(new
             {
                 scope = ObservedScope, collectedTick = tick,
-                coverage = new { atomic = true, collectionStartTick = tick, collectionEndTick = tick, radius, enemiesTruncated = false,
+                coverage = new { atomic = true, collectionStartTick = tick, collectionEndTick = tick, radius, enemiesTruncated = EnemiesTruncated,
                     enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
                 agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = Actor, health = 250.0,
                     weapon = new { ready = true, rounds = 100, range = 15.0 }, inventory = new { }, reachDistance = 10.0 },
