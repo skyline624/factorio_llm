@@ -224,6 +224,61 @@ public sealed class SurvivalKitTests
         { Events.Add((type, Protocol.ToElement(data))); return Task.CompletedTask; }
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task CarriedEquipmentIsAppliedBeforeStockPreparationFails(bool timeout, bool betterGun)
+    {
+        var game = new KitGame(Catalog("heavy-armor", "submachine-gun"))
+            { StockFailure = timeout ? new TaskCanceledException("Stock preparation deadline") : new InvalidDataException("Stock observation incomplete"),
+                MountedSubmachineGun = betterGun };
+        var result = await new SurvivalKitController(game, new Journal()).EnsureAsync("travel", default);
+        Assert.Equal(("failed", "light-armor"), (result.Status, result.Armor));
+        Assert.Equal(betterGun ? new[] { "armor:light-armor", "ammo:firearm-magazine" } : ["armor:light-armor"], result.Equipped);
+        int failure = game.Calls.IndexOf("stock-failed");
+        Assert.True(failure > game.Calls.LastIndexOf("submit"));
+        Assert.Equal(betterGun ? 2 : 1, game.Calls.Count(c => c == "submit"));
+        Assert.Empty(result.Produced);
+    }
+
+    [Theory]
+    [InlineData("enemy")]
+    [InlineData("manual")]
+    [InlineData("scope")]
+    public async Task ANewThreatOrPilotTransitionDefersTheRestAfterArmorIsWorn(string transition)
+    {
+        var game = new KitGame(Catalog("heavy-armor", "submachine-gun"))
+            { TransitionAfterArmor = transition, MountedSubmachineGun = true };
+        var result = await new SurvivalKitController(game, new Journal()).EnsureAsync("travel", default);
+        Assert.Equal(("deferred", "light-armor"), (result.Status, result.Armor));
+        Assert.Equal(["armor:light-armor"], result.Equipped);
+        Assert.Single(game.Calls, c => c == "submit");
+        Assert.DoesNotContain("stock-observe", game.Calls);
+    }
+
+    [Fact]
+    public async Task ACatalogForAnotherIncarnationCannotChooseAnEquipmentMutation()
+    {
+        var game = new KitGame(Catalog("light-armor")) { StaleCatalog = true };
+        var result = await new SurvivalKitController(game, new Journal()).EnsureAsync("travel", default);
+        Assert.Equal("deferred", result.Status);
+        Assert.Null(result.Armor);
+        Assert.DoesNotContain("submit", game.Calls);
+    }
+
+    [Fact]
+    public async Task ALostEarlyArmorResponseIsQueriedWithoutRepeatingTheTransfer()
+    {
+        var game = new KitGame(Catalog("light-armor")) { LoseArmorResponse = true };
+        var result = await new SurvivalKitController(game, new Journal()).EnsureAsync("travel", default);
+        Assert.Equal(("complete", "light-armor"), (result.Status, result.Armor));
+        Assert.Single(game.Calls, c => c == "submit");
+        Assert.Single(game.Calls, c => c == "operation");
+        Assert.Equal(["armor:light-armor"], result.Equipped);
+    }
+
     private static ProductionCatalog PortableCatalog(bool ammunitionRecipe = false)
     {
         var catalog = Catalog("light-armor", ammunitionRecipe ? "firearm-magazine" : "");
@@ -282,6 +337,11 @@ public sealed class SurvivalKitTests
         private readonly ActorScope scope = new(Guid.NewGuid().ToString("N"), "session", "actor", 1, 1);
         private string? worn;
         private bool submachineLoaded;
+        private object? lastReceipt;
+        public Exception? StockFailure { get; init; }
+        public string? TransitionAfterArmor { get; init; }
+        public bool StaleCatalog { get; init; }
+        public bool LoseArmorResponse { get; init; }
         public bool Enemy { get; init; }
         public bool MountedSubmachineGun { get; init; }
         public int PortableTurrets { get; set; }
@@ -292,14 +352,35 @@ public sealed class SurvivalKitTests
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
             Calls.Add(request.Action);
+            if (request.Action == "observe" && request.Arguments.TryGetProperty("entityLimit", out var limit) && limit.GetInt32() > 1)
+            {
+                Calls.Add("stock-observe");
+                if (StockFailure is not null) { Calls.Add("stock-failed"); throw StockFailure; }
+            }
             object data = request.Action switch
             {
-                "production_catalog" => catalog with { Scope = scope, CollectedTick = 100 },
+                "production_catalog" => catalog with { Scope = StaleCatalog ? scope with { Incarnation = 2 } : scope, CollectedTick = 100 },
                 "observe" => Observation(),
-                "submit" => Equip(request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!),
+                "submit" => Submit(request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!),
+                "operation" => Query(request),
                 _ => throw new InvalidOperationException(request.Action)
             };
             return Task.FromResult(new GameResponse(1, request.RequestId, true, 100, Protocol.ToElement(data)));
+        }
+
+        private object Submit(OperationSubmission submission)
+        {
+            lastReceipt = Equip(submission);
+            if (LoseArmorResponse) throw new IOException("Equipment was applied but the response was lost");
+            return lastReceipt;
+        }
+
+        private object Query(GameRequest request)
+        {
+            Assert.NotNull(lastReceipt);
+            Assert.Equal(Protocol.ToElement(lastReceipt).GetProperty("operationId").GetString(),
+                request.Arguments.GetProperty("operationId").GetString());
+            return lastReceipt;
         }
 
         private object Observation()
@@ -326,12 +407,14 @@ public sealed class SurvivalKitTests
                 ammo = submachineLoaded ? "firearm-magazine" : null, rounds = submachineLoaded ? 100 : 0, ready = submachineLoaded });
             return new
         {
-            scope, collectedTick = 100L, snapshotId = 1,
+            scope = worn is not null && TransitionAfterArmor == "scope" ? scope with { Generation = 2 } : scope,
+            collectedTick = 100L, snapshotId = 1,
             coverage = new { atomic = true, collectionStartTick = 100L, collectionEndTick = 100L, knownInventoriesComplete = true,
                 enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility", enemiesTruncated = false },
             agent = new
             {
-                alive = true, controlMode = "ai", stopUnconfirmed = false, position = new MapPosition(0, 0), health = 250d, maxHealth = 250d,
+                alive = true, controlMode = worn is not null && TransitionAfterArmor == "manual" ? "manual" : "ai",
+                stopUnconfirmed = false, position = new MapPosition(0, 0), health = 250d, maxHealth = 250d,
                 inventory,
                 weapon = new { ready = true, rounds = 100, range = submachineLoaded ? 18d : 15d },
                 loadout = new
@@ -340,7 +423,8 @@ public sealed class SurvivalKitTests
                     slots, carried
                 }
             },
-            enemies = Enemy ? new object[] { new { id = "biter", position = new MapPosition(10, 0), collectedTick = 100L } } : [],
+            enemies = Enemy || worn is not null && TransitionAfterArmor == "enemy"
+                ? new object[] { new { id = "biter", position = new MapPosition(10, 0), collectedTick = 100L } } : [],
             entities = Array.Empty<object>(), defenses = Array.Empty<object>()
         };
         }

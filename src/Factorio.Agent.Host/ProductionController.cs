@@ -13,13 +13,20 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
     public Task<ProductionResult> ProduceAsync(string item, int targetStock, CancellationToken token = default,
         IReadOnlySet<string>? reservedEntityIds = null) => RunAsync(item, targetStock, token, reservedEntityIds, existingStockOnly: false);
 
+    /// <summary>Hand-crafts only from the bag: never installs, explores or replenishes a production connection.</summary>
+    public Task<ProductionResult> HandcraftFromCarriedAsync(string item, int targetStock, CancellationToken token = default,
+        ActorScope? expectedScope = null, IReadOnlyDictionary<string, long>? protectedStock = null) =>
+        RunAsync(item, targetStock, token, null, existingStockOnly: false, expectedScope,
+            carriedHandcraftOnly: true, protectedStock);
+
     /// <summary>Collects existing outputs only; FinalStock may be below the target if a source was depleted.</summary>
     public Task<ProductionResult> CollectAvailableAsync(string item, int targetStock, CancellationToken token = default,
         IReadOnlySet<string>? reservedEntityIds = null, ActorScope? expectedScope = null) =>
         RunAsync(item, targetStock, token, reservedEntityIds, existingStockOnly: true, expectedScope);
 
     private async Task<ProductionResult> RunAsync(string item, int targetStock, CancellationToken token,
-        IReadOnlySet<string>? reservedEntityIds, bool existingStockOnly, ActorScope? expectedScope = null)
+        IReadOnlySet<string>? reservedEntityIds, bool existingStockOnly, ActorScope? expectedScope = null,
+        bool carriedHandcraftOnly = false, IReadOnlyDictionary<string, long>? protectedStock = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(item);
         if (targetStock is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(targetStock));
@@ -40,7 +47,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             ProductionState state = await ObserveAsync(deadline.Token);
             if (state.Scope != initial.Scope) throw new InvalidOperationException("Production scope changed; reconcile death or pilot transition before resuming.");
             if (state.ControlMode != "ai") throw new InvalidOperationException("The pilot has manual control.");
-            ProductionEntity? ready = state.AvailableOutput(item, reservedEntityIds);
+            ProductionEntity? ready = carriedHandcraftOnly ? null : state.AvailableOutput(item, reservedEntityIds);
             if (state.Inventory.GetValueOrDefault(item) >= targetStock || (existingStockOnly && ready is null))
             {
                 var result = new ProductionResult(item, targetStock, initial.Tick, state.Tick,
@@ -49,6 +56,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 return result;
             }
             ProductionCatalog catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), deadline.Token));
+            if (carriedHandcraftOnly)
+                catalog = catalog with { Recipes = catalog.Recipes.Where(catalog.CanHandCraft).ToArray(), Assemblers = null,
+                    Machines = new Dictionary<string, NativeFurnace>(), Mining = new Dictionary<string, NativeMaterial[]>() };
             string[] drillItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "mining-drill")
                 .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
             if (drillItems.Length > 16) throw new InvalidOperationException("Mining drill geometry exceeds the snapshot budget.");
@@ -88,11 +98,17 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 continue;
             }
             // Collectable cell chests are listed so their finished stock is planned as a collection, never as a machine to reuse.
-            ProductionStep step = planner.Next(item, targetStock, state.Inventory, catalog, map,
-                state.Entities.Where(e => ProductionReservations.Collects(e.Id) && reservedEntityIds?.Contains(e.Id) != true)
+            var available = carriedHandcraftOnly && protectedStock is not null
+                ? state.Inventory.ToDictionary(p => p.Key,
+                    p => p.Key == item ? p.Value : Math.Max(0, p.Value - protectedStock.GetValueOrDefault(p.Key)), StringComparer.Ordinal)
+                : state.Inventory;
+            ProductionStep step = planner.Next(item, targetStock, available, catalog, map,
+                state.Entities.Where(e => !carriedHandcraftOnly && ProductionReservations.Collects(e.Id) && reservedEntityIds?.Contains(e.Id) != true)
                     .Select(e => e.AsMachine()).ToArray(),
                 allowExtractionPreparation: !SmeltingPreparationController.IsPreparing && !StoredResourceExtractionController.IsPreparing);
             await journal.AppendAsync("production-step", new { item, targetStock, stepNumber, state.Tick, step }, deadline.Token);
+            if (carriedHandcraftOnly && step.Kind != "craft")
+                throw new InvalidOperationException("The carried stock cannot complete this hand-craft recipe tree.");
             switch (step.Kind)
             {
                 case "collect":
@@ -122,7 +138,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     await ActAsync("mine", new { name = step.Source.Name, position = step.Source.Position, count = step.Quantity }, 36000);
                     break;
                 case "craft":
-                    if (await new CraftInventoryController(game, journal).PrepareAsync(step.Recipe!, step.Quantity, catalog, controller, deadline.Token))
+                    if (!carriedHandcraftOnly && await new CraftInventoryController(game, journal).PrepareAsync(step.Recipe!, step.Quantity, catalog, controller, deadline.Token))
                         continue; // Travel/deposits changed the photograph: replan before submitting a craft.
                     await ActAsync("craft", new { recipe = step.Recipe!.Name, count = step.Quantity },
                         HandcraftTiming.DeadlineTicks(step.Recipe, step.Quantity));

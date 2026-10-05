@@ -63,7 +63,8 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
         try
         {
             catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), deadline.Token));
-            var observation = await SafeAsync(deadline.Token);
+            // Wear available protection before any stock collection or upgrade can fail or time out.
+            var observation = await EquipCarriedAsync(catalog, equipped, deadline.Token);
             if (observation is null) status = "deferred";
             else
             {
@@ -80,7 +81,7 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
                     if (!missing.ContainsKey(candidate)) break;
                 }
                 if (gun is not null && !await ObtainAsync(gun, 1)) gun = null;
-                var supplied = await SafeAsync(deadline.Token);
+                var supplied = await SafeAsync(deadline.Token, catalog.Scope);
                 if (supplied is null) status = "deferred";
                 else if (supplied.Inventory is { } inventory)
                 {
@@ -97,15 +98,13 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
                     int before = equipmentSteps;
                     while (equipmentSteps < 4 && status == "complete")
                     {
-                        var current = await SafeAsync(deadline.Token);
+                        var current = await SafeAsync(deadline.Token, catalog.Scope);
                         if (current is null) { status = "deferred"; break; }
                         var next = SurvivalKitPlanner.NextEquipment(current.Loadout!, armor, gun) ?? EquipmentPolicy.Select(current);
                         if (next is null) break;
                         await SubmitAsync(current, next, deadline.Token);
                         equipmentSteps++;
-                        var args = Protocol.ToElement(next.Arguments);
-                        equipped.Add(next.Kind == "select_weapon" ? "select-weapon:" + args.GetProperty("slot").GetInt32()
-                            : args.GetProperty("compartment").GetString() + ":" + args.GetProperty("item").GetString());
+                        equipped.Add(EquipmentLabel(next));
                     }
                     if (pass > 0 && equipmentSteps == before) break;
                     // Replenish the carried reserve after loading; weaker obtainable rounds remain the fallback.
@@ -139,6 +138,8 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
         {
             var production = new ProductionController(game, journal);
             var state = await production.ObserveAsync(deadline.Token);
+            if (state.Scope != catalog!.Scope || state.ControlMode != "ai")
+                throw new InvalidDataException("Actor changed before survival kit preparation; reconcile before collecting stock.");
             long have = state.Inventory.GetValueOrDefault(item);
             if (have >= target) return true;
             var stored = Stock(state);
@@ -153,14 +154,17 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
             try
             {
                 foreach (var (name, count) in used)
-                    await production.CollectAvailableAsync(name, (int)Math.Min(1000, state.Inventory.GetValueOrDefault(name) + count), deadline.Token);
+                    await production.CollectAvailableAsync(name, (int)Math.Min(1000, state.Inventory.GetValueOrDefault(name) + count),
+                        deadline.Token, expectedScope: catalog.Scope);
                 var collected = await production.ObserveAsync(deadline.Token);
+                if (collected.Scope != state.Scope || collected.ControlMode != "ai")
+                    throw new InvalidDataException("Actor changed while collecting survival kit ingredients; reconcile before crafting.");
                 if (used.Any(p => collected.Inventory.GetValueOrDefault(p.Key) < state.Inventory.GetValueOrDefault(p.Key) + p.Value))
                 {
                     await journal.AppendAsync("survival-kit-unavailable", new { item, target, have, reason = "stock changed before collection" }, deadline.Token);
                     return false;
                 }
-                await new ProductionGoalExecutor(game, journal).RunAsync(item, target, deadline.Token);
+                await production.HandcraftFromCarriedAsync(item, target, deadline.Token, catalog!.Scope, state.Inventory);
             }
             catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
             {
@@ -170,6 +174,34 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
             produced.Add(item);
             return true;
         }
+    }
+
+    private async Task<SafetyObservation?> EquipCarriedAsync(ProductionCatalog catalog, List<string> equipped, CancellationToken token)
+    {
+        // The selection view has no craftable alternatives: only items actually in the bag qualify.
+        var carriedCatalog = catalog with { Recipes = [] };
+        for (int step = 0; step < 4; step++)
+        {
+            var current = await SafeAsync(token, catalog.Scope);
+            if (current is null) return null;
+            var loadout = current.Loadout!;
+            var carried = Carried(loadout);
+            string? armor = SurvivalKitPlanner.Armor(carriedCatalog, carried, loadout.Armor);
+            string? gun = SurvivalKitPlanner.Gun(carriedCatalog, carried,
+                loadout.Slots.Where(s => s.Gun is not null).Select(s => s.Gun!).ToArray());
+            var next = SurvivalKitPlanner.NextEquipment(loadout, armor, gun) ?? EquipmentPolicy.Select(current);
+            if (next is null) return current;
+            await SubmitAsync(current, next, token);
+            equipped.Add(EquipmentLabel(next));
+        }
+        return await SafeAsync(token, catalog.Scope);
+    }
+
+    private static string EquipmentLabel(EquipmentDecision decision)
+    {
+        var args = Protocol.ToElement(decision.Arguments);
+        return decision.Kind == "select_weapon" ? "select-weapon:" + args.GetProperty("slot").GetInt32()
+            : args.GetProperty("compartment").GetString() + ":" + args.GetProperty("item").GetString();
     }
 
     private async Task SubmitAsync(SafetyObservation observation, EquipmentDecision decision, CancellationToken token)
@@ -187,10 +219,11 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
     }
 
     /// <summary>A current observation with no enemy in sight, or null: equipment never changes during a fight.</summary>
-    private async Task<SafetyObservation?> SafeAsync(CancellationToken token)
+    private async Task<SafetyObservation?> SafeAsync(CancellationToken token, ActorScope? expectedScope = null)
     {
         var observation = await ObserveAsync(token);
-        return observation is { Alive: true, ControlMode: "ai", StopUnconfirmed: false, Loadout: not null, Enemies.Count: 0 } ? observation : null;
+        return observation is { Alive: true, ControlMode: "ai", StopUnconfirmed: false, Loadout: not null, Enemies.Count: 0 }
+            && (expectedScope is null || observation.Scope == expectedScope) ? observation : null;
     }
 
     private async Task<SafetyObservation?> ObserveAsync(CancellationToken token)
