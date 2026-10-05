@@ -13,6 +13,18 @@ public sealed record StrategicGoalResult(GoalProposal Goal, StockGoalResult? Pro
 public sealed class StrategicProductionController(IGameClient game, IStrategicPlanner planner, IControllerJournal journal,
     string? factoryDirectory = null, DecisionModelClient? shadow = null) : IStrategicGoalRunner
 {
+    private const string CompactExecutionCapabilities = """
+        Propose one unmet goal toward a hostile base-game rocket, using exact native identifiers and positive quantities.
+        Production/items: at most 1000 carried items, from observed stock or native crafting, furnaces and powered assemblers.
+        Production/items_per_minute: persistent automation, at most 600; C# builds resource, furnace, assembler and supported chemical chains with calculated placements, belts, pipes and steam power. Coal, stone and ore plates use resource cells. Reuse and fuel machines; manual mining is limited to bootstrap and bounded repairs. Trees still need harvesting. Installed capacity is not measured throughput; stocks do not satisfy a rate target.
+        Production/fluid_units: at most 100000 units in the known factory; compatible refinery and single-product chemical recipes. Supported solid automation includes plastic, sulfur, batteries, processing units, rocket fuel and electric engines, with researched recipes and equipment. Shared dependency plans account for native co-products. Refineries use finite isolated tanks: regulated cracking, sustained production after tank saturation, long-distance fluid networks and temperature-constrained chemistry remain incomplete. The actor services unconnected solid inputs and fuel; complete logistics and automatic relocation after depletion remain incomplete.
+        Research/completion: quantity 1, exact technology; C# resolves prerequisites, craft-item and fluid-mining triggers, builds science cells/labs when available, supplies and observes native completion. Solid-resource mining triggers remain unsupported. Fluid extraction requires observed deposits and a reachable power network within the 128-link grid budget.
+        Exploration/completion: quantity 1, exact resource; C# uses the force chart, dated hints and bounded local exploration with normal visibility and recent-death avoidance. Completion requires a fresh deposit observation; partial surveyed coverage is not discovery, global absence or safe extraction capacity.
+        Launch/completion: quantity 1, native rocket-silo item, after native silo and rocket-part research. C# reuses, resumes or rebuilds its registered silo, supplies native requirements, maintains its factory and verifies the native launch counter. It stops stalled cells for reconciliation.
+        Defense/items: 1 to 32 supported turrets, counting already installed active turrets with at least 100 rounds each. C# services existing turrets first; preventive coverage gaps alone are not an immediate attack. Defense/completion: quantity 1, supported wall item; C# calculates a finite defended ring and registers reconstruction and rearming. Neither goal promises continuous coverage.
+        Construction, exploration, stock, native geometry and execution budgets still bound all goals. Unsupported proposals return explicit feedback. No coordinates, code, engine commands, invented stock or unverified success.
+        """;
+
     public async Task<StrategicGoalResult> RunOnceAsync(CancellationToken token = default, string? previousResult = null)
     {
         GameResponse observation = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = 64, limit = 200 }), token);
@@ -35,7 +47,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         // The planner rejects contexts above 24,000 characters; a large factory drops the least decisive lists first.
         string facts = Facts(compact: false);
         if (facts.Length > 23_000) facts = Facts(compact: true);
-        string Facts(bool compact) => JsonSerializer.Serialize(new
+        if (facts.Length > 23_000) facts = Facts(compact: true, omitResearchUnlocks: true);
+        string Facts(bool compact, bool omitResearchUnlocks = false) => JsonSerializer.Serialize(new
         {
             observedTick = observation.Tick,
             agent = new
@@ -76,9 +89,10 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             rocketResearchDependencies = SiloResearchDependencies.Read(catalog, science.Technologies),
             nativeTechnologyIdentifiers = compact ? null : science.Technologies.Keys.Order(StringComparer.Ordinal).ToArray(),
             researchedTechnologies = science.Technologies.Values.Where(t => t.Researched).Select(t => t.Name).Order(StringComparer.Ordinal).ToArray(),
+            researchUnlocksOmitted = omitResearchUnlocks,
             availableResearch = science.Technologies.Values.Where(t => t.Enabled && t.Available && !t.Researched)
-                .Select(t => new { t.Name, t.Count, t.Ingredients, t.Trigger, unlocks = Unlocks(t.Effects) }).ToArray(),
-            executionCapabilities = "Production goals use category production, unit items and an exact native item identifier, up to 1000 carried items. " +
+                .Select(t => new { t.Name, t.Count, t.Ingredients, t.Trigger, unlocks = omitResearchUnlocks ? null : Unlocks(t.Effects) }).ToArray(),
+            executionCapabilities = compact ? CompactExecutionCapabilities : "Production goals use category production, unit items and an exact native item identifier, up to 1000 carried items. " +
                 "C# explores, mines, hand-crafts, installs or reuses furnaces, powered assemblers and native steam supply. " +
                 "Prefer machine production and fuel over bulk hand mining. C# can prepare or reuse burner or electric drills feeding compatible storage or furnaces for deterministic solid deposits such as coal, stone and iron ore. Electric solid extraction can extend a known power network with calculated poles and service a distant connected boiler. Trees still require manual harvesting and machine bootstrap may need small manual quantities. " +
                 "Research goals use category research, unit completion, quantity 1 and an exact native technology identifier. C# resolves native prerequisites, supported craft-item triggers and laboratory research, including science production and power maintenance. It can also satisfy fluid resource mining triggers by installing or reusing an owned compatible electric extractor on an observed deposit. C# can extend a known power network with calculated poles and service its connected steam supply. Exploration, reachable terrain and the 128-link grid budget still bound remote fluid extraction; solid-resource mining triggers remain unsupported. " +

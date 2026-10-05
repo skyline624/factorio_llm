@@ -133,6 +133,35 @@ public sealed class StrategicResearchTests
         Assert.Null(result.Research);
         Assert.DoesNotContain("submit", game.Actions);
     }
+    [Fact]
+    public async Task LargeResearchEffectsDoNotExcludeExactStockOrPreventTheNextProposal()
+    {
+        var technologies = Enumerable.Range(0, 80).Select(i => new NativeTechnology($"available-research-{i}", true, false, true,
+            [], [new("red", 1)], 100, 600, Effects: Protocol.ToElement(Enumerable.Range(0, 12)
+                .Select(j => new { type = "unlock-recipe", recipe = $"recipe-{i}-{j}-" + new string('r', 60) }).ToArray()))).ToArray();
+        var game = new Game
+        {
+            Technologies = technologies,
+            ExtraRecords = [new("stock", "inventory", "source", "chest", Protocol.ToElement(new
+                { items = new Dictionary<string, long> { ["plastic-bar"] = 873, ["iron-plate"] = 54221 } }))]
+        };
+        var planner = new Planner(unsupported: true);
+        await new StrategicProductionController(game, planner, new Journal()).RunOnceAsync();
+
+        Assert.NotNull(planner.Context);
+        Assert.InRange(planner.Context.Facts.Length, 1, 23_000);
+        using var document = System.Text.Json.JsonDocument.Parse(planner.Context.Facts);
+        var facts = document.RootElement;
+        Assert.Equal(80, facts.GetProperty("availableResearch").GetArrayLength());
+        Assert.True(facts.GetProperty("researchUnlocksOmitted").GetBoolean());
+        var factory = facts.GetProperty("knownFactory");
+        Assert.Equal(873, factory.GetProperty("physicalStocks").GetProperty("inventoryItems").GetProperty("plastic-bar").GetInt64());
+        Assert.Equal(54221, factory.GetProperty("physicalStocks").GetProperty("inventoryItems").GetProperty("iron-plate").GetInt64());
+        Assert.True(factory.GetProperty("collectedTick").GetInt64() > 0);
+        Assert.True(factory.GetProperty("coverage").GetProperty("knownInventoriesComplete").GetBoolean());
+        Assert.DoesNotContain("submit", game.Actions);
+    }
+
     private sealed class Planner(bool unsupported = false, bool defense = false) : IStrategicPlanner
     {
         public StrategicContext? Context { get; private set; }
@@ -155,6 +184,7 @@ public sealed class StrategicResearchTests
         public NativeTechnology[] Technologies { get; init; } = [new("automation", true, true, false, [], [new("red", 1)], 10, 600)];
         public NativeRecipe[] Recipes { get; init; } = [];
         public bool IncludeDefense { get; init; }
+        public FactoryRecord[] ExtraRecords { get; init; } = [];
         public int DefenseRounds { get; init; } = 94;
         public List<string> Actions { get; } = [];
         private long tick;
@@ -170,6 +200,7 @@ public sealed class StrategicResearchTests
                     position = new MapPosition(0, 0), quality = "normal", active = true, ammoInventoryId = "ammo:t", ammoRounds = DefenseRounds, defenseReady = true, defenseRange = 18 })),
                 new("ammo:t", "inventory", "t", "turret-ammo", Protocol.ToElement(new { items = new Dictionary<string, long> { ["firearm-magazine"] = 10 } }))
             ] : [];
+            records = [.. records, .. ExtraRecords];
             object data = request.Action switch
             {
                 "observe" => new
