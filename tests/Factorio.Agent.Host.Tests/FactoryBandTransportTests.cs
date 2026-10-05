@@ -167,6 +167,50 @@ public sealed class FactoryBandTransportTests
     }
 
     [Fact]
+    public void FuelBatchStopsAtTheMaximumAssignmentWhenOneSourceServesTwoCandidates()
+    {
+        var plan = PowerFuelTransport.SearchBatch(SeveralConsumers(), new("transport-belt", "inserter", "small-electric-pole"),
+            [new("first-target", ["first-source"]), new("second-target", ["first-source"])],
+            CancellationToken.None, CancellationToken.None);
+        Assert.NotNull(plan);
+        Assert.Equal(1, plan.AssignmentUpperBound);
+        Assert.Single(plan.Links);
+        Assert.Equal(1, plan.Searches);
+        Assert.False(plan.BudgetExhausted);
+    }
+
+    [Fact]
+    public void MaximumAssignmentUsesAlternativeSourcesInsteadOfGreedyCounting()
+    {
+        var plan = PowerFuelTransport.SearchBatch(SeveralConsumers(), new("transport-belt", "inserter", "small-electric-pole"),
+            [new("first-target", ["first-source", "second-source"]), new("second-target", ["first-source"])],
+            CancellationToken.None, CancellationToken.None);
+        Assert.NotNull(plan);
+        Assert.Equal(2, plan.AssignmentUpperBound);
+        Assert.Equal(2, plan.Links.Count);
+        Assert.Equal("first-source", plan.Links.Single(l => l.TargetId == "second-target").SourceId);
+        Assert.Equal("second-source", plan.Links.Single(l => l.TargetId == "first-target").SourceId);
+        Assert.False(plan.BudgetExhausted);
+    }
+
+    [Fact]
+    public void AnAlreadyBlockedConsumerDoesNotPreventAnIndependentFuelLink()
+    {
+        var map = SeveralConsumers();
+        var chest = map.Prototypes["iron-chest"];
+        var positions = new MapPosition[] { new(5.5,6.5),new(7.5,6.5),new(6.5,5.5),new(6.5,7.5) };
+        map = map with { Entities = [.. map.Entities, .. positions.Select((p,i) =>
+            new SpatialEntity($"retained-obstacle-{i}",chest.Name,p,chest.CollisionBox.Translate(p),0,"foreign"))] };
+        var plan = PowerFuelTransport.SearchBatch(map, new("transport-belt", "inserter", "small-electric-pole"),
+            [new("first-target", ["first-source"]),new("second-target", ["second-source"])],
+            CancellationToken.None, CancellationToken.None);
+        Assert.NotNull(plan);
+        Assert.Equal(1, plan.AssignmentUpperBound);
+        Assert.Equal("first-target",Assert.Single(plan.Links).TargetId);
+        Assert.False(plan.BudgetExhausted);
+    }
+
+    [Fact]
     public void FuelSearchDeadlineLeavesExistingLogisticsAvailable()
     {
         using var expired = new CancellationTokenSource(); expired.Cancel();

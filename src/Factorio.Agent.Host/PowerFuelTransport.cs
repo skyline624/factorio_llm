@@ -139,7 +139,7 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         foreach (var target in targets) PowerExpansionController.ValidateRegisteredFeeder(snapshot, target);
         var targetIds = targets.Select(c => c.Entities["input-chest"]).ToArray();
         var sources = LocalSources(state, snapshot, targets);
-        if (sources.Length < targets.Length) return (0, true);
+        if (sources.Length == 0) return (0, true);
         var requests = targets.Select(target => new BeltTransportRequest(target.Entities["input-chest"], sources
             .Where(source => FactoryTransportCoverage.Capacity(state, catalog, shares, source, FactoryLogistics.Fuel, snapshot) + 1e-9
                 >= PowerFuelPolicy.Demand(catalog, target, FactoryLogistics.Fuel, power)!.Value)
@@ -167,9 +167,9 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
             return (0, true);
         }
         await journal.AppendAsync("power-fuel-batch-search", new { targets = targets.Length, sources = sources.Length,
-            links = plan.Links.Count, plan.Searches, plan.BudgetExhausted, equipment,
-            selection = "first-complete-feasible", map.CollectedTick }, token);
-        if (plan.Links.Count != targets.Length) return (0, true); // Keep actor delivery rather than closing an unfinished consumer's access.
+            links = plan.Links.Count, plan.Searches, plan.BudgetExhausted, plan.AssignmentUpperBound, equipment,
+            selection = "first-feasible-maximum-assignment", map.CollectedTick }, token);
+        if (plan.Links.Count == 0 || plan.Links.Count != plan.AssignmentUpperBound) return (0, true);
         var records = plan.Links.Select(link => FactoryTransportBuilder.NewBus(
             sources.Single(c => c.Entities["output-chest"] == link.SourceId).Id,
             targets.Single(c => c.Entities["input-chest"] == link.TargetId).Id, FactoryLogistics.Fuel,
@@ -177,7 +177,9 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         foreach (var record in records) state = state.With(record.Cell).With(record.Bus);
         await registry.SaveAsync(state, token);
         await journal.AppendAsync("power-fuel-batch-plan", new { map.Scope, map.CollectedTick, buses = records.Select(r => r.Bus),
-            plans = records.Select(r => r.Cell.Plan) }, token);
+            plans = records.Select(r => r.Cell.Plan),
+            unservedTargets = targets.Where(c => !plan.Links.Any(l => l.TargetId == c.Entities["input-chest"]))
+                .Select(c => c.Id).ToArray(), retainActorDelivery = plan.Links.Count < targets.Length }, token);
         int connected = 0;
         foreach (var record in records.Take(maximumLinks))
         {
@@ -201,7 +203,7 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         {
             return new BeltTransportBatchPlanner().Find(planning, equipment,
                 requests, maximumSearches: 64, token: planningToken, stopAfterComplete: true,
-                maximumBelts: 512, nodeBudget: 24000);
+                maximumBelts: 512, nodeBudget: 24000, stopAfterMaximumAssignments: true);
         }
         catch (OperationCanceledException error) when (planningToken.IsCancellationRequested
             && !callerToken.IsCancellationRequested && error.CancellationToken == planningToken)

@@ -1,7 +1,8 @@
 namespace Factorio.Agent.Core;
 
 public sealed record PlannedBeltLink(string SourceId, string TargetId, BeltTransportPlan Plan);
-public sealed record BeltTransportBatchPlan(IReadOnlyList<PlannedBeltLink> Links, int Searches, bool BudgetExhausted);
+public sealed record BeltTransportBatchPlan(IReadOnlyList<PlannedBeltLink> Links, int Searches, bool BudgetExhausted,
+    int? AssignmentUpperBound = null);
 public sealed record BeltTransportRequest(string TargetId, IReadOnlyList<string> SourceIds);
 public sealed record BeltTransportBatchProgress(int Search, int Selected, string SourceId, string TargetId, string Outcome, int? PhysicalBelts = null);
 
@@ -19,7 +20,7 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
     /// <summary>Plans assignments and route order for several consumers without promising one source twice.</summary>
     public BeltTransportBatchPlan Find(SpatialSnapshot map, BeltTransportEquipment equipment, IReadOnlyList<BeltTransportRequest> requests,
         int maximumSearches = 48, CancellationToken token = default, bool stopAfterComplete = false,
-        int maximumBelts = 200, int nodeBudget = 12000)
+        int maximumBelts = 200, int nodeBudget = 12000, bool stopAfterMaximumAssignments = false)
     {
         if (requests.Count is < 1 or > 8 || requests.Any(r => string.IsNullOrWhiteSpace(r.TargetId)
             || r.SourceIds.Count is < 1 or > 8 || r.SourceIds.Any(s => string.IsNullOrWhiteSpace(s) || s == r.TargetId)
@@ -27,13 +28,14 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
             throw new ArgumentException("A batch requires one to eight valid requests with distinct candidate sources.", nameof(requests));
         if (maximumSearches is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(maximumSearches));
         if (maximumBelts is < 1 or > 1536 || nodeBudget is < 1 or > 100000) throw new ArgumentOutOfRangeException(nameof(maximumBelts));
+        int? assignmentUpperBound = stopAfterMaximumAssignments ? AssignmentBound(map, equipment, requests, token) : null;
         var best = new List<PlannedBeltLink>();
         var selected = new List<PlannedBeltLink>();
         int searches = 0, bestBelts = int.MaxValue, bestPoles = int.MaxValue;
         bool exhausted = false, complete = false;
         var used = new HashSet<string>(StringComparer.Ordinal);
         Search(map, Enumerable.Range(0, requests.Count).ToArray());
-        return new(best.AsReadOnly(), searches, exhausted);
+        return new(best.AsReadOnly(), searches, exhausted, assignmentUpperBound);
 
         void Search(SpatialSnapshot current, IReadOnlyList<int> remaining)
         {
@@ -45,7 +47,7 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
                 best = [.. selected];
                 bestBelts = belts;
                 bestPoles = poles;
-                if (stopAfterComplete && best.Count == requests.Count) complete = true;
+                if (stopAfterComplete && best.Count == requests.Count || assignmentUpperBound == best.Count) complete = true;
             }
             var field = new SpatialCollisionField(current with { Entities = current.Entities.Where(e => e.Id != current.Actor.Id).ToArray() });
             var belt = current.Prototypes[current.Items[equipment.Belt].EntityName];
@@ -101,11 +103,42 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
                     {
                         var suppliers = requests[i].SourceIds.Where(s=>s!=sourceId && !used.Contains(s)).ToArray();
                         // An insufficient source count still permits the established partial result contract.
-                        return NativePorts(future,projected,equipment,requests[i].TargetId,false,token).Count > 0
-                            && (suppliers.Length == 0 || suppliers.Any(s=>NativePorts(future,projected,equipment,s,true,token).Count > 0));
+                        bool targetWasAccessible = NativePorts(current,field,equipment,requests[i].TargetId,false,token).Count > 0;
+                        bool supplierWasAccessible = suppliers.Any(s=>NativePorts(current,field,equipment,s,true,token).Count > 0);
+                        return (!targetWasAccessible || NativePorts(future,projected,equipment,requests[i].TargetId,false,token).Count > 0)
+                            && (!supplierWasAccessible || suppliers.Any(s=>NativePorts(future,projected,equipment,s,true,token).Count > 0));
                     });
                 }
             }
+        }
+    }
+
+    // Maximum matching is only an upper bound: native arm ports and unique suppliers do not prove a route exists.
+    // Reaching it with fully calculated routes permits a useful bounded batch when fewer suppliers are available.
+    private static int AssignmentBound(SpatialSnapshot map, BeltTransportEquipment equipment,
+        IReadOnlyList<BeltTransportRequest> requests, CancellationToken token)
+    {
+        var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
+        var accessibleSources = requests.SelectMany(r => r.SourceIds).Distinct(StringComparer.Ordinal)
+            .Where(s => NativePorts(map, field, equipment, s, true, token).Count > 0).ToHashSet(StringComparer.Ordinal);
+        var candidates = requests.Select(r => NativePorts(map, field, equipment, r.TargetId, false, token).Count == 0
+            ? [] : r.SourceIds.Where(accessibleSources.Contains).ToArray()).ToArray();
+        var owners = new Dictionary<string, int>(StringComparer.Ordinal);
+        int matched = 0;
+        for (int index = 0; index < candidates.Length; index++)
+            if (Assign(index, new(StringComparer.Ordinal))) matched++;
+        return matched;
+
+        bool Assign(int index, HashSet<string> visited)
+        {
+            token.ThrowIfCancellationRequested();
+            foreach (string source in candidates[index])
+                if (visited.Add(source) && (!owners.TryGetValue(source, out int owner) || Assign(owner, visited)))
+                {
+                    owners[source] = index;
+                    return true;
+                }
+            return false;
         }
     }
 

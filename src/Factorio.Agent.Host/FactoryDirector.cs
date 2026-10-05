@@ -365,8 +365,8 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 await journal.AppendAsync("factory-raw-seed-failed", new { item, perMinute, error = error.GetType().Name, error.Message }, token);
             }
         }
-        await SeedPowerFuelSourcesAsync(catalog, token, isObjectiveComplete);
         await new PowerFuelTransport(game, journal, directory).ConnectAsync(catalog, token);
+        await SeedPowerFuelSourcesAsync(catalog, token, isObjectiveComplete);
     }
 
     internal async Task SeedPowerFuelSourcesAsync(ProductionCatalog catalog, CancellationToken token,
