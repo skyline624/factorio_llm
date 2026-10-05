@@ -17,7 +17,7 @@ public sealed class BeltTransportBatchPlanner
 
     /// <summary>Plans assignments and route order for several consumers without promising one source twice.</summary>
     public BeltTransportBatchPlan Find(SpatialSnapshot map, BeltTransportEquipment equipment, IReadOnlyList<BeltTransportRequest> requests,
-        int maximumSearches = 48, CancellationToken token = default)
+        int maximumSearches = 48, CancellationToken token = default, bool stopAfterComplete = false)
     {
         if (requests.Count is < 1 or > 8 || requests.Any(r => string.IsNullOrWhiteSpace(r.TargetId)
             || r.SourceIds.Count is < 1 or > 8 || r.SourceIds.Any(s => string.IsNullOrWhiteSpace(s) || s == r.TargetId)
@@ -27,7 +27,7 @@ public sealed class BeltTransportBatchPlanner
         var best = new List<PlannedBeltLink>();
         var selected = new List<PlannedBeltLink>();
         int searches = 0, bestBelts = int.MaxValue, bestPoles = int.MaxValue;
-        bool exhausted = false;
+        bool exhausted = false, complete = false;
         var used = new HashSet<string>(StringComparer.Ordinal);
         Search(map, Enumerable.Range(0, requests.Count).ToArray());
         return new(best.AsReadOnly(), searches, exhausted);
@@ -42,10 +42,12 @@ public sealed class BeltTransportBatchPlanner
                 best = [.. selected];
                 bestBelts = belts;
                 bestPoles = poles;
+                if (stopAfterComplete && best.Count == requests.Count) complete = true;
             }
             foreach (int requestIndex in remaining)
             foreach (string sourceId in requests[requestIndex].SourceIds.Where(s => !used.Contains(s)))
             {
+                if (complete) return;
                 if (searches == maximumSearches) { exhausted = true; return; }
                 int identity = ++searches;
                 string targetId = requests[requestIndex].TargetId;

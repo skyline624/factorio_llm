@@ -465,10 +465,13 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             await controller.ApproachEntityAsync(cell.Entities[consumer.InserterRole], position, catalog, token);
             await control.EnsureAsync(cell.Entities[consumer.InserterRole], bus.Item, catalog, controller, token, chest, consumer.Paused ? 0 : consumer.Maximum);
         }
+        // One atomic photograph checks all directions. A mismatching part still goes through OrientAsync's
+        // fresh observations and confirmed receipts; the final fresh health check covers the whole graph.
+        var orientations = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+        if (orientations.Scope != catalog.Scope) throw new InvalidDataException("Actor changed before conveyor direction inspection.");
         foreach (var role in bus.Graph?.Keys ?? FactoryTransportHealth.Belts(cell))
         {
-            var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
-            var record = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == cell.Entities[role]);
+            var record = orientations.Records.Single(r => r.Kind == "entity" && r.EntityId == cell.Entities[role]);
             if (record.Data.GetProperty("direction").GetInt32() == cell.Plan![role].Direction) continue;
             await OrientAsync(cell.Entities[role], cell.Plan[role].Direction, catalog, controller, token);
         }

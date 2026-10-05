@@ -95,6 +95,64 @@ public sealed class FactoryBandTransportTests
     }
 
     [Fact]
+    public void FirstCompleteSearchCoversEveryConsumerBeforeStoppingComparisons()
+    {
+        var map = SeveralConsumers();
+        BeltTransportRequest[] requests = [new("first-target", ["first-source", "second-source"]),
+            new("second-target", ["first-source", "second-source"])];
+        var equipment = new BeltTransportEquipment("transport-belt", "inserter", "small-electric-pole");
+        var comparisons = new BeltTransportBatchPlanner().Find(map, equipment, requests);
+        var feasible = new BeltTransportBatchPlanner().Find(map, equipment, requests, stopAfterComplete: true);
+        Assert.Equal(2, feasible.Links.Count);
+        Assert.Equal(2, feasible.Links.Select(l => l.SourceId).Distinct().Count());
+        Assert.True(feasible.Searches < comparisons.Searches);
+        Assert.False(feasible.BudgetExhausted);
+        var projected = map;
+        foreach (var link in feasible.Links)
+        {
+            var field = new SpatialCollisionField(projected);
+            Assert.All(link.Plan.Belts, part => Assert.True(field.PlacementClear(map.Prototypes["transport-belt"], part.Position, part.Direction)));
+            projected = ProjectBus(projected, link.SourceId, link.Plan);
+        }
+    }
+
+    [Fact]
+    public void FirstCompleteSearchStillRefusesToAssignOneSourceTwice()
+    {
+        BeltTransportRequest[] requests = [new("first-target", ["first-source"]), new("second-target", ["first-source"])];
+        var plan = new BeltTransportBatchPlanner().Find(SeveralConsumers(), new("transport-belt", "inserter", "small-electric-pole"), requests, stopAfterComplete: true);
+        Assert.Single(plan.Links);
+    }
+
+    [Fact]
+    public void FirstCompleteSearchStillHonorsCallerCancellation()
+    {
+        using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() => new BeltTransportBatchPlanner().Find(SeveralConsumers(),
+            new("transport-belt", "inserter", "small-electric-pole"),
+            new BeltTransportRequest[] { new("first-target", ["first-source"]) }, token: cancelled.Token, stopAfterComplete: true));
+    }
+
+    [Fact]
+    public void FuelSearchDeadlineLeavesExistingLogisticsAvailable()
+    {
+        using var expired = new CancellationTokenSource(); expired.Cancel();
+        var plan = PowerFuelTransport.SearchBatch(SeveralConsumers(),
+            [new("first-target", ["first-source"])], expired.Token, CancellationToken.None);
+        Assert.Null(plan);
+    }
+
+    [Fact]
+    public void FuelSearchDoesNotTurnCallerCancellationIntoLogisticsFallback()
+    {
+        using var caller = new CancellationTokenSource();
+        using var planning = CancellationTokenSource.CreateLinkedTokenSource(caller.Token);
+        caller.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() => PowerFuelTransport.SearchBatch(SeveralConsumers(),
+            [new("first-target", ["first-source"])], planning.Token, caller.Token));
+    }
+
+    [Fact]
     public void MultiConsumerSearchHonorsCancellationAndRejectsAnEmptyCandidateSet()
     {
         var map = SeveralConsumers();

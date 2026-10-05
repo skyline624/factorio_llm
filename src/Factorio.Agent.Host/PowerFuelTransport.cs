@@ -143,7 +143,9 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         var requests = targets.Select(target => new BeltTransportRequest(target.Entities["input-chest"], sources
             .Where(source => FactoryTransportCoverage.Capacity(state, catalog, shares, source, FactoryLogistics.Fuel, snapshot) + 1e-9
                 >= PowerFuelPolicy.Demand(catalog, target, FactoryLogistics.Fuel, power)!.Value)
-            .Select(c => c.Entities["output-chest"]).ToArray())).ToArray();
+            .OrderBy(c => FactoryTransportBuilder.Position(snapshot, c.Entities["output-chest"])!
+                .DistanceTo(FactoryTransportBuilder.Position(snapshot, target.Entities["input-chest"])!))
+            .ThenBy(c => c.Id, StringComparer.Ordinal).Select(c => c.Entities["output-chest"]).ToArray())).ToArray();
         if (requests.Any(r => r.SourceIds.Count == 0)) return (0, true);
         var endpoints = targetIds.Concat(sources.Select(c => c.Entities["output-chest"])).ToArray();
         var steam = await powerController.SteamItemsAsync(catalog, token);
@@ -154,11 +156,16 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         if (endpoints.Any(id => !map.Entities.Any(e => e.Id == id))
             || map.Prototypes[map.Items["inserter"].EntityName].FilterSlots is not > 0) return (0, true);
         var planning = FactoryTransportBuilder.ProtectBands(map, state, steam, sources.Select(c => c.Slot.Band).ToHashSet());
-        var plan = await ControllerPlanning.RunAsync(t => new BeltTransportBatchPlanner().Find(planning,
-            new("transport-belt", "inserter", "small-electric-pole"), requests, maximumSearches: 64, token: t),
+        var plan = await ControllerPlanning.RunAsync(t => SearchBatch(planning, requests, t, token),
             controller, TimeSpan.FromSeconds(45), token);
+        if (plan is null)
+        {
+            await journal.AppendAsync("power-fuel-batch-budget-exceeded", new { targets = targets.Length, sources = sources.Length,
+                budgetSeconds = 45, map.CollectedTick, action = "retain-existing-logistics" }, token);
+            return (0, true);
+        }
         await journal.AppendAsync("power-fuel-batch-search", new { targets = targets.Length, sources = sources.Length,
-            links = plan.Links.Count, plan.Searches, plan.BudgetExhausted, map.CollectedTick }, token);
+            links = plan.Links.Count, plan.Searches, plan.BudgetExhausted, selection = "first-complete-feasible", map.CollectedTick }, token);
         if (plan.Links.Count != targets.Length) return (0, true); // Keep actor delivery rather than closing an unfinished consumer's access.
         var records = plan.Links.Select(link => FactoryTransportBuilder.NewBus(
             sources.Single(c => c.Entities["output-chest"] == link.SourceId).Id,
@@ -175,6 +182,21 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
             connected++;
         }
         return (connected, true);
+    }
+
+    internal static BeltTransportBatchPlan? SearchBatch(SpatialSnapshot planning, IReadOnlyList<BeltTransportRequest> requests,
+        CancellationToken planningToken, CancellationToken callerToken)
+    {
+        try
+        {
+            return new BeltTransportBatchPlanner().Find(planning, new("transport-belt", "inserter", "small-electric-pole"),
+                requests, maximumSearches: 64, token: planningToken, stopAfterComplete: true);
+        }
+        catch (OperationCanceledException error) when (planningToken.IsCancellationRequested
+            && !callerToken.IsCancellationRequested && error.CancellationToken == planningToken)
+        {
+            return null; // Only the pure route search expired; no native operation or registry mutation was attempted.
+        }
     }
 
     internal static double Available(FactoryState state, FactorySnapshot snapshot, ProductionCatalog catalog,
