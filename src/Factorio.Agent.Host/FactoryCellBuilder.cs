@@ -220,7 +220,8 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             repaired++;
         }
         if (repaired > 0) await journal.AppendAsync("factory-power-repair", new { repaired }, token);
-        return repaired + await new ResourceCellBuilder(game, journal, directory).RepairPowerAsync(token);
+        repaired += await new ResourceCellBuilder(game, journal, directory).RepairPowerAsync(token);
+        return repaired + await new FluidPowerRepair(game, journal, directory).RunAsync(token);
     }
 
     internal Task EnsureCarriedAsync(FactoryRegistry registry, ProductionCatalog catalog, string item, int count, CancellationToken token) =>

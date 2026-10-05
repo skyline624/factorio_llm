@@ -67,6 +67,14 @@ Le même binaire réussit l'essai d'extension **20261116** : 31 étapes de déco
 
 ## Limites actuelles
 
+### Rétablissement de l'alimentation des cellules conservées
+
+Le début d'une étape fluide vérifie maintenant les cellules déjà construites et ses extracteurs, avant de compter leur capacité. La réparation générale de l'usine traite également ces cellules. `FluidPowerRepair` relie un poteau enregistré et encore présent au réseau d'un générateur connu. Un chevalet adopté peut conserver ses poteaux sous des rôles `link-n`, sans rôle `pole` : la réparation choisit alors le lien présent le plus proche, sur le même réseau natif que le chevalet.
+
+Chaque liaison est synthétisée par C#, payée avec des poteaux obtenus normalement et enregistrée avec son emplacement. Les bandes, rangées et réserves de croissance restent protégées. Le réseau est réobservé après chaque réparation ; une seule reconnexion peut rétablir plusieurs consommateurs. Le contrôleur refuse un changement d'identité et laisse la reconstruction des poteaux absents à la maintenance. Une destination couverte par une mort récente est différée. Les appels gardent un délai de dix minutes, au plus seize îlots et la limite de 128 étapes par liaison.
+
+La connectivité ne prouve pas une centrale suffisamment alimentée ni un débit soutenu. Les preuves de composant et de campagne doivent constater séparément une production native après réparation.
+
 Les deux extrémités doivent être dans la zone locale observée. La route d'entrée est limitée à 200 tuyaux ; le stockage autorise au plus 200 ajouts par exécution. La reprise d'un raccordement entièrement confirmé est possible, mais une route partiellement construite n'est pas encore réparée automatiquement. Une erreur conserve les effets réels pour réconciliation.
 
 Les réservoirs, conduites souterraines, réseaux distants, recettes à sortie fluide combinant objets et fluides, raffinage avancé à plusieurs sorties et contraintes thermiques particulières restent à traiter. La borne syntaxique de 100000 unités n'est pas une garantie de capacité réalisable dans ces budgets. La production continue, les tapis et les laboratoires parallèles restent nécessaires pour la chaîne de la fusée.

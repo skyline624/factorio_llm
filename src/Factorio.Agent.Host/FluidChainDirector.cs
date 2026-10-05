@@ -37,6 +37,12 @@ public sealed class FluidChainDirector(IGameClient game, IControllerJournal jour
         var builder = new FluidCellBuilder(game, journal, directory);
         var power = new PowerExpansionController(game, journal, directory);
         var registry = new FactoryRegistry(directory);
+        // Ready is a construction receipt, not a promise that an attack has left its electrical supply intact.
+        var retained = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        var powerTargets = retained.Cells.Where(c => c.Status == "ready" &&
+            (c.Kind == FluidCellBuilder.MachineKind && c.Recipe == stage.Recipe
+                || c.Kind == FluidCellBuilder.ExtractorKind && c.Recipe == source?.Fluid)).Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
+        if (powerTargets.Count > 0) await new FluidPowerRepair(game, journal, directory).RunAsync(token, powerTargets);
         for (int added = 0; ; added++)
         {
             var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
