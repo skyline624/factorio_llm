@@ -152,6 +152,30 @@ public sealed class FactoryTransportFrameTests
         Assert.Equal(["source", "target"], FactoryTransportBuilder.PlanningAnchors(snapshot, ["source", "source", "target", "actor", "missing"], new(15, 0)));
     }
 
+    [Theory]
+    [InlineData(94, true)]
+    [InlineData(118, true)]
+    [InlineData(119, false)]
+    public void WiderFuelFramesRetainRoutingAndArrivalMargins(int span, bool fits)
+    {
+        var snapshot = Snapshot(("source", new(0, 0)), ("target", new(span, 0)));
+        Assert.Null(FactoryTransportBuilder.PlanningCenter(snapshot, ["source", "target"], 1));
+        var center = FactoryTransportBuilder.PlanningCenter(snapshot, ["source", "target"], 1, FactoryTransportBuilder.FuelPlanningRadius);
+        if (fits) Assert.Equal(new MapPosition(span / 2.0, 0), center);
+        else Assert.Null(center);
+    }
+
+    [Fact]
+    public void WiderFuelVantageStillRequiresObservedWalkableGround()
+    {
+        var snapshot = Snapshot(("source", new(-50, 0)), ("target", new(50, 0)));
+        var map = FactoryMaps.Grass(64) with { Scope = snapshot.Scope };
+        Assert.Null(FactoryTransportBuilder.PlanningStand(map, snapshot, ["source", "target"]));
+        Assert.Equal(new MapPosition(0, 0), FactoryTransportBuilder.PlanningStand(map, snapshot, ["source", "target"], 64));
+        Assert.Null(FactoryTransportBuilder.PlanningStand(FactoryMaps.Grass(64, tile: (_, _) => "water") with { Scope = snapshot.Scope },
+            snapshot, ["source", "target"], 64));
+    }
+
     private static FactorySnapshot Snapshot(params (string Id, MapPosition Position)[] entities) =>
         new("synthetic", new("world", "session", "actor", 1, 1), 100, 3700, Protocol.ToElement(new { }),
             entities.Select(e => new FactoryRecord(e.Id, "entity", e.Id, "iron-chest", Protocol.ToElement(new { position = e.Position }))).ToArray());

@@ -21,10 +21,10 @@ public sealed class BeltTransportPlanner
         var clearMap = map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() };
         var field = new SpatialCollisionField(clearMap);
         var placements = new PlacementPlanner();
-        var outputs = placements.FindCandidates(field, equipment.Inserter, source.Position, requireBuildReach: false)
-            .Where(p => source.Bounds.Contains(At(p, arm.InserterPickup))).ToArray();
-        var inputs = placements.FindCandidates(field, equipment.Inserter, target.Position, requireBuildReach: false)
-            .Where(p => target.Bounds.Contains(At(p, arm.InserterDrop))).ToArray();
+        var outputs = placements.FindCandidates(field, equipment.Inserter, source.Position, requireBuildReach: false,
+            eligible: p => source.Bounds.Contains(At(p, arm.InserterPickup)), cancellationToken: cancellationToken);
+        var inputs = placements.FindCandidates(field, equipment.Inserter, target.Position, requireBuildReach: false,
+            eligible: p => target.Bounds.Contains(At(p, arm.InserterDrop)), cancellationToken: cancellationToken);
         var pairs = (from output in outputs from input in inputs select (Output: output, Input: input))
             .OrderBy(p => At(p.Output, arm.InserterDrop).DistanceTo(At(p.Input, arm.InserterPickup)));
         foreach (var pair in pairs)

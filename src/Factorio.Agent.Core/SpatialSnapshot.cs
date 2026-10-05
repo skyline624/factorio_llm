@@ -105,6 +105,9 @@ public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int S
     [property: JsonConverter(typeof(NativeArrayConverter<StationaryThreat>))] IReadOnlyList<StationaryThreat>? StationaryThreats = null,
     bool ContinuousMovePaths = false)
 {
+    // Radius 64 remains inside the normal five-chunk character square for every position within its occupied chunk.
+    public const int MaximumRadius = 64;
+
     public static SpatialSnapshot Parse(GameResponse response)
     {
         if (!response.Ok) throw new GameRpcException(response.Error ?? new("invalid_response", "Spatial observation failed."));
@@ -114,7 +117,8 @@ public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int S
                 ?? throw new InvalidDataException("Missing spatial observation.");
             if (map.CollectedTick != response.Tick || !map.Coverage.Atomic || !map.Coverage.Complete
                 || map.Coverage.Visibility != "current-character-local-area" || !ValidBox(map.Bounds)
-                || map.Bounds.Width is < 1 or > 97 || map.Bounds.Height is < 1 or > 97
+                || map.Coverage.Radius is < 4 or > MaximumRadius
+                || map.Bounds.Width is < 1 or > (2 * MaximumRadius + 1) || map.Bounds.Height is < 1 or > (2 * MaximumRadius + 1)
                 || !map.Bounds.Contains(map.Actor.Position) || !map.Prototypes.ContainsKey(map.Actor.Name)
                 || map.Actor.ControlMode is not ("ai" or "manual")
                 || !double.IsFinite(map.Actor.BuildDistance) || map.Actor.BuildDistance <= 0

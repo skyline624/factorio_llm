@@ -119,7 +119,8 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         return state.Cells.Where(c => c.IsResource && c.Recipe == FactoryLogistics.Fuel && c.Status == "ready"
             && FactoryLogistics.Missing(snapshot, c).Length == 0 && PowerFuelPolicy.ProducerActive(c, snapshot)
             && !(state.Transports ?? []).Any(b => b.SourceCellId == c.Id)
-            && FactoryTransportBuilder.PlanningCenter(snapshot, [.. targetIds, c.Entities["output-chest"]], 1) is not null)
+            && FactoryTransportBuilder.PlanningCenter(snapshot, [.. targetIds, c.Entities["output-chest"]], 1,
+                FactoryTransportBuilder.FuelPlanningRadius) is not null)
             .OrderBy(c => FactoryTransportBuilder.Position(snapshot, c.Entities["output-chest"])!.DistanceTo(anchor)).Take(8).ToArray();
     }
 
@@ -145,8 +146,6 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
             .Select(c => c.Entities["output-chest"]).ToArray())).ToArray();
         if (requests.Any(r => r.SourceIds.Count == 0)) return (0, true);
         var endpoints = targetIds.Concat(sources.Select(c => c.Entities["output-chest"])).ToArray();
-        var center = FactoryTransportBuilder.PlanningCenter(snapshot, endpoints, 1);
-        if (center is null) return (0, true);
         var steam = await powerController.SteamItemsAsync(catalog, token);
         var builder = new FactoryTransportBuilder(game, journal, directory);
         var map = await builder.CaptureFuelFrameAsync(state, snapshot, endpoints, steam, catalog, controller, token);

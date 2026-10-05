@@ -9,7 +9,7 @@ public sealed class SpatialClient(IGameClient game)
     public async Task<SpatialSnapshot> CaptureAsync(IReadOnlyList<string>? items = null, int radius = 32,
         CancellationToken cancellationToken = default)
     {
-        if (radius is < 4 or > 48) throw new ArgumentOutOfRangeException(nameof(radius));
+        if (radius is < 4 or > SpatialSnapshot.MaximumRadius) throw new ArgumentOutOfRangeException(nameof(radius));
         return SpatialSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("spatial", new { radius, items = items ?? [] }), cancellationToken));
     }
 

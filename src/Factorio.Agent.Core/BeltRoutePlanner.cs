@@ -15,8 +15,11 @@ public sealed class BeltRoutePlanner
         if (geometry.Type != "transport-belt" || geometry.TileWidth != 1 || geometry.TileHeight != 1 || geometry.BeltSpeed is not > 0)
             throw new InvalidDataException("Routing requires native one-tile ordinary belt geometry and speed.");
         var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
+        // Physical collisions remain in the full native field. Only belts and inserter ports can reserve extra flow space.
+        var flowObstacles = map.Entities.Where(e => map.Prototypes[e.Name].Type is "transport-belt" or "underground-belt" or "splitter"
+            || e.PickupPosition is not null || e.DropPosition is not null).ToArray();
         bool Clear(MapPosition p) => Cell(p) == p && field.PlacementClear(geometry, p, 0)
-            && !map.Entities.Any(e =>
+            && !flowObstacles.Any(e =>
                 (map.Prototypes[e.Name].Type is "transport-belt" or "underground-belt" or "splitter"
                     && !(p == start && e.Id == inletBeltId)
                     && !(existingBusBelts?.Contains(e.Id) == true && map.Prototypes[e.Name].Type == "transport-belt"
@@ -25,12 +28,13 @@ public sealed class BeltRoutePlanner
                 || (e.PickupPosition is not null && Cell(e.PickupPosition) == p)
                 || (e.DropPosition is not null && Cell(e.DropPosition) == p));
         if (!Clear(start) || !Clear(target)) return new(BeltRouteStatus.NoRouteInSnapshot, [], 0);
-        var frontier = new PriorityQueue<MapPosition, (double Score, int Sequence)>();
+        // Break equal A* costs toward the target instead of flooding the whole equal-cost rectangle of a long route.
+        var frontier = new PriorityQueue<MapPosition, (double Score, double Remaining, int Sequence)>();
         var costs = new Dictionary<MapPosition, int> { [start] = 0 };
         var previous = new Dictionary<MapPosition, MapPosition>();
         var closed = new HashSet<MapPosition>();
         int sequence = 0, expanded = 0;
-        frontier.Enqueue(start, (Distance(start, target), sequence++));
+        frontier.Enqueue(start, (Distance(start, target), Distance(start, target), sequence++));
         while (frontier.TryDequeue(out var current, out _))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -60,7 +64,8 @@ public sealed class BeltRoutePlanner
                 if (costs.TryGetValue(next, out int old) && old <= cost) continue;
                 costs[next] = cost;
                 previous[next] = current;
-                frontier.Enqueue(next, (cost + Distance(next, target), sequence++));
+                double remaining = Distance(next, target);
+                frontier.Enqueue(next, (cost + remaining, remaining, sequence++));
             }
         }
         return new(BeltRouteStatus.NoRouteInSnapshot, [], expanded);

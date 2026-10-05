@@ -183,7 +183,18 @@ public sealed class PowerFuelTests
             power with { Scope = power.Scope with { Generation = 20 } }));
     }
 
-    private static (FactoryState State, FactorySnapshot Snapshot, ProductionCatalog Catalog, PowerState Power) SourceFrame(bool extra = false)
+    [Fact]
+    public void TheNormalEightExistingSourcesCoverSixBoilersWithoutBuildingAnotherMiner()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame(extra: true, normalGeometry: true, targetCount: 6);
+        Assert.Equal(new PowerFuelSourceNeed(6, 8, 27), PowerFuelTransport.SourceNeed(state, snapshot, catalog, power));
+        var endpoints = state.Cells.Select(c => c.Entities[c.Kind == "power" ? "input-chest" : "output-chest"]).ToArray();
+        Assert.Null(FactoryTransportBuilder.PlanningCenter(snapshot, endpoints, 1));
+        Assert.NotNull(FactoryTransportBuilder.PlanningCenter(snapshot, endpoints, 1, FactoryTransportBuilder.FuelPlanningRadius));
+    }
+
+    private static (FactoryState State, FactorySnapshot Snapshot, ProductionCatalog Catalog, PowerState Power) SourceFrame(
+        bool extra = false, bool normalGeometry = false, int targetCount = 5)
     {
         var (catalog, _, template) = Native();
         var cells = new List<FactoryCell>();
@@ -191,7 +202,7 @@ public sealed class PowerFuelTests
         var rows = new List<ResourceRow>();
         void Entity(string id, MapPosition position) => records.Add(new(id, "entity", id, "native",
             Protocol.ToElement(new { role = "factory", position })));
-        for (int target = 0; target < 5; target++)
+        for (int target = 0; target < targetCount; target++)
         {
             string id = $"target-{target}";
             var parts = new Dictionary<string, string> { ["boiler"] = id + "-boiler", ["input-chest"] = id + "-in", ["input-inserter"] = id + "-arm" };
@@ -199,7 +210,9 @@ public sealed class PowerFuelTests
             foreach (string part in parts.Values) Entity(part, position);
             cells.Add(new(id, 0, new(0, target, true), "power", "boiler", null, parts, "ready", target + 1));
         }
-        double[] xs = extra ? [-23.5, -20.5, -13.5, -13.5, -15.5, -12.5, -9.5] : [-23.5, -20.5, -13.5, -13.5, -15.5, -12.5];
+        double[] xs = normalGeometry
+            ? extra ? [-23.5, -20.5, -13.5, -13.5, -15.5, -12.5, -19.5, -9.5] : [-23.5, -20.5, -13.5, -13.5, -15.5, -12.5]
+            : extra ? [-52.5, -49.5, -13.5, -13.5, -15.5, -12.5, -9.5] : [-52.5, -49.5, -13.5, -13.5, -15.5, -12.5];
         for (int source = 0; source < xs.Length; source++)
         {
             string id = $"source-{source}";

@@ -50,6 +50,30 @@ public sealed class BeltTransportPlannerTests
         Assert.True(map.Entities.Single(e => e.Id == "target").Bounds.Contains(At(plan.TargetInserter, arm.InserterDrop!)));
     }
 
+    [Fact]
+    public void NativeLongReachPortsAreFilteredBeforeTheCandidateLimit()
+    {
+        var map = Map(true);
+        map = map with
+        {
+            Bounds = new(new(-32, -32), new(33, 33)),
+            Rows = Enumerable.Range(-32, 65).Select(y => new TileRun(-32, y, 65, map.Rows[0].Name)).ToArray(),
+            Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+            {
+                ["arm"] = map.Prototypes["arm"] with { InserterPickup = new(0, -8), InserterDrop = new(0, 8.2) },
+                ["pole"] = map.Prototypes["pole"] with { SupplyArea = 32 }
+            }
+        };
+        var plan = new BeltTransportPlanner().Find(map, new("belt", "arm", "pole"), "source", "target");
+        Assert.NotNull(plan);
+        var pickup = ExtractionPlanner.Rotate(map.Prototypes["arm"].InserterPickup!, plan.SourceInserter.Direction);
+        var drop = ExtractionPlanner.Rotate(map.Prototypes["arm"].InserterDrop!, plan.TargetInserter.Direction);
+        Assert.True(map.Entities.Single(e => e.Id == "source").Bounds.Contains(
+            new MapPosition(plan.SourceInserter.Position.X + pickup.X, plan.SourceInserter.Position.Y + pickup.Y)));
+        Assert.True(map.Entities.Single(e => e.Id == "target").Bounds.Contains(
+            new MapPosition(plan.TargetInserter.Position.X + drop.X, plan.TargetInserter.Position.Y + drop.Y)));
+    }
+
     internal static SpatialSnapshot Map(bool power)
     {
         var map = BeltRoutePlannerTests.Map();

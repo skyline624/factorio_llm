@@ -6,6 +6,34 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class SpatialSnapshotIdentityTests
 {
     [Theory]
+    [InlineData(129, 64, true)]
+    [InlineData(130, 64, false)]
+    [InlineData(129, 65, false)]
+    public void NativeSnapshotSizeAndRadiusRemainBounded(int width, int radius, bool accepted)
+    {
+        var original = FactoryMaps.Grass(64);
+        var map = original with
+        {
+            Bounds = new(new(-64, -64), new(-64 + width, -64 + width)),
+            Coverage = original.Coverage with { Radius = radius },
+            Rows = Enumerable.Range(-64, width).Select(y => new TileRun(-64, y, width, original.Rows[0].Name)).ToArray()
+        };
+        var response = new GameResponse(1, "synthetic", true, map.CollectedTick, Protocol.ToElement(map));
+        if (accepted) Assert.Equal(width, SpatialSnapshot.Parse(response).Bounds.Width);
+        else Assert.Throws<InvalidDataException>(() => SpatialSnapshot.Parse(response));
+    }
+
+    [Fact]
+    public void MaximumSnapshotStaysInsideNormalCharacterChunksAtEveryChunkOffset()
+    {
+        for (int offset = 0; offset < 32; offset++)
+        {
+            Assert.InRange((int)Math.Floor((offset - SpatialSnapshot.MaximumRadius) / 32.0), -2, 2);
+            Assert.InRange((int)Math.Floor((offset + SpatialSnapshot.MaximumRadius) / 32.0), -2, 2);
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void NativeCircuitNeighboursParseIncludingEmptyLuaTables(bool connected)

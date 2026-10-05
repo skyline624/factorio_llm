@@ -90,7 +90,9 @@ end
 function M.observe(args)
   local c = Actor.get()
   U.check(c ~= nil, "actor_dead", "Wait for the character to respawn")
-  local radius = U.number(args.radius, "radius", 4, 48, 32, true)
+  -- A radius-64 square stays inside the normal 5x5 occupied-character chunk coverage.
+  -- Visibility checks and chart/generation requests are unchanged; this is a larger local photograph only.
+  local radius = U.number(args.radius, "radius", 4, 64, 32, true)
   local x0, y0 = math.floor(c.position.x) - radius, math.floor(c.position.y) - radius
   local x1, y1 = math.floor(c.position.x) + radius + 1, math.floor(c.position.y) + radius + 1
   local area = {{x0, y0}, {x1, y1}}
