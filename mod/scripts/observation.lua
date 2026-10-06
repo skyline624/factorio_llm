@@ -158,9 +158,11 @@ function M.observe(args)
   result.coverage.factoryRegistry = "agent-built-and-locally-observed-own-entities"
   local research = c.force.current_research
   result.research = {name = research and research.name, progress = c.force.research_progress}
+  -- The evolution factor is ordinary player knowledge (the /evolution command); it tells when stronger enemies arrive.
   result.environment = {pollutionEnabled = game.map_settings.pollution.enabled,
     enemyEvolutionEnabled = game.map_settings.enemy_evolution.enabled,
-    enemyExpansionEnabled = game.map_settings.enemy_expansion.enabled}
+    enemyExpansionEnabled = game.map_settings.enemy_expansion.enabled,
+    enemyEvolutionFactor = game.forces.enemy.get_evolution_factor(c and c.surface or game.surfaces.nauvis)}
   return result
 end
 
