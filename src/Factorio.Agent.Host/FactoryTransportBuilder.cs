@@ -610,7 +610,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                 {
                     var position = Position(snapshot, id)!;
                     await journal.AppendAsync("power-fuel-frame-approach", new { id, position, map.CollectedTick }, token);
-                    await controller.ApproachEntityAsync(id, position, catalog, token);
+                    if (!await ReachAsync(position, () => controller.ApproachEntityAsync(id, position, catalog, token))) return null;
                     map = await spatial.CaptureAsync(items, FuelPlanningRadius, token);
                     if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel endpoint travel scope changed.");
                     moved = true;
@@ -626,7 +626,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                 }
             }
             if (stand is null) return null; // Observed endpoints still provide no known stable vantage.
-            await controller.TravelAsync(stand, 1, catalog, token);
+            if (!await ReachAsync(stand, () => controller.TravelAsync(stand, 1, catalog, token))) return null;
             map = await spatial.CaptureAsync(items, FuelPlanningRadius, token);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame travel scope changed.");
             if (!FrameCovered(map, entityIds)) return null;
@@ -635,6 +635,19 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         await journal.AppendAsync("power-fuel-frame", new { map.Scope, map.CollectedTick, map.Actor.Position,
             map.Bounds, moved, requiredEntities = entityIds.Count }, token);
         return map;
+
+        // A fuel belt is an optional improvement over actor delivery. On 2026-10-06 (seed 20261107) the computed vantage beside
+        // the boilers had no route within the search budget and the refusal ended a research goal; no frame is the answer.
+        async Task<bool> ReachAsync(MapPosition target, Func<Task> travel)
+        {
+            try { await travel(); return true; }
+            catch (NavigationPlanningException error)
+            {
+                await journal.AppendAsync("power-fuel-frame-unreachable", new { target, status = error.Status.ToString(), error.Message,
+                    action = "retain-actor-delivery" }, token);
+                return false;
+            }
+        }
     }
 
     internal static IReadOnlyList<string> PlanningAnchors(FactorySnapshot snapshot, IReadOnlyList<string> entityIds, MapPosition center) =>
