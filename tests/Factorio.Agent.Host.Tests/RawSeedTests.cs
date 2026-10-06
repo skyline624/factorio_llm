@@ -16,7 +16,8 @@ public sealed class RawSeedTests
         // Campaign 2026-09-30 (seed 20261002): science assemblers started on the actor's single early drill and furnace.
         var seeds = FactoryDirector.RawSeeds(Catalogs.Raw(), State(), ScienceRaw, new Dictionary<string, long> { ["iron-plate"] = 9 });
         Assert.Equal(["coal", "copper-plate", "iron-plate"], seeds.Select(s => s.Item).Order(StringComparer.Ordinal));
-        Assert.Equal(24, seeds.Single(s => s.Item == "iron-plate").PerMinute);
+        // A seeded plate grows to at least two early burner cells, above the 24-plate steady plan.
+        Assert.Equal(FactoryDirector.MinimumSeededSmelterPerMinute, seeds.Single(s => s.Item == "iron-plate").PerMinute);
         Assert.Equal(RawCapacityGrowth.DefaultPerMinute, seeds.Single(s => s.Item == "coal").PerMinute);
     }
 
@@ -120,7 +121,7 @@ public sealed class RawSeedTests
         var available = new Dictionary<string, long> { ["iron-plate"] = 240, ["copper-plate"] = 120, ["coal"] = 500 };
         Assert.Empty(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, available, priorityItem: "automation-science-pack"));
         // The later pass still requests the full explicit rate; stock is never certified as sustainable capacity.
-        Assert.Equal(("copper-plate", 12d), Assert.Single(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, available)));
+        Assert.Equal(("copper-plate", FactoryDirector.MinimumSeededSmelterPerMinute), Assert.Single(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, available)));
         Assert.Equal(targets, state.Targets);
     }
 
@@ -140,7 +141,7 @@ public sealed class RawSeedTests
     {
         var state = State() with { Targets = new Dictionary<string, double> { ["automation-science-pack"] = 6, ["copper-plate"] = 12 } };
         var available = new Dictionary<string, long> { ["iron-plate"] = 240, ["copper-plate"] = 119, ["coal"] = 500 };
-        Assert.Equal(("copper-plate", 12d), Assert.Single(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, available,
+        Assert.Equal(("copper-plate", FactoryDirector.MinimumSeededSmelterPerMinute), Assert.Single(FactoryDirector.RawSeeds(Catalogs.Raw(), state, ScienceRaw, available,
             priorityItem: "automation-science-pack")));
     }
 

@@ -366,6 +366,8 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
 
     /// <summary>Resource cells built per raw item and automation call before the assemblers; growth adds the rest later.</summary>
     public const int SeedCellsPerItem = 2;
+    /// <summary>Smelted plates a seeded raw item is grown to at least, whatever the plan's steady rate.</summary>
+    public const double MinimumSeededSmelterPerMinute = 30;
     /// <summary>Additional coal suppliers per call when the joint boiler plan lacks local, unpromised sources.</summary>
     public const int PowerFuelSeedCells = 2;
 
@@ -387,7 +389,11 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             && RawCapacity(state, item).PerMinute < perMinute - 1e-9
             && (state.Targets?.ContainsKey(item) == true && (priorityItem is null || priorityItem == item)
                 || available.GetValueOrDefault(item) < perMinute * SeedHorizonMinutes);
-        var seeds = raw.Where(p => p.Value > 0 && Unsupplied(p.Key, p.Value)).Select(p => (p.Key, p.Value)).ToList();
+        // Construction draws plates in bursts that one 15-per-minute burner cell turns into long waits: on seed 20261107 a
+        // research goal waited about 16 minutes on a single iron cell. A seeded smelted plate gets at least two such cells.
+        double Floor(string item, double perMinute) => ResourceCellPlanner.Supply(catalog, item)?.Kind == "smelter"
+            ? Math.Max(perMinute, MinimumSeededSmelterPerMinute) : perMinute;
+        var seeds = raw.Where(p => p.Value > 0 && Unsupplied(p.Key, p.Value)).Select(p => (p.Key, Floor(p.Key, p.Value))).ToList();
         // Existing plate capacity still consumes fuel. On normal seed20261072, coal depletion was missed until
         // another plate cell was needed, leaving preparation to repeated transient coal procurement.
         bool smelting = seeds.Any(s => ResourceCellPlanner.Supply(catalog, s.Key)?.Kind == "smelter")
