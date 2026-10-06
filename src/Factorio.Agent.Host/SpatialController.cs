@@ -51,15 +51,28 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         for (int segment = 0; segment < 64; segment++)
         {
             if (inspectDestination is not null) await inspectDestination(token);
-            SpatialSnapshot map = await spatial.CaptureAsync(cancellationToken: token);
+            SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during travel to a known destination.");
-            if (map.Actor.Position.DistanceTo(destination) <= 24)
+            double distance = map.Actor.Position.DistanceTo(destination);
+            // A trip beyond the local area may leave defended ground: equip first (cheap when the loadout is unchanged).
+            if (segment == 0 && distance > 24) await new SurvivalKitController(game, journal).BeforeTripAsync("travel", token);
+            bool local = distance <= 24;
+            if (!local && map.Bounds.Contains(destination))
+            {
+                // A reachable observed approach need not lie on an exploration grid point or take at least16tiles.
+                // Navigation reobserves before executing: this photograph only selects which planning path to try.
+                var route = new RoutePlanner().Find(new(map, ExplorationPlanner.ThreatMargin), destination,
+                    Math.Max(0, arrivalDistance - .2), token: token, requireStableArrival: arrivalDistance > .4,
+                    minimumFirstMoveDistance: NativeMoveTolerance);
+                await journal.AppendAsync("travel-local-route", new { map.Scope, map.CollectedTick, map.Actor.Position,
+                    destination, arrivalDistance, radius = map.Coverage.Radius, route.Status, route.Length }, token);
+                local = route.Status == RouteStatus.Found;
+            }
+            if (local)
             {
                 await NavigateAsync(destination, arrivalDistance, token, inspectDestination);
                 return;
             }
-            // A trip beyond the local area may leave defended ground: equip first (cheap when the loadout is unchanged).
-            if (segment == 0) await new SurvivalKitController(game, journal).BeforeTripAsync("travel", token);
             ExplorationWaypoint next = await FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
             await NavigateAsync(next.Position, cancellationToken: token, inspectDestination: inspectDestination);
         }
@@ -150,7 +163,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                     continue;
                 }
             }
-            if (route.Status == RouteStatus.NoRouteOnKnownGrid && observationRadius < 48)
+            if (route.Status is RouteStatus.NoRouteOnKnownGrid or RouteStatus.GoalOutsideSnapshot && observationRadius < 48)
             {
                 // Exhausting the smaller photograph may only mean that the detour leaves its edge.
                 // Reenter defense arbitration and capture the same actor's bounded wider view before

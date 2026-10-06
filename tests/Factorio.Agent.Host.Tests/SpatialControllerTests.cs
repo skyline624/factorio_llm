@@ -10,6 +10,85 @@ public sealed class SpatialControllerTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task ObservedNarrowPassageReachesItsApproachWithoutAnExplorationGridHandoff(bool occupiedDestination)
+    {
+        var game = new NarrowTravelGame();
+        var journal = new Journal();
+        MapPosition destination = occupiedDestination ? new(83, 62) : new(77.5, 56.5);
+        double arrival = occupiedDestination ? 8 : .4;
+        var map = game.Map(48);
+        var catalog = new ProductionCatalog(map.Scope, map.CollectedTick, [], new Dictionary<string, NativeItem>(),
+            new Dictionary<string, NativeMaterial[]>(), new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>());
+        // The passage is walkable at half-tile centres, but none of the16..28tile exploration steps enters it.
+        MapPosition oldStep = new ExplorationPlanner().Choose(map, "", catalog, destination);
+        Assert.True(oldStep.X <= 48);
+        int inspections = 0;
+        await using (var controller = new SpatialController(game, journal))
+            await controller.TravelAsync(destination, arrival, catalog,
+                inspectDestination: _ => { inspections++; return Task.CompletedTask; });
+        Assert.True(game.Position.DistanceTo(destination) <= arrival);
+        Assert.InRange(game.Submissions, 1, 3);
+        Assert.True(game.KitChecks > 0);
+        Assert.True(inspections > 1);
+        Assert.Contains("travel-local-route", journal.Types);
+        Assert.DoesNotContain("exploration-waypoint", journal.Types);
+        if (occupiedDestination) Assert.Contains("route-observation-expanded", journal.Types);
+    }
+
+    private sealed class NarrowTravelGame : IGameClient
+    {
+        public MapPosition Position { get; private set; } = new(47.5, 56.5);
+        public int Submissions { get; private set; }
+        public int KitChecks { get; private set; }
+        public SpatialSnapshot Map(int radius)
+        {
+            var map = SpatialPlannerTests.Map([]);
+            int x = (int)Math.Floor(Position.X) - radius, y = (int)Math.Floor(Position.Y) - radius;
+            return map with { ContinuousMovePaths = true, Actor = map.Actor with { Position = Position },
+                Bounds = new(new(x, y), new(x + radius * 2 + 1, y + radius * 2 + 1)),
+                Rows = Enumerable.Range(y, radius * 2 + 1).SelectMany(row => Enumerable.Range(x, radius * 2 + 1)
+                    .Select(column => new TileRun(column, row, 1,
+                        column <= 48 || row == 56 && column <= 77 || column >= 77 && column <= 86 && row >= 53 && row <= 64
+                            ? "grass" : "water"))).ToArray(),
+                Entities = [new("own-chest", "chest", new(83, 62), new(new(82.65, 61.65), new(83.35, 62.35)), 0, "agent")],
+                StationaryThreats = [new("worm", new(62.38671875, 105.80859375), 25, map.CollectedTick)],
+                Coverage = map.Coverage with { Radius = radius } };
+        }
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            object data;
+            switch (request.Action)
+            {
+                case "spatial": data = Map(request.Arguments.GetProperty("radius").GetInt32()); break;
+                case "observe":
+                    if (request.Arguments.TryGetProperty("entityLimit", out _)) KitChecks++;
+                    var map = Map(32);
+                    data = new { map.Scope, collectedTick = map.CollectedTick,
+                        coverage = new { atomic = true, collectionStartTick = map.CollectedTick, collectionEndTick = map.CollectedTick,
+                            enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
+                        agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = Position,
+                            health = 250, weapon = new { ready = false, rounds = 0, range = 0 } }, enemies = Array.Empty<object>() };
+                    break;
+                case "submit":
+                    var submission = request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!;
+                    Assert.Equal("move", submission.Kind);
+                    Assert.True(new SpatialCollisionField(Map(48), ExplorationPlanner.ThreatMargin)
+                        .Walkable(submission.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!));
+                    Submissions++;
+                    Position = submission.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+                    data = new { submission.OperationId, submission.Kind, status = "completed", acceptedTick = 100,
+                        updatedTick = 100, effects = new { position = Position } };
+                    break;
+                default: throw new InvalidOperationException(request.Action);
+            }
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, 100, Protocol.ToElement(data)));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task RespawnDuringSafetyObservationCannotDispatchAnOldNavigationOrWorkIntent(bool work)
     {
         var game = new RespawningGame(duringObservation: true);
