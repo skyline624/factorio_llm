@@ -75,17 +75,21 @@ public static class DefenseDeploymentPlanner
             .ThenBy(p => p.Position.DistanceTo(preferred.Position)).ThenBy(p => p.Position.DistanceTo(map.Actor.Position)).ToArray();
     }
 
+    /// <summary>
+    /// Stocked rounds first, the strongest of them by native round damage: piercing rounds already made should not wait while
+    /// basic magazines last, since medium biters shrug those off. Without stock, the cheapest producible rounds.
+    /// </summary>
     public static string ChooseAmmunition(NativeTurret turret, ProductionCatalog catalog, IReadOnlyDictionary<string, long> stock)
     {
         var choices = catalog.Items.Where(p => p.Value.AmmoCategory is { } category && turret.AmmoCategories.Contains(category)
             && p.Value.MagazineSize is > 0).Select(p => new
             {
-                p.Key, Stock = stock.GetValueOrDefault(p.Key),
+                p.Key, Stock = stock.GetValueOrDefault(p.Key), Damage = p.Value.RoundDamage ?? 0,
                 RecipeCost = catalog.Recipes.Where(r => r.Enabled && r.Products.Any(m => m.Name == p.Key && m.DeterministicItem)
                     && r.Ingredients.All(m => m.DeterministicItem)).Select(r => r.Ingredients.Sum(m => m.Amount!.Value)
                         / r.Products.Where(m => m.Name == p.Key).Sum(m => m.Amount!.Value)).DefaultIfEmpty(double.PositiveInfinity).Min()
             }).Where(p => p.Stock > 0 || double.IsFinite(p.RecipeCost)).OrderByDescending(p => p.Stock > 0)
-            .ThenBy(p => p.RecipeCost).ThenBy(p => p.Key, StringComparer.Ordinal).FirstOrDefault();
+            .ThenByDescending(p => p.Stock > 0 ? p.Damage : 0).ThenBy(p => p.RecipeCost).ThenBy(p => p.Key, StringComparer.Ordinal).FirstOrDefault();
         return choices?.Key ?? throw new InvalidOperationException("No observed or producible compatible ammunition is available.");
     }
 }

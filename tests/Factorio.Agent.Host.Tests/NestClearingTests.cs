@@ -65,6 +65,16 @@ public sealed class NestClearingTests
     }
 
     [Fact]
+    public void DefensiveTurretsTakeTheStrongestRoundsAlreadyInStock()
+    {
+        var (_, catalog, _, _) = PortableDefenseTests.Fixture();
+        var turret = catalog.Turrets!["native-turret"];
+        Assert.Equal("strong-rounds", DefenseDeploymentPlanner.ChooseAmmunition(turret, catalog,
+            new Dictionary<string, long> { ["basic-rounds"] = 60, ["strong-rounds"] = 5 }));
+        Assert.Equal("basic-rounds", DefenseDeploymentPlanner.ChooseAmmunition(turret, catalog, new Dictionary<string, long> { ["basic-rounds"] = 60 }));
+    }
+
+    [Fact]
     public void StagingStandsTowardTheActorBeyondWormRangeAndTheTravelMargin()
     {
         var nest = Memory().Clusters().Single(c => c.Structures.Count == 2);
