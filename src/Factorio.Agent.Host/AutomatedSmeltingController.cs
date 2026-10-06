@@ -209,10 +209,21 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
                 {
                     state = await production.ObserveAsync(token);
                     RequireScope(state.Scope);
-                    var retained = CarriedStock.RetainedStock;
-                    var bag = state.Inventory.ToDictionary(p => p.Key, p => Math.Max(0, p.Value - retained.GetValueOrDefault(p.Key)), StringComparer.Ordinal);
+                    // Construction stock stays protected, except the plates this wait produces: a kit's nine plates come back
+                    // within a minute. On 2026-10-06 (seed 987654321) every pair was deferred because the plates being
+                    // procured for a cell counted as retained, and the stone sat in its extraction chest.
+                    var retained = CarriedStock.RetainedStock.Where(p => p.Key != item).ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
                     var kit = new Dictionary<string, long>(StringComparer.Ordinal) { [plan.DrillItem] = 1, [furnaceItem] = 1 };
-                    var (_, shortfall) = SurvivalKitPlanner.Requirement(catalog, kit, bag);
+                    var (_, shortfall) = SurvivalKitPlanner.Requirement(catalog, kit, Bag(state));
+                    foreach (var (part, count) in shortfall.Where(p => p.Key != item && state.CollectionStock(p.Key) >= p.Value).ToArray())
+                        await production.CollectAvailableAsync(part, checked((int)Math.Min(1000, state.Inventory.GetValueOrDefault(part) + count)),
+                            token, expectedScope: catalog.Scope);
+                    if (shortfall.Count > 0)
+                    {
+                        state = await production.ObserveAsync(token);
+                        RequireScope(state.Scope);
+                        (_, shortfall) = SurvivalKitPlanner.Requirement(catalog, kit, Bag(state));
+                    }
                     if (shortfall.Count > 0)
                     {
                         await journal.AppendAsync("smelting-pair-deferred", new { item, missing, pairs = 1 + helpers.Count, shortfall, state.Tick }, token);
@@ -227,6 +238,8 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
                         return;
                     }
                     var protectedStock = retained.ToDictionary(p => p.Key, p => (long)p.Value, StringComparer.Ordinal);
+                    Dictionary<string, long> Bag(ProductionState observed) => observed.Inventory.ToDictionary(p => p.Key,
+                        p => Math.Max(0, p.Value - retained.GetValueOrDefault(p.Key)), StringComparer.Ordinal);
                     // The drill recipe consumes a furnace, so the drill is crafted before the pair's own furnace.
                     foreach (string part in new[] { plan.DrillItem, furnaceItem })
                     {

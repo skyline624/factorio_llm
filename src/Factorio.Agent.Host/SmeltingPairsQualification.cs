@@ -5,7 +5,7 @@ namespace Factorio.Agent.Host;
 
 /// <summary>
 /// One prepared burner drill feeding a cold furnace on a wide iron patch, a long plate demand and explicit bag stock for
-/// helper kits: further pairs must be crafted from that stock, placed by the planner and shorten the native wait.
+/// helper kits (stone in a nearby chest): further pairs must be crafted from that stock, placed by the planner and shorten the native wait.
 /// </summary>
 public sealed class SmeltingPairsQualification(RuntimeSession session)
 {
@@ -27,10 +27,10 @@ public sealed class SmeltingPairsQualification(RuntimeSession session)
         try
         {
             var mark = await game.ExecuteAsync(GameRequest.Create("mark_fixture", new
-            { reason = "Prepared iron patch, one burner drill into a cold stone furnace, 150 coal, 30 iron plates and 30 stone. Not a campaign." }), token);
+            { reason = "Iron patch, burner drill into cold furnace, 150 coal and 30 plates carried, 30 stone in a chest. Not a campaign." }), token);
             Require(mark.Ok, "Fixture marker rejected.");
             const string prepare = """
-                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; for _,e in pairs(s.find_entities_filtered{area={{-40,-40},{40,40}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-40,40 do for y=-40,40 do tiles[#tiles+1]={name='grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({-3,-3})); c.get_main_inventory().clear(); assert(c.insert{name='coal',count=150}==150); assert(c.insert{name='iron-plate',count=30}==30); assert(c.insert{name='stone',count=30}==30); for x=1,12 do for y=-6,6 do assert(s.create_entity{name='iron-ore',position={x+.5,y+.5},amount=2000}) end end; local drill=s.create_entity{name='burner-mining-drill',position={2,0},direction=12,force=f}; local furnace=s.create_entity{name='stone-furnace',position={0,0},force=f}; assert(drill and furnace); rcon.print(helpers.table_to_json{tick=game.tick,drill=tostring(drill.unit_number),furnace=tostring(furnace.unit_number)})
+                /silent-command local s=game.surfaces.nauvis; local f=game.forces.factorio_agent; local c=s.find_entities_filtered{type='character',force=f}[1]; assert(c and c.crafting_queue_size==0); game.speed=1; for _,e in pairs(s.find_entities_filtered{area={{-40,-40},{40,40}}}) do if e~=c then e.destroy() end end; local tiles={}; for x=-40,40 do for y=-40,40 do tiles[#tiles+1]={name='grass-1',position={x,y}} end end; s.set_tiles(tiles); assert(c.teleport({-3,-3})); c.get_main_inventory().clear(); assert(c.insert{name='coal',count=150}==150); assert(c.insert{name='iron-plate',count=30}==30); local stoneChest=s.create_entity{name='wooden-chest',position={-6.5,-3.5},force=f}; assert(stoneChest and stoneChest.insert{name='stone',count=30}==30); for x=1,12 do for y=-6,6 do assert(s.create_entity{name='iron-ore',position={x+.5,y+.5},amount=2000}) end end; local drill=s.create_entity{name='burner-mining-drill',position={2,0},direction=12,force=f}; local furnace=s.create_entity{name='stone-furnace',position={0,0},force=f}; assert(drill and furnace); rcon.print(helpers.table_to_json{tick=game.tick,drill=tostring(drill.unit_number),furnace=tostring(furnace.unit_number)})
                 """;
             using var setup = JsonDocument.Parse(await session.CreateRcon().ExecuteAsync(prepare, token));
             evidence.Add(new { check = "explicit-single-pair-preparation", native = setup.RootElement.Clone() });
