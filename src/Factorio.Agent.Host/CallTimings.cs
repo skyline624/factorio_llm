@@ -23,6 +23,18 @@ internal sealed class CallTimings(string directory)
         public double TotalMs, EngineMs, LocalMs, MaxMs;
     }
 
+    /// <summary>Observations and photographs differ by orders of magnitude with their radius and entity limit.</summary>
+    public static string Key(GameRequest request)
+    {
+        if (request.Action is not ("observe" or "spatial") || request.Arguments.ValueKind != JsonValueKind.Object) return request.Action;
+        string key = request.Action;
+        if (request.Arguments.TryGetProperty("radius", out var radius)) key += " r" + radius.GetRawText();
+        if (request.Arguments.TryGetProperty("entityLimit", out var limit)) key += " e" + limit.GetRawText();
+        if (request.Arguments.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array && items.GetArrayLength() > 0)
+            key += " items";
+        return key;
+    }
+
     public void Record(string action, TimeSpan total, TimeSpan engine)
     {
         string? line = null;

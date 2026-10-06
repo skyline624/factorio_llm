@@ -26,7 +26,7 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
         try { return await ExecuteCoreAsync(request, elapsed => engine += elapsed, cancellationToken); }
         finally
         {
-            (timings ??= new CallTimings(session.Directory)).Record(request.Action, Stopwatch.GetElapsedTime(started), engine);
+            (timings ??= new CallTimings(session.Directory)).Record(CallTimings.Key(request), Stopwatch.GetElapsedTime(started), engine);
         }
     }
 

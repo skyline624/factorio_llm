@@ -91,12 +91,12 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         if (observation.Operation is { IsTerminal: false } own && own.OperationId == ownedOperation
             && !((retreat || portableAction is not null) && own.Kind == "shoot"))
             return new("defending", observation.Tick, own.OperationId);
-        if (target is null && equipment is null && !retreat && portableAction is null) return new("observing", observation.Tick);
+        if (target is null && equipment is null && !retreat && portableAction is null) return new("observing", observation.Tick, Scope: observation.Scope, ControlMode: observation.ControlMode);
         if (observation.Operation is { IsTerminal: false } active)
         {
             if (active.OperationId == ownedOperation && !((retreat || portableAction is not null) && active.Kind == "shoot"))
                 return new("defending", observation.Tick, active.OperationId);
-            if (portableAction is null && target is null && observation.Enemies.Count == 0) return new("observing", observation.Tick);
+            if (portableAction is null && target is null && observation.Enemies.Count == 0) return new("observing", observation.Tick, Scope: observation.Scope, ControlMode: observation.ControlMode);
             await journal.AppendAsync("cancel-intent", new { active.OperationId, observation.Tick, targetId = target?.Id,
                 reason = portableAction is not null ? "A visible pack requires paid local turret protection."
                     : retreat ? "Visible danger requires retreat on observed terrain."
@@ -130,7 +130,7 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
                     : (object)new { position = plan.Next, tolerance = RetreatPlanner.MoveTolerance, shootEntityId = target.Id },
                     map.CollectedTick + 180, new { position = map.Actor.Position, positionTolerance = .5 });
         }
-        if (submission is null && target is null && equipment is null) return new("observing", observation.Tick);
+        if (submission is null && target is null && equipment is null) return new("observing", observation.Tick, Scope: observation.Scope, ControlMode: observation.ControlMode);
         submission ??= OperationSubmission.Create(observation.Scope, equipment?.Kind ?? "shoot",
             equipment?.Arguments ?? new { entityId = target!.Id, ticks = 60 }, observation.Tick + 180,
             new { position = observation.Position, positionTolerance = 0.5 });
@@ -234,4 +234,5 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
     }
 }
 
-public sealed record DefenseStep(string State, long Tick, string? OperationId = null);
+/// <summary>An "observing" step also names the scope and control mode it saw, so a caller can reuse an earlier photograph.</summary>
+public sealed record DefenseStep(string State, long Tick, string? OperationId = null, ActorScope? Scope = null, string? ControlMode = null);

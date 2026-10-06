@@ -564,9 +564,14 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         object? preconditions = null, CancellationToken token = default, Func<CancellationToken, Task>? inspectDestination = null)
     {
         if (durationTicks is < 1 or > 216000) throw new ArgumentOutOfRangeException(nameof(durationTicks));
-        SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: token);
-        RequireAi(initial);
-        ActorScope scope = initial.Scope;
+        var build = kind == "build" ? JsonSerializer.SerializeToElement(arguments, Protocol.Json) : (JsonElement?)null;
+        string[]? items = build is { } request ? [request.GetProperty("item").GetString()!] : null;
+        // The scope is fixed before the defense step so work for a dead incarnation is never submitted to its successor.
+        // When that step only observed, this same photograph also serves the submission: a second capture cost about
+        // 140 ms per operation in a 1100-entity base (seed 20261106, 2026-10-06), where operations waited 1 s apart.
+        SpatialSnapshot? photograph = await spatial.CaptureAsync(items, cancellationToken: token);
+        RequireAi(photograph);
+        ActorScope scope = photograph.Scope;
         int stale = 0;
         while (true)
         {
@@ -574,21 +579,21 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             DefenseStep reflex = await DefenseStepAsync(token);
             if (reflex.State is "defending" or "preempted" or "reconciled" or "uncertain")
             {
+                photograph = null;
                 await Task.Delay(150, token);
                 continue;
             }
-            SpatialSnapshot map = await spatial.CaptureAsync(cancellationToken: token);
+            // A respawn or pilot takeover seen by the defense step forbids reusing the earlier photograph.
+            if (reflex.Scope != scope || reflex.ControlMode != "ai") photograph = null;
+            SpatialSnapshot map = photograph ?? await spatial.CaptureAsync(items, cancellationToken: token);
+            photograph = null;
             if (map.Scope != scope) throw new InvalidDataException("Actor scope changed before work submission; reconcile the previous intent.");
             RequireAi(map);
-            if (kind == "build")
+            if (build is { } placed)
             {
-                var json = JsonSerializer.SerializeToElement(arguments, Protocol.Json);
-                string item = json.GetProperty("item").GetString()!;
-                var position = json.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
-                int direction = json.TryGetProperty("direction", out var value) ? value.GetInt32() : 0;
-                map = await spatial.CaptureAsync([item], cancellationToken: token);
-                if (map.Scope != scope) throw new InvalidDataException("Actor changed before construction.");
-                RequireAi(map);
+                string item = items![0];
+                var position = placed.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+                int direction = placed.TryGetProperty("direction", out var value) ? value.GetInt32() : 0;
                 if (!new PlacementPlanner().PreservesExit(new(map), item, new(position, direction, 0), token))
                     throw new PlacementRefusedException("Construction refused: no observed exit after placement.");
             }
