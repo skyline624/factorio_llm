@@ -65,6 +65,8 @@ function M.observe(args)
   local limit = U.number(args.limit, "limit", 1, 200, 100, true)
   -- Own entities have their own bound: production needs every known own inventory once the factory outgrows 200 entities.
   local entity_limit = U.number(args.entityLimit, "entityLimit", 1, 5000, limit, true)
+  -- The defense reflex reads only enemies; resources and trees are neither searched nor sorted when none are wanted.
+  local resource_limit = U.number(args.resourceLimit, "resourceLimit", 0, 200, limit, true)
   s.snapshotSequence = s.snapshotSequence + 1
   local result = {scope = Actor.scope(), snapshotId = s.snapshotSequence, collectedTick = game.tick,
     agent = {alive = c ~= nil, controlMode = s.controlMode, deaths = s.deaths, respawnTick = s.respawnTick,
@@ -113,7 +115,8 @@ function M.observe(args)
   result.agent.walking, result.agent.mining = c.walking_state.walking, c.mining_state.mining
   result.agent.reachDistance, result.agent.buildDistance = c.reach_distance, c.build_distance
   local found = c.surface.find_entities_filtered{position = c.position, radius = radius,
-    type = {"resource", "tree", "simple-entity", "unit", "unit-spawner", "turret"}, limit = 10000}
+    type = resource_limit > 0 and {"resource", "tree", "simple-entity", "unit", "unit-spawner", "turret"}
+      or {"unit", "unit-spawner", "turret"}, limit = 10000}
   table.sort(found, function(a, b)
     local da, db = U.distance(a.position, c.position), U.distance(b.position, c.position)
     if da ~= db then return da < db end
@@ -123,7 +126,7 @@ function M.observe(args)
   for _, entity in ipairs(found) do
     if entity.type == "resource" or entity.type == "tree" or entity.type == "simple-entity" then
       resource_count = resource_count + 1
-      if #result.resources < limit then
+      if #result.resources < resource_limit then
         local item = M.entity(entity, false)
         if entity.type == "resource" then item.amount = entity.amount end
         result.resources[#result.resources + 1] = item
@@ -152,9 +155,9 @@ function M.observe(args)
   for index = 1, math.min(#ids, entity_limit) do result.entities[#result.entities + 1] = M.entity(s.known[ids[index]], true) end
   result.coverage.knownEntityCount, result.coverage.returnedEntityCount = #ids, #result.entities
   result.coverage.knownInventoriesComplete = #ids <= entity_limit
-  result.coverage.resourcesTruncated = resource_count > limit or #found == 10000
+  result.coverage.resourcesTruncated = resource_count > resource_limit or #found == 10000
   result.coverage.enemiesTruncated = enemy_count > limit or #found == 10000
-  result.coverage.resourceDiscovery = "local-radius-only"
+  result.coverage.resourceDiscovery = resource_limit > 0 and "local-radius-only" or "not-requested"
   result.coverage.factoryRegistry = "agent-built-and-locally-observed-own-entities"
   local research = c.force.current_research
   result.research = {name = research and research.name, progress = c.force.research_progress}

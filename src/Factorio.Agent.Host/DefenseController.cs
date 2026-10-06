@@ -56,7 +56,10 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
             return new("reconciled", reconciled.UpdatedTick, reconciled.OperationId);
         }
         SafetyObservation observation = SafetyObservation.Parse(
-            observed ?? await game.ExecuteAsync(GameRequest.Create("observe", new { radius = ImmediateThreatRadius, limit = 200 }), token));
+            observed ?? await game.ExecuteAsync(GameRequest.Create("observe", new { radius = ImmediateThreatRadius, limit = 200,
+                // Enemies, the actor and its receipt are all a reflex reads: about two of these run every second, and
+                // serialising 200 own inventories plus nearby ore and trees made each take 110-120 ms (2026-10-06).
+                entityLimit = 1, resourceLimit = 0 }), token));
         if (observation.Tick < lastTick) throw new SessionDivergenceException("The safety observation tick regressed.");
         lastTick = observation.Tick;
         // Recovery inspects corpse guards up to64tiles away. That complete native frame must not enlarge the
