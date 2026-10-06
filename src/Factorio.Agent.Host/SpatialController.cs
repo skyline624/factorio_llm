@@ -311,6 +311,17 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                         interpretation = "processing-area-hypothesis-not-an-observed-deposit"
                     }, token);
             }
+            MapPosition? ring = null;
+            if (destination is null && remembered is null && hint is null && memory is not null && wanted.Length > 0
+                && deferredResourceIds is not { Count: > 0 })
+            {
+                var nests = game is INestMemoryReader nestReader ? await nestReader.ReadNestMemoryAsync(map.Scope, token) : null;
+                ring = memory.SurveyRingHint(new(0, 0), map.Actor.Position, p => Safe(p) && nests?.Guards(p) != true
+                    && (map.StationaryThreats ?? []).All(t => p.DistanceTo(t.Position) > t.Range + ExplorationPlanner.ThreatMargin));
+                if (ring is not null)
+                    await journal.AppendAsync("exploration-survey-ring", new { map.Scope, map.CollectedTick, wanted, ring,
+                        interpretation = "unsurveyed-ring-point-not-an-observed-deposit" }, token);
+            }
             if (remembered is not null)
                 await journal.AppendAsync("resource-memory-target", new
                 {
@@ -326,7 +337,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                     radius = DangerZones.Radius }, token);
             try
             {
-                var point = planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position,
+                var point = planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position ?? ring,
                     memory?.SurveyedCells, deaths, deferredResourceIds);
                 await journal.AppendAsync("exploration-waypoint", new { map.Scope, map.CollectedTick, map.Actor.Position,
                     wanted, destination, planner.Frontier, point }, token);

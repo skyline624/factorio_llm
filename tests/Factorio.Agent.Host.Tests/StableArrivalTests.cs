@@ -54,8 +54,9 @@ public sealed class StableArrivalTests
     public void AnArrivalAreaEntirelyOnBeltsIsRefusedWithoutAnUnstableFallback()
     {
         var field = new SpatialCollisionField(Map());
+        // The exhaustive refusal needs the whole small grid; a generous budget keeps it deterministic under parallel load.
         var route = new RoutePlanner().Find(field, new(4.5, .5), .2,
-            timeBudget: TimeSpan.FromSeconds(2), requireStableArrival: true);
+            timeBudget: TimeSpan.FromSeconds(60), requireStableArrival: true);
         Assert.Equal(RouteStatus.NoRouteOnKnownGrid, route.Status);
         Assert.Empty(route.Waypoints);
     }

@@ -27,6 +27,21 @@ public sealed class ResourceMemoryTests : IDisposable
     }
 
     [Fact]
+    public void AnUnseenResourceIsSoughtOnTheInnermostUnsurveyedRingNearestTheActor()
+    {
+        var memory = ResourceMemorySnapshot.Empty("world", 1, 0);
+        var first = memory.SurveyRingHint(new(0, 0), new(500, 0), _ => true)!;
+        Assert.Equal(160, first.DistanceTo(new(0, 0)), 0);
+        Assert.Equal(new MapPosition(160, 0), first);
+        // A surveyed or refused ring point is skipped; a fully surveyed ring moves the search outward.
+        var surveyed = memory with { SurveyedCells = [new(40, 0)] };
+        Assert.NotEqual(new MapPosition(160, 0), surveyed.SurveyRingHint(new(0, 0), new(500, 0), _ => true));
+        var outer = memory.SurveyRingHint(new(0, 0), new(500, 0), p => p.DistanceTo(new(0, 0)) > 200)!;
+        Assert.Equal(240, outer.DistanceTo(new(0, 0)), 0);
+        Assert.Null(memory.SurveyRingHint(new(0, 0), new(0, 0), _ => false));
+    }
+
+    [Fact]
     public void AHostLossRestorationDropsOnlySightingsFromTheLostHistory()
     {
         var map = Map();

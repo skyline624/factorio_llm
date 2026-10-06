@@ -66,3 +66,8 @@ Cette restauration nécessite le contrôle exclusif du personnage et écrit un r
 ## Reprise en économie normale
 
 Le souvenir restauré a guidé le retour vers le cuivre. Au tick 796 564, une nouvelle photographie a identifié une source voisine contenant 162 minerais ; le contrôleur a utilisé cette observation fraîche pour miner. Les observations suivantes ont enrichi la mémoire et le besoin de cuivre suivant a réutilisé cette connaissance. La fabrication, la pose et l’approvisionnement de l’assembleur ont finalement produit cinq circuits dans le monde normal de développement. Les [preuves d’assemblage](assembly.md) distinguent ce résultat des campagnes finales encore à réaliser.
+
+## Anneaux de recherche
+
+Une ressource ni mémorisée, ni cartographiée, ni suggérée par une zone de traitement est désormais cherchée sur des anneaux centrés sur l'origine, de rayons 160, 240, 320 et 400 cases, avec un point tous les 64 cases. L'exploration se dirige vers le point non encore relevé le plus proche de l'acteur sur l'anneau incomplet le plus intérieur, en excluant les zones de mort récentes, les gardes des nids mémorisés et les portées de vers augmentées de la marge habituelle (`exploration-survey-ring`). Le 6 octobre 2026, une analyse hors ligne de la partie **20261106**, jamais transmise à l'agent, a montré que le seul gisement de pétrole à moins de 640 cases se trouvait à 347 cases de l'origine, alors que le relevé local couvrait environ 200 cases et qu'un radar d'une force sans joueur ajoute un secteur toutes les 34 s. Les qualifications `verify-charted-resources`, avec et sans radar, repassent sur la fixture **20261165** ; aucune fixture ne démontre encore une découverte par anneau.
+

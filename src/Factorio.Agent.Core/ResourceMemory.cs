@@ -107,6 +107,29 @@ public sealed record ResourceMemorySnapshot(string WorldId, int SurfaceIndex, lo
             .Select(e => new ResourceSearchHint(e.Id, e.Recipe!, e.Position)).FirstOrDefault();
     }
 
+    /// <summary>Search rings around the spawn for a resource never seen nor charted: a playerless force's radar adds one chunk
+    /// every 34 s, and nearest-first frontiers widen slowly. On seed 20261106 the only oil lay 347 tiles out, beyond a
+    /// surveyed radius of about 200.</summary>
+    public static readonly int[] SurveyRingRadii = [160, 240, 320, 400];
+    public const double SurveyRingSpacing = 64;
+
+    /// <summary>The unsurveyed allowed point nearest to the actor on the innermost ring that still has one, or null.</summary>
+    public MapPosition? SurveyRingHint(MapPosition center, MapPosition from, Func<MapPosition, bool> allowed)
+    {
+        var surveyed = SurveyedCells.ToHashSet();
+        foreach (int radius in SurveyRingRadii)
+        {
+            int points = (int)Math.Ceiling(2 * Math.PI * radius / SurveyRingSpacing);
+            var open = Enumerable.Range(0, points)
+                .Select(i => new MapPosition(Math.Round(center.X + radius * Math.Cos(2 * Math.PI * i / points)),
+                    Math.Round(center.Y + radius * Math.Sin(2 * Math.PI * i / points))))
+                .Where(p => !surveyed.Contains(new(checked((int)Math.Floor(p.X / 4)), checked((int)Math.Floor(p.Y / 4)))) && allowed(p))
+                .ToArray();
+            if (open.Length > 0) return open.OrderBy(p => p.DistanceTo(from)).ThenBy(p => p.Y).ThenBy(p => p.X).First();
+        }
+        return null;
+    }
+
     public ResourceSighting? Nearest(string item, ProductionCatalog catalog, MapPosition from, Func<MapPosition, bool>? allowed = null,
         IReadOnlySet<string>? deferredEntityIds = null) => Resources
         .Where(r => catalog.Mining.TryGetValue(r.Name, out var products) && products.Any(p => p.Name == item && p.DeterministicItem)
