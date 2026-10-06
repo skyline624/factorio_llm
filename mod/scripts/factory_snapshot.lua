@@ -225,7 +225,8 @@ function M.page(args)
   local s = Actor.state()
   s.factorySnapshots, s.factorySnapshotOrder = s.factorySnapshots or {}, s.factorySnapshotOrder or {}
   local offset = U.number(args.offset, "offset", 0, maximum_records, 0, true)
-  local limit = U.number(args.limit, "limit", 1, 200, 100, true)
+  -- Large pages: on seed 20261072 a 10k-record factory took 104 RCON round trips per photograph.
+  local limit = U.number(args.limit, "limit", 1, 2000, 100, true)
   local snapshot
   if args.snapshotId then
     U.check(args.capacityItems == nil, "invalid_arguments", "Capacity probes are selected only when creating a snapshot")
