@@ -162,7 +162,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
             bag = Carried(snapshot);
         }
         // Every registered output chest that still stands is stock, whatever its cell's status; absent chests hold nothing.
-        var outputs = OutputChests(state.Cells).Where(chest => Items(snapshot, chest).Any(p => p.Value > 0
+        var outputs = CollectedChests(state.Cells, snapshot).Where(chest => Items(snapshot, chest).Any(p => p.Value > 0
             && Cap(p.Key) > bag.GetValueOrDefault(p.Key) && (!busSources.Contains((chest, p.Key)) || needs.GetValueOrDefault(p.Key) > 0)));
         foreach (string chest in FactoryVisitOrder.Plan(snapshot, outputs))
         {
@@ -400,6 +400,17 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     /// </summary>
     internal static IReadOnlyList<string> OutputChests(IEnumerable<FactoryCell> cells) => cells
         .Where(c => c.Entities.ContainsKey("output-chest")).Select(c => c.Entities["output-chest"]).Distinct(StringComparer.Ordinal).ToArray();
+
+    /// <summary>Keep retired stock recoverable, but collect the depot instead of a row served by a complete powered line.</summary>
+    internal static IReadOnlyList<string> CollectedChests(IReadOnlyCollection<FactoryCell> cells, FactorySnapshot snapshot)
+    {
+        var present = FactoryMaintenance.Present(snapshot);
+        var lines = cells.Where(c => c.Kind == SupplyLinePlanner.Kind && c.Status == "ready"
+            && c.Entities.Values.All(present.Contains)).ToArray();
+        var served = SupplyLines.Served(lines, FactoryMaintenance.Unpowered(snapshot, lines.SelectMany(c => c.Entities.Values))
+            .ToHashSet(StringComparer.Ordinal));
+        return OutputChests(cells.Where(c => !(c.IsResource && c.Status == "ready" && served.Contains((c.Slot.Band, c.Slot.Index)))));
+    }
 
     /// <summary>
     /// Boilers and every fuelled entity of a cell (furnaces, burner drills) with the fuel they hold, by native id.

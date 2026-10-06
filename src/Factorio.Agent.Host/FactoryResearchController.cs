@@ -61,6 +61,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         await builder.RepairPowerAsync(token);
         await director.ExpandPowerAsync(observation.Scope, token);
         await director.ResumeResourceCellsAsync(observation.Scope, token);
+        await director.EnsureSupplyLineAsync(token);
         await journal.AppendAsync("factory-research-start", new { technologyName, technology.Count, unitSeconds, labs, minutes }, token);
 
         var logistics = new FactoryLogistics(game, journal, directory);
@@ -136,6 +137,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
                 if ((await director.EnsureRawAsync(item, demand, token, maximumNewCells: 1, explorationBudget: RawCapacityGrowth.ExplorationBudget)).Built > 0)
                 {
                     growth.Grew(item);
+                    await director.EnsureSupplyLineAsync(token);
                     return true;
                 }
             }

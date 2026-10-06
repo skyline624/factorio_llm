@@ -42,6 +42,27 @@ public sealed class ResourceCellPlannerTests
         Assert.True(row.Pitch <= map.Prototypes["small-electric-pole"].MaxWireDistance);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [InlineData(8)]
+    [InlineData(12)]
+    public void AccessGivesEachCellsChestTheRowAxisAndTheWalkwayBeyondTheChests(int direction)
+    {
+        var map = FactoryMaps.Grass(30);
+        var row = Row(map, ElectricSmelter, direction, cells: 3);
+        var access = ResourceCellPlanner.Access(map, row);
+        var layouts = Enumerable.Range(0, 3).Select(i => new ResourceCellPlanner().Layout(map, row, i)).ToArray();
+        Assert.Equal(layouts.Select(l => l.Role("output-chest")!.Position), access.Chests);
+        Assert.Equal(ResourceCellPlanner.Walkway(map, row), access.Walkway);
+        // Unit axes: cells step along the row, and the walkway tile beside each chest lies outward.
+        Assert.Equal(1, Math.Abs(access.Along.X) + Math.Abs(access.Along.Y));
+        Assert.Equal(0, access.Along.X * access.Outward.X + access.Along.Y * access.Outward.Y);
+        Assert.Equal(row.Pitch, (access.Chests[1].X - access.Chests[0].X) * access.Along.X + (access.Chests[1].Y - access.Chests[0].Y) * access.Along.Y);
+        Assert.All(access.Chests, chest => Assert.True(access.Walkway.Contains(new MapPosition(chest.X + access.Outward.X, chest.Y + access.Outward.Y))));
+        Assert.Equal(ResourceCellPlanner.Reservation(map, row), [.. ResourceCellPlanner.Footprints(map, row), access.Walkway]);
+    }
+
     [Fact]
     public void BurnerSmelterPolePowersOnlyTheInserterWithinTheDrillWidth()
     {

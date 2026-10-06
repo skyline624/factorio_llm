@@ -11,7 +11,8 @@ internal static class IndustryClusters
 
     /// <summary>
     /// Bands (with their unbuilt slots), entities of registered production cells and every other known industrial entity.
-    /// Defenses are protection, not industry; link poles, belts and pipes would chain distant sites into one unobservable ring.
+    /// Defenses are protection, not industry; link poles, belts and pipes would chain distant sites into one unobservable ring, so
+    /// supply lines only count through their depot chest, a container beside its band.
     /// </summary>
     public static IReadOnlyList<IndustryMember> Members(FactoryState state, FactorySnapshot snapshot)
     {
@@ -19,7 +20,7 @@ internal static class IndustryClusters
         static int? Surface(FactoryRecord record) => record.Data.TryGetProperty("surfaceIndex", out var index) ? index.GetInt32() : null;
         int? surface = Surface(actor);
         var defense = state.Cells.Where(c => c.Kind is "turret" or "wall").SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
-        var cellEntities = state.Cells.Where(c => c.Kind is not ("turret" or "wall"))
+        var cellEntities = state.Cells.Where(c => c.Kind is not ("turret" or "wall" or SupplyLinePlanner.Kind))
             .SelectMany(c => c.Entities.Where(e => !e.Key.StartsWith("link-", StringComparison.Ordinal)).Select(e => e.Value))
             .ToHashSet(StringComparer.Ordinal);
         var members = state.Zones.Select(z => new IndustryMember($"zone-{z.Id}", z.Box, Entity: false)).ToList();

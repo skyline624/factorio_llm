@@ -77,6 +77,30 @@ public sealed class CellPowerLinkerTests
         Assert.Null(CellPowerLinker.Plan(Known(world), View(new(60, 0), world), "cell-pole", cellPole, PoleItem, [m => m]));
     }
 
+    [Theory]
+    [InlineData(1.5, PowerGridSearchStatus.Connected)]
+    [InlineData(12.5, PowerGridSearchStatus.Extension)]
+    public void SupplyLineInsertersUseSupplyCoverageInsteadOfPoleWireGeometry(double x, PowerGridSearchStatus expected)
+    {
+        var at = new MapPosition(x, .5);
+        var map = View(new(0, 0), [Pole("grid", new(.5, .5), 1)]);
+        var consumer = new SpatialEntity("arm", "inserter", at, map.Prototypes["inserter"].CollisionBox.Rotate(8).Translate(at),
+            8, "agent", Power: new(0, 2));
+        map = map with { Entities = [.. map.Entities, consumer] };
+        var known = Known(map.Entities);
+        known = known with { Records = [.. known.Records.Where(r => r.EntityId != "arm"),
+            new("arm", "entity", "arm", "inserter", Protocol.ToElement(new { role = "factory", type = "inserter", position = at,
+                direction = 8, electricNetworkId = 2 }))] };
+        var next = CellPowerLinker.Plan(known, map, "arm", at, PoleItem, [m => m]);
+        Assert.NotNull(next);
+        Assert.Equal(expected, next.Status);
+        if (next.Pole is { } pole)
+        {
+            Assert.InRange(pole.Position.DistanceTo(new(.5, .5)), 0, 7.5);
+            Assert.False(consumer.Bounds.Overlaps(map.Prototypes[PoleItem].CollisionBox.Translate(pole.Position)));
+        }
+    }
+
     /// <summary>A 48-tile capture around the actor, as the mod returns it, of a flat grass world.</summary>
     private static SpatialSnapshot View(MapPosition actor, IReadOnlyList<SpatialEntity> world)
     {

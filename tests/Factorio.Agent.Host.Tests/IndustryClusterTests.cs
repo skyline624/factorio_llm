@@ -63,6 +63,21 @@ public sealed class IndustryClusterTests
         Assert.Equal(zone.Box, members.Single(m => m.Id == "zone-1").Box);
     }
 
+    [Fact]
+    public void ASupplyLineDoesNotChainTheRowAndTheBandsIntoOneSite()
+    {
+        // A trunk is a chain of one-tile belts: counted as industry, it would merge distant rows and bands into rings no observation covers.
+        var state = new FactoryState(1, "world", [new FactoryZone(1, new(0, 0), 8, 3, 12)], [
+            new("supply", 0, new(4, 0, true), SupplyLinePlanner.Kind, "transport-belt", "iron-plate", new Dictionary<string, string>
+            {
+                ["feeder-0"] = "20", ["collector-000"] = "21", ["trunk-000"] = "22", ["trunk-001"] = "23", ["depot-inserter"] = "24", ["output-chest"] = "25"
+            }, "ready", 1)
+        ]);
+        var snapshot = Snapshot(Entity("20", "inserter", -60.5, 0.5), Entity("21", "transport-belt", -60.5, 1.5), Entity("22", "transport-belt", -30.5, 1.5),
+            Entity("23", "transport-belt", -2.5, 6.5), Entity("24", "inserter", -1.5, 6.5), Entity("25", "container", -0.5, 6.5));
+        Assert.Equal(new[] { "25", "zone-1" }, IndustryClusters.Members(state, snapshot).Select(m => m.Id).Order(StringComparer.Ordinal));
+    }
+
     internal static FactorySnapshot Snapshot(params FactoryRecord[] entities) =>
         new("snapshot", new("world", "session", "actor", 1, 2), 10, 3610, Protocol.ToElement(new { }),
             [new("actor", "entity", "actor", "character", Protocol.ToElement(new { role = "actor", type = "character", surfaceIndex = 1,

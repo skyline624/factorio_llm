@@ -6,13 +6,16 @@ namespace Factorio.Agent.Host.Tests;
 
 public sealed class TransportConstructionSafetyTests
 {
-    [Fact]
-    public void SurfaceRouteDetoursAroundTheNavigationEnvelopeWithoutChangingNativeReach()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SurfaceRouteDetoursAroundTheNavigationEnvelopeWithoutChangingNativeReach(bool partial)
     {
         var map = Map();
-        var direct = new BeltRoutePlanner().Find(map with { StationaryThreats = [] }, "belt", new(-32.5, .5), new(32.5, .5));
-        var safe = new BeltRoutePlanner().Find(map, "belt", new(-32.5, .5), new(32.5, .5));
-        Assert.Equal(BeltRouteStatus.Found, safe.Status);
+        var target = new MapPosition(partial ? map.Bounds.Max.X + 100.5 : 32.5, .5);
+        var direct = new BeltRoutePlanner().Find(map with { StationaryThreats = [] }, "belt", new(-32.5, .5), target, partial: partial);
+        var safe = new BeltRoutePlanner().Find(map, "belt", new(-32.5, .5), target, partial: partial);
+        Assert.Equal(partial ? BeltRouteStatus.Partial : BeltRouteStatus.Found, safe.Status);
         Assert.True(safe.Belts.Count > direct.Belts.Count);
         Assert.All(safe.Belts, b => Assert.True(b.Position.DistanceTo(new(0, 0)) >= 29));
         Assert.Equal(10, map.Actor.BuildDistance);

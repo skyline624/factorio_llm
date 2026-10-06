@@ -5,7 +5,7 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 /// <summary>
-/// Joins a cell pole to a fed electric network wherever that network stands. Links grow outward from fed poles toward the
+/// Joins a cell pole or electric consumer to a fed network wherever that network stands. Links grow outward from fed poles toward the
 /// cell, one pole per step: when no fed pole is in view, the actor walks to the known fed pole nearest the cell and extends
 /// from there, so a pumpjack on a remote deposit still gets power. Every link pole is reported so its cell can register it,
 /// and must itself be fed before the next one is planned. The reach is the step budget over observed, passable ground.
@@ -74,7 +74,14 @@ internal sealed class CellPowerLinker(IGameClient game, IControllerJournal journ
         var next = new PowerGridLink(PowerGridSearchStatus.NoObservedPath);
         foreach (var reserve in reservations)
         {
-            next = new PowerGridPlanner().NextToPole(reserve(map), poleItem, target.Name, polePosition, sources, token);
+            var planner = new PowerGridPlanner();
+            if (!map.Prototypes.TryGetValue(target.Name, out var geometry))
+                throw new InvalidDataException("Missing native electric target geometry.");
+            next = geometry.Type == "electric-pole"
+                ? planner.NextToPole(reserve(map), poleItem, target.Name, polePosition, sources, token)
+                : planner.Next(reserve(map), poleItem,
+                    geometry.CollisionBox.Rotate(target.Data.TryGetProperty("direction", out var direction) ? direction.GetInt32() : 0)
+                        .Translate(polePosition), sources, token);
             if (next.Status != PowerGridSearchStatus.NoObservedPath) break;
         }
         return next;

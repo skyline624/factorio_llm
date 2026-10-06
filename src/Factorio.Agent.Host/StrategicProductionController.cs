@@ -104,6 +104,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 "Perimeter goals use category defense, unit completion, quantity 1 and a native wall item such as stone-wall. C# rings the known factory core within one observed area with turret nests spaced by native range, outward wall shields and open gaps, loads turret reserves, and registers them so factory logistics rebuilds destroyed defenses and rearms turrets from carried magazines. " +
                 "Automation goals use category production, unit items_per_minute, quantity up to 600 and an exact native item. Supported targets include deterministic mined solids such as coal and stone, ore plates supplied by resource cells, assembler products and burner-furnace products such as steel-plate. C# builds persistent resource cells on observed deposits and chest-fed assembler or furnace cells for the item and its intermediates, then restocks them. Explicit raw-rate targets require production capacity even when carried stock covers a temporary horizon. Prefer a persistent raw-rate target over repeated stock batches when the known raw capacity is inadequate. Research goals also build science cells and laboratories instead of hand-crafting packs when automation is available. Construction and exploration budgets can leave a requested rate partly supplied; installed capacity and native output must be observed. " +
                 "Once the native research and equipment are available, automation includes plastic-bar, sulfur, batteries, processing units, rocket fuel and electric engines as well as solid consumers of those intermediates. All registered item targets share one dependency plan and add their demands, including common petroleum and acid stages. Simultaneous refinery outputs share the same native recipe cycles rather than duplicate crude and water demand. C# builds pumpjack extractors on an observed crude oil deposit, refineries, isolated finite co-product tanks, chemical plants and fluid-fed assemblers with calculated pipes; the actor transports solid inputs. Advanced oil processing and lubricant can serve item automation; direct fluid-stock goals still require their supported single-product recipes. Regulated cracking and sustained flow after tank saturation remain incomplete. Planned rates are bounded by cell and transport capacity and do not prove achieved native throughput. " +
+                "Distant smelter rows can supply a depot beside the assembler bands through an observed belt route. Production and research goals request these supply lines; a damaged or unpowered line leaves its row available for direct collection. " +
                 "Choose an unmet useful goal toward the rocket. Other meaningful goals remain permissible proposals with explicit unsupported results.",
             automatedFactory = new
             {
@@ -122,6 +123,8 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 rawInterpretation = "Resource cells mine ore patches for plates, coal and stone. Explicit items_per_minute goals can grow their persistent capacity; construction and exploration are bounded. The actor still carries products and fuel between unconnected cells, and temporary stock requests may use an early drill. Burner drills burn coal and mine at half an electric drill's speed; depleted cells no longer produce. Registered rates are calculated capacity, not measured sustained throughput.",
                 fluidCells = cells.Where(c => c.Kind is FluidCellBuilder.MachineKind or FluidCellBuilder.ExtractorKind).GroupBy(c => c.Recipe ?? c.Kind)
                     .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => new { recipe = g.Key, cells = g.Count() }).ToArray(),
+                supplyLines = cells.Where(c => c.Kind == SupplyLinePlanner.Kind).Select(c => new { row = c.Slot.Band, product = c.Recipe,
+                    feeders = SupplyLines.FeederCells(c.Entities.Keys).Count }).ToArray(),
                 perimeterTurrets = cells.Where(c => c.Kind == "turret").Sum(c => c.Entities.Count),
                 perimeterWalls = cells.Where(c => c.Kind == "wall").Sum(c => c.Entities.Count),
                 interpretation = "Persistent chest-fed cells keep producing while inputs last; the actor restocks them between goals."
@@ -172,7 +175,9 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
             return new(goal, Fluid: await new FluidProductionController(game, journal).RunAsync(goal.Target, (double)goal.Quantity, token));
         if (goal.Category == GoalCategory.Production && goal.Unit == GoalUnit.ItemsPerMinute)
         {
-            var plan = await new FactoryDirector(game, journal, factoryDirectory!).AutomateAsync(goal.Target, (double)goal.Quantity, token);
+            var director = new FactoryDirector(game, journal, factoryDirectory!);
+            var plan = await director.AutomateAsync(goal.Target, (double)goal.Quantity, token);
+            await director.EnsureSupplyLineAsync(token);
             var service = await new FactoryLogistics(game, journal, factoryDirectory!).ServiceAsync(40, token, usePlannedBuffers: true);
             return new(goal, Automation: plan, Logistics: service);
         }

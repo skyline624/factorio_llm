@@ -10,14 +10,14 @@ internal sealed class BeltRoutingField
 
     public BeltRoutingField(SpatialSnapshot map, EntityGeometry geometry, MapPosition start,
         CancellationToken token, string? inletBeltId = null, IReadOnlySet<string>? existingBusBelts = null,
-        SpatialCollisionField? collisionField = null)
+        SpatialCollisionField? collisionField = null, string? joined = null)
     {
         this.geometry = geometry;
         field = collisionField ?? new(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
         foreach (var entity in map.Entities)
         {
             token.ThrowIfCancellationRequested();
-            if (map.Prototypes[entity.Name].Type is "transport-belt" or "underground-belt" or "splitter")
+            if (map.Prototypes[entity.Name].Type is "transport-belt" or "underground-belt" or "splitter" && entity.Id != joined)
             {
                 var box = new WorldBox(new(entity.Bounds.Min.X - 1, entity.Bounds.Min.Y - 1),
                     new(entity.Bounds.Max.X + 1, entity.Bounds.Max.Y + 1));

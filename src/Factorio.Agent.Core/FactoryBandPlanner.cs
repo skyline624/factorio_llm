@@ -22,6 +22,14 @@ public sealed class FactoryBandPlanner
     public static int BandHeight(EntityGeometry machine, bool transportAccess = false) =>
         2 * (machine.TileHeight + (transportAccess ? 4 : 2)) + WalkwayTiles(transportAccess);
 
+    /// <summary>The walkway both rows of a band share, preserving its native layout and transport access.</summary>
+    public static WorldBox Walkway(MapPosition origin, int slots, int pitch, int bandHeight, bool transportAccess = false)
+    {
+        int tiles = WalkwayTiles(transportAccess);
+        double top = origin.Y + (bandHeight - tiles) / 2;
+        return new(new(origin.X, top), new(origin.X + slots * pitch, top + tiles));
+    }
+
     public CellLayout Layout(SpatialSnapshot map, CellEquipment equipment, MapPosition origin, CellSlot slot,
         bool input = true, bool output = true, bool transportAccess = false)
     {
