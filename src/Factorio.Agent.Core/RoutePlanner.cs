@@ -18,6 +18,8 @@ public sealed class RoutePlanner
     private readonly record struct SearchNode(Cell Cell, double Cost);
     private static readonly (int X, int Y)[] Neighbors = [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, 1), (-1, -1), (1, -1)];
 
+    private const double DirectCheckDistance = 6;
+
     public RoutePlan Find(SpatialCollisionField field, MapPosition destination, double goalRadius = 0.2,
         int maximumNodes = 25000, TimeSpan? timeBudget = null, CancellationToken token = default,
         bool requireStableArrival = false, double minimumFirstMoveDistance = 0,
@@ -62,6 +64,10 @@ public sealed class RoutePlanner
             }
         int expanded = 0;
         long began = Stopwatch.GetTimestamp();
+        // A straight line to a far destination sweeps every obstacle between them; checked from every node it dominated
+        // the search (0.1-0.2 ms a node in a 1100-entity base, seed 20261106). Near the goal it still closes off-grid
+        // destinations, and an occasional far check keeps the any-angle shortcut across open ground.
+        bool DirectCheck(MapPosition position, int count) => position.DistanceTo(destination) <= DirectCheckDistance || count % 32 == 1;
         TimeSpan budget = timeBudget ?? TimeSpan.FromMilliseconds(250);
         while (frontier.TryDequeue(out SearchNode node, out _))
         {
@@ -72,7 +78,7 @@ public sealed class RoutePlanner
             MapPosition position = node.Cell.Position;
             bool atGoal = EligibleArrival(position) && position.DistanceTo(destination) <= goalRadius
                 && (!requireStableArrival || PlacementPlanner.CanStop(field, position));
-            if (atGoal || stableDestination && field.SegmentClear(position, destination))
+            if (atGoal || stableDestination && DirectCheck(position, expanded) && field.SegmentClear(position, destination))
             {
                 var reverse = new List<MapPosition> { position };
                 Cell current = node.Cell;
