@@ -91,12 +91,17 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         string? ammunition = choices.FirstOrDefault(a => AttackResponseController.Affordable(catalog, turret, a,
             (int)(magazines / TurretsPerStep) + 1, stock, TurretsPerStep) == TurretsPerStep);
         if (ammunition is null) return new("no-stock", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick);
+        // Portable defense draws from the same bag on the way in; on 2026-10-06 most assault steps in all three normal campaigns
+        // returned "kit-spent" and walked back for turrets. When affordable, the portable reserve travels on top of the block.
+        int kit = AttackResponseController.Affordable(catalog, turret, ammunition, MagazinesPerTurret + 1, stock, TurretsPerStep
+            + PortableDefensePlanner.TurretReserve) == TurretsPerStep + PortableDefensePlanner.TurretReserve
+            ? TurretsPerStep + PortableDefensePlanner.TurretReserve : TurretsPerStep;
 
-        await journal.AppendAsync("nest-clearing-plan", new { nest.Center, nest.Spawners, nest.Worms, radius = nest.Radius, turret, ammunition }, token);
+        await journal.AppendAsync("nest-clearing-plan", new { nest.Center, nest.Spawners, nest.Worms, radius = nest.Radius, turret, ammunition, kit }, token);
         using (ProductionReservations.EnterFactory(registry))
         {
             await new SurvivalKitController(game, journal).EnsureAsync("nest-clearing", token);
-            return await ClearAsync(catalog, nest, turret, ammunition, token);
+            return await ClearAsync(catalog, nest, turret, ammunition, kit, token);
         }
     }
 
@@ -183,7 +188,7 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         return new(nest.Center.X + (actor.X - nest.Center.X) * distance / length, nest.Center.Y + (actor.Y - nest.Center.Y) * distance / length);
     }
 
-    private async Task<NestClearingResult> ClearAsync(ProductionCatalog catalog, NestCluster nest, string turret, string ammunition,
+    private async Task<NestClearingResult> ClearAsync(ProductionCatalog catalog, NestCluster nest, string turret, string ammunition, int kit,
         CancellationToken token)
     {
         await using var controller = new SpatialController(game, journal);
@@ -191,7 +196,7 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         var staging = Staging(nest, start.Actor.Position);
         // Carry the first step's turrets and magazines before leaving: on seed 20261106 the actor reached the staging point,
         // then walked 150 tiles back to the base for turrets and returned.
-        if (!await CarryAsync(turret, TurretsPerStep, ammunition, token))
+        if (!await CarryAsync(turret, kit, ammunition, token))
             return new("no-stock", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], (await SafetyAsync(token)).Tick);
         await controller.TravelAsync(staging, 6, catalog, token);
         var steps = new List<NestClearingStep>();
@@ -207,7 +212,7 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             if (carried.GetValueOrDefault(turret) < TurretsPerStep
                 || carried.GetValueOrDefault(ammunition) < (long)TurretsPerStep * MagazinesPerTurret + SurvivalKitPlanner.MagazineReserve)
             {
-                if (!await CarryAsync(turret, TurretsPerStep, ammunition, token)) { status = "no-stock"; break; }
+                if (!await CarryAsync(turret, kit, ammunition, token)) { status = "no-stock"; break; }
                 await controller.TravelAsync(staging, 6, catalog, token);
                 continue;
             }
