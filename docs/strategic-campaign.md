@@ -136,6 +136,10 @@ Le complément de 100 packs verts est terminé au tick 9061876. L’assembleuse 
 
 La lecture indépendante au tick 9284730 confirme `oil-gathering`, la recette du chevalet activée et le même personnage 1683 à 250 points de vie. Le serveur et le contrôleur sont restés actifs pendant cette reprise ; aucun arrêt manuel n’a été nécessaire. Le modèle a ensuite choisi `oil-processing`, observé au tick 9269900, en 3,470 secondes côté client, avec 9386 tokens d’entrée et 184 de sortie. Son déblocage par extraction réelle reste à réaliser dans ce monde de développement, qui ne constitue toujours pas une campagne finale qualifiée.
 
+## Redémarrage demandé entre deux objectifs
+
+Remplacer les binaires d'une campagne en cours arrêtait jusqu'ici son contrôleur de force. Le 6 octobre 2026, un tel arrêt a interrompu un nettoyage de nid pendant le réapprovisionnement de ses tourelles. Un fichier `restart-requested` placé à côté de `strategic-memory.json` est désormais lu en tête de boucle, après le résultat vérifié de l'objectif précédent et avant toute maintenance : la campagne s'arrête avec `stopReason = "restart-requested"` et supprime le fichier. Le premier objectif d'une exécution démarre toujours. Le budget `--minutes` reste une annulation immédiate ; les campagnes longues utilisent donc 1 440 minutes et ce redémarrage coopératif.
+
 ## Facteur d'évolution
 
 Le planificateur ne voyait que les indicateurs d'activation de la pollution, de l'évolution et de l'expansion. L'observation exporte maintenant aussi `enemyEvolutionFactor`, le facteur natif de la force ennemie, connaissance ordinaire d'un joueur (commande `/evolution`), y compris pendant l'attente d'une réapparition. Les vers moyens apparaissent vers 0,3 et résistent presque entièrement aux munitions de base ; ce fait permet de préparer à temps les munitions perforantes et les recherches de dégâts. Le choix de l'objectif reste au modèle et sa validation au C#.

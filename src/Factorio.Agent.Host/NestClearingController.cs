@@ -244,6 +244,17 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
     {
         await MoveDirectAsync(controller, plan.Stand, token);
         var placed = new List<string>();
+        // Portable defense may spend the kit on packs met during the approach. On 2026-10-06 (seed 20261106) it used three of
+        // four turrets and the lone remaining one was destroyed without a kill; a partial block now waits for a full kit.
+        var bag = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
+        if (bag.GetValueOrDefault(turret) < plan.Turrets.Count
+            || bag.GetValueOrDefault(ammunition) < (long)plan.Turrets.Count * MagazinesPerTurret)
+        {
+            await MoveDirectAsync(controller, staging, token);
+            var spent = new NestClearingStep(plan.Target.Id, plan.Target.Name, placed, plan.Exposure, 0, 0, 0, "kit-spent");
+            await journal.AppendAsync("nest-clearing-step-result", spent, token);
+            return spent;
+        }
         foreach (var placement in plan.Turrets)
         {
             OperationReceipt built;
