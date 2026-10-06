@@ -255,10 +255,12 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
                         string retainedChestId = registered.Entities["input-chest"];
                         var retainedChest = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == retainedChestId);
                         var position = retainedChest.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+                        // Logistics tours still top the chest up to the full reserve from carried stock; only this blocking
+                        // procurement follows the network's load.
+                        int reserveStacks = state.Budget(network).PrimingStacks(FactoryLogistics.PowerChestStacks);
                         await journal.AppendAsync("power-cell-fuel-recovery", new { cellId = registered.Id, boilerId = boiler.Id, chestId = retainedChestId,
-                            snapshot.CollectedTick, reserveStacks = FactoryLogistics.PowerChestStacks }, token);
-                        await PrimeAsync(boiler.Id, boiler.Position, retainedChestId, position, catalog, controller, token,
-                            reserveStacks: FactoryLogistics.PowerChestStacks);
+                            snapshot.CollectedTick, reserveStacks }, token);
+                        await PrimeAsync(boiler.Id, boiler.Position, retainedChestId, position, catalog, controller, token, reserveStacks);
                         snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
                         Require(snapshot.Scope, catalog);
                     }

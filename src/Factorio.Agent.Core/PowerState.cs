@@ -26,6 +26,18 @@ public sealed record PowerBudget(long NetworkId, double CapacityPerTick, double 
     public const double Headroom = 0.8;
 
     public bool Exceeded(double additionalPerTick = 0) => DemandPerTick + additionalPerTick > Headroom * CapacityPerTick;
+
+    /// <summary>
+    /// Stacks a cold or low feeder is primed to before construction continues, from the share of capacity its consumers can draw.
+    /// The full reserve is sized for boilers at full load; on 2026-10-06 (seed 987654321) a network at 10 % of capacity waited
+    /// nine minutes on one coal drill for 153 coal before any further building.
+    /// </summary>
+    public int PrimingStacks(int fullLoadStacks)
+    {
+        if (fullLoadStacks < 1) throw new ArgumentOutOfRangeException(nameof(fullLoadStacks));
+        if (!(CapacityPerTick > 0) || !double.IsFinite(DemandPerTick)) return fullLoadStacks;
+        return (int)Math.Clamp(Math.Ceiling(fullLoadStacks * Math.Max(0, DemandPerTick) / CapacityPerTick), 1, fullLoadStacks);
+    }
 }
 
 /// <summary>Read-only native reading of the known own electric networks and the boilers that feed them.</summary>

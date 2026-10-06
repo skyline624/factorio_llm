@@ -108,4 +108,15 @@ public sealed class PowerStateTests
         var network = new ElectricNetworkState(1, 1, sources, consumers ?? []);
         return State([network], boilers).Budget(network);
     }
+
+    [Fact]
+    public void ABlockingFeederPrimingFollowsTheShareOfCapacityConsumersCanDraw()
+    {
+        Assert.Equal(1, new PowerBudget(1, 15000, 1503).PrimingStacks(4));
+        Assert.Equal(2, new PowerBudget(1, 30000, 12710).PrimingStacks(4));
+        Assert.Equal(4, new PowerBudget(1, 30000, 29000).PrimingStacks(4));
+        Assert.Equal(4, new PowerBudget(1, 30000, 45000).PrimingStacks(4));
+        Assert.Equal(1, new PowerBudget(1, 30000, 0).PrimingStacks(4));
+        Assert.Equal(4, new PowerBudget(1, 0, 100).PrimingStacks(4));
+    }
 }

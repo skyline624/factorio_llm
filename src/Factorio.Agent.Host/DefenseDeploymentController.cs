@@ -93,6 +93,9 @@ public sealed class DefenseDeploymentController(IGameClient game, IControllerJou
             int count = checked((int)Math.Min(deficit, Math.Min(capacity, available)));
             if (count <= 0) throw new InvalidOperationException("No native stock or capacity for the turret reserve; partial deployment remains observable.");
             var receipt = await controller.WorkAsync("insert", new { entityId = turret.Id, inventory = "ammo", item = ammunition, count }, 600, token: token);
+            // A defense reflex may move the actor between its approach and the transfer; the engine refuses before moving
+            // anything, so the next bounded step approaches again (seed 20261106, 2026-10-06).
+            if (receipt.Status == "failed" && receipt.Error?.Code == "out_of_reach") continue;
             if (receipt.Status is not ("completed" or "partial") || receipt.Effects.GetProperty("targetId").GetString() != turret.Id
                 || receipt.Effects.GetProperty("item").GetString() != ammunition || receipt.Effects.GetProperty("inventory").GetString() != "ammo"
                 || receipt.Effects.GetProperty("direction").GetString() != "from_actor"
