@@ -311,7 +311,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         string chest = Enabled("iron-chest") ? "iron-chest" : "wooden-chest";
         if (!Enabled("inserter") || !Enabled("small-electric-pole"))
             throw new InvalidOperationException("Factory cells need electric inserters and small electric poles; research electronics first.");
-        return new(machineItem, "inserter", chest, "small-electric-pole");
+        return new(machineItem, AutomationPlanner.CellInserter(catalog), chest, "small-electric-pole");
     }
 
     /// <summary>Whether the machine is given its recipe; furnaces select theirs from the ingredient they receive, a silo's is fixed.</summary>

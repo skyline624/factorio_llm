@@ -14,6 +14,23 @@ public static class AutomationPlanner
     public const string FluidKind = "fluid";
     /// <summary>Observed native throughput of one basic inserter between a chest and a machine.</summary>
     public const double InserterItemsPerSecond = 0.8;
+    public const string BasicInserter = "inserter";
+    /// <summary>
+    /// Arms new cells are built with, fastest first; both share the basic inserter's pickup and drop geometry. A basic arm
+    /// caps a copper-cable or gear cell near a quarter of its machine: the 30-per-minute chemical-science plan on seed
+    /// 20261072 asked for 17 cable and 14 circuit assemblers.
+    /// </summary>
+    public static readonly string[] InserterPreference = ["fast-inserter", BasicInserter];
+
+    public static string CellInserter(ProductionCatalog catalog) =>
+        InserterPreference.FirstOrDefault(i => catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == i))) ?? BasicInserter;
+
+    /// <summary>Chest-to-machine items per second of an arm: the observed basic rate scaled by native rotation speed.</summary>
+    public static double InserterThroughput(ProductionCatalog catalog, string? inserter) =>
+        inserter is not null && inserter != BasicInserter && catalog.Items.TryGetValue(inserter, out var arm) && arm.InserterRotationSpeed is > 0
+            && catalog.Items.TryGetValue(BasicInserter, out var basic) && basic.InserterRotationSpeed is > 0
+            ? InserterItemsPerSecond * arm.InserterRotationSpeed.Value / basic.InserterRotationSpeed.Value
+            : InserterItemsPerSecond;
     /// <summary>New cells per stage and automation call; existing cells do not consume this construction budget.</summary>
     public const int MaximumNewMachinesPerStage = 8;
 
@@ -40,7 +57,8 @@ public static class AutomationPlanner
         {
             string kind = stage.Recipe.Ingredients.Concat(stage.Recipe.Products).Any(i => i.DeterministicFluid)
                 ? FluidKind : Kind(catalog, stage.MachineItem);
-            int machines = (int)Math.Ceiling(stage.CraftsPerMinute / CellCraftsPerMinute(catalog, stage.Recipe, stage.MachineItem) - 1e-9);
+            int machines = (int)Math.Ceiling(stage.CraftsPerMinute / CellCraftsPerMinute(catalog, stage.Recipe, stage.MachineItem,
+                CellInserter(catalog)) - 1e-9);
             return new AutomationStage(stage.Recipe.Name, stage.Product, stage.MachineItem, stage.CraftsPerMinute,
                 kind == SiloCellPlanner.Kind ? SiloCellPlanner.MaximumCells : Math.Max(1, machines), kind);
         }).ToArray();
@@ -52,8 +70,8 @@ public static class AutomationPlanner
 
     }
 
-    /// <summary>Crafts per minute one cell of this machine gives: native crafting speed, capped by one basic inserter per side.</summary>
-    public static double CellCraftsPerMinute(ProductionCatalog catalog, NativeRecipe recipe, string machineItem)
+    /// <summary>Crafts per minute one cell of this machine gives: native crafting speed, capped by one arm per side.</summary>
+    public static double CellCraftsPerMinute(ProductionCatalog catalog, NativeRecipe recipe, string machineItem, string? inserter = null)
     {
         double speed = Kind(catalog, machineItem) switch
         {
@@ -65,7 +83,7 @@ public static class AutomationPlanner
         // A furnace's input arm also carries its fuel, a small share next to the ingredient (0.36 coal per steel craft).
         double inputs = recipe.Ingredients.Where(i => i.DeterministicItem).Sum(i => i.Amount!.Value);
         double outputs = recipe.Products.Where(p => p.DeterministicItem).Sum(p => p.Amount!.Value);
-        return Math.Min(machineCrafts, 60 * InserterItemsPerSecond / Math.Max(inputs, outputs));
+        return Math.Min(machineCrafts, 60 * InserterThroughput(catalog, inserter) / Math.Max(inputs, outputs));
     }
 
     /// <summary>
@@ -74,12 +92,14 @@ public static class AutomationPlanner
     /// allowing subsequent calls to keep growing the stage. The single-silo policy remains a total limit.
     /// </summary>
     public static int MissingMachines(ProductionCatalog catalog, AutomationStage stage, IReadOnlyList<string> readyMachineItems,
-        int maximumNewMachinesPerStage = MaximumNewMachinesPerStage)
+        int maximumNewMachinesPerStage = MaximumNewMachinesPerStage, IReadOnlyList<string?>? readyInserters = null, string? newInserter = null)
     {
         if (maximumNewMachinesPerStage < 0) throw new ArgumentOutOfRangeException(nameof(maximumNewMachinesPerStage));
+        if (readyInserters is not null && readyInserters.Count != readyMachineItems.Count) throw new ArgumentException("One arm per ready cell.", nameof(readyInserters));
         var recipe = catalog.Recipes.Single(r => r.Name == stage.Recipe);
-        double missing = stage.CraftsPerMinute - readyMachineItems.Sum(machine => CellCraftsPerMinute(catalog, recipe, machine));
-        int wanted = missing <= 1e-9 ? 0 : (int)Math.Ceiling(missing / CellCraftsPerMinute(catalog, recipe, stage.MachineItem) - 1e-9);
+        double missing = stage.CraftsPerMinute - readyMachineItems.Select((machine, i) =>
+            CellCraftsPerMinute(catalog, recipe, machine, readyInserters?[i])).Sum();
+        int wanted = missing <= 1e-9 ? 0 : (int)Math.Ceiling(missing / CellCraftsPerMinute(catalog, recipe, stage.MachineItem, newInserter) - 1e-9);
         int budget = stage.Kind == SiloCellPlanner.Kind
             ? Math.Min(maximumNewMachinesPerStage, Math.Max(0, SiloCellPlanner.MaximumCells - readyMachineItems.Count))
             : maximumNewMachinesPerStage;

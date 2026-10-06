@@ -125,6 +125,10 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                     .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => new { recipe = g.Key, cells = g.Count() }).ToArray(),
                 supplyLines = cells.Where(c => c.Kind == SupplyLinePlanner.Kind).Select(c => new { row = c.Slot.Band, product = c.Recipe,
                     feeders = SupplyLines.FeederCells(c.Entities.Keys).Count }).ToArray(),
+                cellArm = AutomationPlanner.CellInserter(catalog),
+                fasterArmResearch = FactoryDirector.EquipmentUnlocks(catalog, science.Technologies, AutomationPlanner.InserterPreference
+                    .TakeWhile(i => i != AutomationPlanner.CellInserter(catalog)).ToArray()).Select(u => u.Technology).ToArray(),
+                armInterpretation = "New cells use the fastest enabled arm. A basic arm holds cable, gear and circuit cells near a third of their machine, so a faster arm cuts the cells those chains need.",
                 perimeterTurrets = cells.Where(c => c.Kind == "turret").Sum(c => c.Entities.Count),
                 perimeterWalls = cells.Where(c => c.Kind == "wall").Sum(c => c.Entities.Count),
                 interpretation = "Persistent chest-fed cells keep producing while inputs last; the actor restocks them between goals."

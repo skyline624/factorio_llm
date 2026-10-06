@@ -20,7 +20,7 @@ public sealed record NativeRecipe(string Name, bool Enabled, string Category, do
     bool HandCraftingDisabled);
 /// <summary>RoundDamage: native target damage of one round of player ammunition.</summary>
 public sealed record NativeItem(double FuelValue, int StackSize, string? FuelCategory = null, string? PlaceEntity = null, string? PlaceEntityType = null,
-    string? AmmoCategory = null, int? MagazineSize = null, double? RoundDamage = null);
+    string? AmmoCategory = null, int? MagazineSize = null, double? RoundDamage = null, double? InserterRotationSpeed = null);
 public sealed record NativeTurret(string EntityName, double Range,
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> AmmoCategories);
 /// <summary>Native attack parameters of a hand gun: cooldown in ticks between shots.</summary>

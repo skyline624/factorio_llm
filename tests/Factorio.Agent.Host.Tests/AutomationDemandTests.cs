@@ -23,6 +23,33 @@ public sealed class AutomationDemandTests
     }
 
     [Fact]
+    public void FastArmsRaiseCellCapacityByTheirNativeRotationSpeed()
+    {
+        var catalog = Catalogs.Early();
+        catalog = catalog with
+        {
+            Items = new Dictionary<string, NativeItem>(catalog.Items)
+            {
+                ["inserter"] = new(0, 50, PlaceEntity: "inserter", PlaceEntityType: "inserter", InserterRotationSpeed: 0.014),
+                ["fast-inserter"] = new(0, 50, PlaceEntity: "fast-inserter", PlaceEntityType: "inserter", InserterRotationSpeed: 0.04)
+            },
+            Recipes = [.. catalog.Recipes, new("fast-inserter", true, "crafting", .5, [], [new("fast-inserter", "item", 1)], false)]
+        };
+        Assert.Equal("fast-inserter", AutomationPlanner.CellInserter(catalog));
+        Assert.Equal(.8 * .04 / .014, AutomationPlanner.InserterThroughput(catalog, "fast-inserter"), 6);
+        Assert.Equal(.8, AutomationPlanner.InserterThroughput(catalog, null), 6);
+        var gears = Recipe(catalog, "iron-gear-wheel");
+        double basic = AutomationPlanner.CellCraftsPerMinute(catalog, gears, "assembling-machine-1");
+        double fast = AutomationPlanner.CellCraftsPerMinute(catalog, gears, "assembling-machine-1", "fast-inserter");
+        Assert.True(fast > basic * 1.2, $"{fast} vs {basic}");
+        // Ready basic cells count at their own rate; new cells at the fast rate.
+        var stage = new AutomationStage("iron-gear-wheel", "iron-gear-wheel", "assembling-machine-1", basic * 3, 3);
+        Assert.Equal(1, AutomationPlanner.MissingMachines(catalog, stage, ["assembling-machine-1"],
+            readyInserters: ["inserter"], newInserter: "fast-inserter"));
+        Assert.Equal(2, AutomationPlanner.MissingMachines(catalog, stage, ["assembling-machine-1"], readyInserters: ["inserter"]));
+    }
+
+    [Fact]
     public void EveryMissingStageFirstGetsOneMachineInSupplyOrder()
     {
         var catalog = Catalogs.Early();

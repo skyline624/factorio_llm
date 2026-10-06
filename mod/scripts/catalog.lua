@@ -87,6 +87,10 @@ function M.production()
     result.items[name] = {fuelValue = item.fuel_value, fuelCategory = item.fuel_category,
       placeEntity = item.place_result and item.place_result.name, placeEntityType = item.place_result and item.place_result.type,
       stackSize = item.stack_size}
+    -- Native arm speed lets C# size cells by the inserter they are built with.
+    if item.place_result and item.place_result.type == "inserter" then
+      result.items[name].inserterRotationSpeed = item.place_result.get_inserter_rotation_speed()
+    end
     if item.type == "ammo" then
       result.items[name].ammoCategory, result.items[name].magazineSize = item.ammo_category.name, item.magazine_size
       result.items[name].roundDamage = Weapons.round_damage(item)

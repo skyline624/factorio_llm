@@ -97,8 +97,11 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 await StartStageAsync(stage, catalog, existing, token, isObjectiveComplete);
                 continue;
             }
-            var ready = before.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready").Select(c => c.MachineItem).ToArray();
-            int missing = AutomationPlanner.MissingMachines(catalog, stage, ready);
+            var readyCells = before.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready").ToArray();
+            // Each ready cell counts with the arm it was built with; new cells use the fastest enabled one.
+            int missing = AutomationPlanner.MissingMachines(catalog, stage, readyCells.Select(c => c.MachineItem).ToArray(),
+                readyInserters: readyCells.Select(c => c.Plan?.GetValueOrDefault("input-inserter")?.Item).ToArray(),
+                newInserter: FactoryCellBuilder.Equipment(catalog, stage.MachineItem).Inserter);
             // Power grows before the cells that will draw it, so new machines never brown out the running factory.
             await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync(stage.MachineItem, missing, true, token);
             for (int count = 0; count < missing; count++)
@@ -138,7 +141,9 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         plan.Stages.Where(s => s.Kind != SiloCellPlanner.Kind
                 && !state.Cells.Any(c => c.Kind == s.Kind && c.Recipe == s.Recipe && c.Status == "ready"))
             .Select(s => s with { CraftsPerMinute = Math.Min(s.CraftsPerMinute,
-                AutomationPlanner.CellCraftsPerMinute(catalog, catalog.Recipes.Single(r => r.Name == s.Recipe), s.MachineItem)),
+                AutomationPlanner.CellCraftsPerMinute(catalog, catalog.Recipes.Single(r => r.Name == s.Recipe), s.MachineItem,
+                    // The fluid director still counts its cells at the basic arm rate.
+                    s.Kind == FluidCellBuilder.MachineKind ? null : AutomationPlanner.CellInserter(catalog))),
                 Machines = 1 })
             .ToArray();
 
