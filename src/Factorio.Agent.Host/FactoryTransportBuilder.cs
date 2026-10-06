@@ -395,7 +395,13 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                 || bus.Consumers.Any(p => state.Cells.SingleOrDefault(c => c.Id == p.TargetCellId)?.Status != "ready")
                 || cell.Entities.Values.Any(id => Position(snapshot, id) is null)
                 || FactoryTransportHealth.Healthy(state, snapshot, bus)) continue;
-            await ConfigureAsync(bus, state, catalog, controller, token);
+            // The stock photograph can predate an attack. On seed 20261106 an attacked bus inserter vanished between the
+            // photograph and the approach, failing the whole goal; maintenance rebuilds the part from its plan instead.
+            try { await ConfigureAsync(bus, state, catalog, controller, token); }
+            catch (EntityMissingException missing)
+            {
+                await journal.AppendAsync("factory-transport-control-deferred", new { bus.Id, missing.EntityId, missing.Message }, token);
+            }
         }
     }
 
