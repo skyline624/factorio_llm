@@ -34,6 +34,7 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
     public const int ScoutPoints = 8;
     public const double ScoutMargin = 96;
     private const int MaximumLegs = 12;
+    private const int CarriedSteps = 4;
 
     private string StatePath => Path.Combine(directory, "nest-clearing.json");
 
@@ -97,12 +98,19 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         int kit = AttackResponseController.Affordable(catalog, turret, ammunition, MagazinesPerTurret + 1, stock, TurretsPerStep
             + PortableDefensePlanner.TurretReserve) == TurretsPerStep + PortableDefensePlanner.TurretReserve
             ? TurretsPerStep + PortableDefensePlanner.TurretReserve : TurretsPerStep;
+        // A step nets about twenty magazines once its survivors are picked up. On 2026-10-06 (seed 20261106) a three-structure
+        // nest took nine minutes, four of them walking back to the base for magazines between steps: stocked magazines for the
+        // following steps now travel with the kit. Missing ones are never crafted for this.
+        int steps = Math.Clamp(nest.Spawners + nest.Worms, 1, CarriedSteps);
+        long spare = stock.GetValueOrDefault(ammunition) - ((long)kit * MagazinesPerTurret + SurvivalKitPlanner.MagazineReserve);
+        int extra = (int)Math.Clamp(spare, 0, (long)(steps - 1) * TurretsPerStep * MagazinesPerTurret);
 
-        await journal.AppendAsync("nest-clearing-plan", new { nest.Center, nest.Spawners, nest.Worms, radius = nest.Radius, turret, ammunition, kit }, token);
+        await journal.AppendAsync("nest-clearing-plan", new { nest.Center, nest.Spawners, nest.Worms, radius = nest.Radius, turret, ammunition, kit,
+            extraMagazines = extra }, token);
         using (ProductionReservations.EnterFactory(registry))
         {
             await new SurvivalKitController(game, journal).EnsureAsync("nest-clearing", token);
-            return await ClearAsync(catalog, nest, turret, ammunition, kit, token);
+            return await ClearAsync(catalog, nest, turret, ammunition, kit, extra, token);
         }
     }
 
@@ -190,14 +198,14 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
     }
 
     private async Task<NestClearingResult> ClearAsync(ProductionCatalog catalog, NestCluster nest, string turret, string ammunition, int kit,
-        CancellationToken token)
+        int extraMagazines, CancellationToken token)
     {
         await using var controller = new SpatialController(game, journal);
         var start = await new SpatialClient(game).CaptureAsync(radius: 16, cancellationToken: token);
         var staging = Staging(nest, start.Actor.Position);
         // Carry the first step's turrets and magazines before leaving: on seed 20261106 the actor reached the staging point,
         // then walked 150 tiles back to the base for turrets and returned.
-        if (!await CarryAsync(turret, kit, ammunition, token))
+        if (!await CarryAsync(turret, kit, ammunition, extraMagazines, token))
             return new("no-stock", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], (await SafetyAsync(token)).Tick);
         await controller.TravelAsync(staging, 6, catalog, token);
         var steps = new List<NestClearingStep>();
@@ -213,7 +221,7 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             if (carried.GetValueOrDefault(turret) < TurretsPerStep
                 || carried.GetValueOrDefault(ammunition) < (long)TurretsPerStep * MagazinesPerTurret + SurvivalKitPlanner.MagazineReserve)
             {
-                if (!await CarryAsync(turret, kit, ammunition, token)) { status = "no-stock"; break; }
+                if (!await CarryAsync(turret, kit, ammunition, extraMagazines, token)) { status = "no-stock"; break; }
                 await controller.TravelAsync(staging, 6, catalog, token);
                 continue;
             }
@@ -377,13 +385,16 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         throw new NavigationPlanningException(RouteStatus.GoalOutsideSnapshot, "The photograph shows no step toward the nest approach.");
     }
 
-    private async Task<bool> CarryAsync(string turret, int turrets, string ammunition, CancellationToken token)
+    private async Task<bool> CarryAsync(string turret, int turrets, string ammunition, int extraMagazines, CancellationToken token)
     {
         var executor = new ProductionGoalExecutor(game, journal);
         var carried = await executor.RunAsync(turret, turrets, token);
         if (carried.FinalStock < turrets) return false;
         int magazines = turrets * MagazinesPerTurret + SurvivalKitPlanner.MagazineReserve;
-        return (await executor.RunAsync(ammunition, magazines, token)).FinalStock >= magazines;
+        if ((await executor.RunAsync(ammunition, magazines, token)).FinalStock < magazines) return false;
+        // Spare magazines come only from stock; a shortfall here never blocks the assault.
+        if (extraMagazines > 0) await executor.RunAsync(ammunition, magazines + extraMagazines, token);
+        return true;
     }
 
     private static IReadOnlyList<NestStructure> Remaining(SpatialSnapshot map, NestCluster nest) => NestAssaultPlanner.Structures(map)
