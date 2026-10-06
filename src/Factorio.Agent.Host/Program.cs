@@ -727,6 +727,22 @@ try
                                     // area stayed on an unfed island for hours. Reconnect before the next decision.
                                     if (round.Maintenance?.Unpowered.Count > 0)
                                         await new FactoryCellBuilder(game, maintenanceJournal, session.Directory).RepairPowerAsync(token);
+                                    // Each round turns at most one more hand-carried flow into belts. On seed 20261072 the actor
+                                    // carried about 28k iron plates, 26k coal and 13k copper cables between chests in 183 rounds.
+                                    try
+                                    {
+                                        using var growth = CancellationTokenSource.CreateLinkedTokenSource(token);
+                                        growth.CancelAfter(TimeSpan.FromMinutes(12));
+                                        var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), growth.Token));
+                                        int links;
+                                        using (ProductionReservations.EnterFactory(cells))
+                                            links = await new FactoryTransportBuilder(game, maintenanceJournal, session.Directory).ConnectAsync(catalog, 2, growth.Token);
+                                        await maintenanceJournal.AppendAsync("transport-growth", new { links }, token);
+                                    }
+                                    catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+                                    {
+                                        await maintenanceJournal.AppendAsync("transport-growth-error", new { error = error.GetType().FullName, error.Message }, token);
+                                    }
                                 }
                             }
                             catch (Exception error) when (!token.IsCancellationRequested)
