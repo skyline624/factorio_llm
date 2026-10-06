@@ -497,10 +497,14 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             receipt = await QueryKnownAsync(submission.OperationId, token);
         }
         long lastTerrainTick = receipt.AcceptedTick ?? receipt.UpdatedTick;
+        // A stationary wait or craft is polled less often while the defense step only observes: those polls (an observation
+        // and a receipt query about every 0.15 s) were half of all game calls during a nest clearing on 2026-10-06.
+        bool stationary = submission.Kind is "wait" or "craft";
         while (!receipt.IsTerminal)
         {
             if (inspectDestination is not null) await inspectDestination(token);
-            await DefenseStepAsync(token);
+            var reflex = await DefenseStepAsync(token);
+            bool quiet = stationary && reflex.State == "observing";
             receipt = await QueryKnownAsync(submission.OperationId, token);
             // Longer open-terrain moves avoid intermediate stops. Revalidate while walking,
             // without extending the native deadline or dispatching a competing movement.
@@ -525,7 +529,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                     await journal.AppendAsync("cancel-receipt", receipt, token);
                 }
             }
-            if (!receipt.IsTerminal) await Task.Delay(100, token);
+            if (!receipt.IsTerminal) await Task.Delay(quiet ? 300 : 100, token);
         }
         await journal.AppendAsync("receipt", receipt, token);
         ownedOperation = null;
