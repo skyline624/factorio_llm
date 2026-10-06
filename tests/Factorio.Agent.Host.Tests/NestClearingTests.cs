@@ -51,6 +51,20 @@ public sealed class NestClearingTests
     }
 
     [Fact]
+    public void TheScoutingRingStartsTowardTheLatestAttackAroundIndustry()
+    {
+        var attacks = new AttackLogState(1, "world", [
+            new(100, "base", 3, 0, 0, 0, "W", [new(-50, 5)], []),
+            new(50, "base", 1, 0, 0, 0, "E", [new(80, 5)], [])], new([], new Dictionary<string, double>(), [], 0));
+        var ring = NestClearingController.ScoutRing(Industry, attacks);
+        Assert.Equal(NestClearingController.ScoutPoints, ring.Count);
+        var center = new MapPosition(5, 5);
+        Assert.All(ring, p => Assert.InRange(p.DistanceTo(center), 127, 130));
+        Assert.True(ring[0].X < center.X - 120, $"first point {ring[0]} faces the latest (western) attack");
+        Assert.Equal(ring.Count, ring.Distinct().Count());
+    }
+
+    [Fact]
     public void StagingStandsTowardTheActorBeyondWormRangeAndTheTravelMargin()
     {
         var nest = Memory().Clusters().Single(c => c.Structures.Count == 2);

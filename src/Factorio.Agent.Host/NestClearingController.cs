@@ -9,7 +9,7 @@ public sealed record NestClearingStep(string TargetId, string TargetName, IReadO
 public sealed record NestClearingResult(string Status, MapPosition? Center, int Spawners, int Worms, int Destroyed,
     int TurretsLost, IReadOnlyList<NestClearingStep> Steps, long Tick);
 public sealed record NestClearingAttempt(MapPosition Center, long Tick, string Outcome);
-public sealed record NestClearingState(int Version, string WorldId, IReadOnlyList<NestClearingAttempt> Attempts);
+public sealed record NestClearingState(int Version, string WorldId, IReadOnlyList<NestClearingAttempt> Attempts, long? LastScoutTick = null);
 
 /// <summary>
 /// Clears one remembered enemy base near own industry by turret creep. Nothing offensive existed before: on seed 20261072
@@ -28,6 +28,10 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
     /// <summary>Thirty game minutes before a base whose clearing failed is attempted again.</summary>
     public const long RetryTicks = 108000;
     private const long FightTicks = 3600;
+    /// <summary>A scouting ring follows an attack seen within the last game hour, at most once per game hour.</summary>
+    public const long ScoutWindowTicks = 216000;
+    public const int ScoutPoints = 8;
+    public const double ScoutMargin = 96;
     private const int MaximumLegs = 12;
 
     private string StatePath => Path.Combine(directory, "nest-clearing.json");
@@ -51,7 +55,21 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         // Unfinished cells mark where the factory is going: worms guarding a planned oil field block it before it stands.
         var planned = registry.Cells.Where(c => c.Status != "ready").SelectMany(c => c.Plan?.Values.Select(p => p.Position) ?? []).ToArray();
         var nest = Choose(memory, industry, state, safety.Tick, planned);
-        if (nest is null) return await DoneAsync(new("no-nest-in-reach", null, 0, 0, 0, 0, [], safety.Tick), token);
+        if (nest is null)
+        {
+            // An attacking base the actor never saw cannot be chosen. On seed 20261106, 43 mining entities were destroyed at two
+            // game hours by biters from an unseen nest; a player would go and look for it.
+            var attacks = await new AttackLog(directory).LoadAsync(catalog.Scope.WorldId, token);
+            bool attacked = attacks.Records.Any(r => safety.Tick - r.Tick <= ScoutWindowTicks && r.Destroyed + r.Damaged > 0);
+            if (!attacked || industry.Count == 0 || state.LastScoutTick is { } last && safety.Tick - last < ScoutWindowTicks)
+                return await DoneAsync(new("no-nest-in-reach", null, 0, 0, 0, 0, [], safety.Tick), token);
+            state = state with { LastScoutTick = safety.Tick };
+            await SaveStateAsync(state, token);
+            await ScoutAsync(catalog, industry, attacks, async t => Choose(await new NestMemoryStore(directory).LoadAsync(catalog.Scope.WorldId, t),
+                industry, state, safety.Tick, planned) is not null, token);
+            nest = Choose(await new NestMemoryStore(directory).LoadAsync(catalog.Scope.WorldId, token), industry, state, safety.Tick, planned);
+            if (nest is null) return await DoneAsync(new("scouted-no-nest", null, 0, 0, 0, 0, [], safety.Tick), token);
+        }
         var result = await ExecuteAsync(catalog, registry, nest, safety.Tick, token);
         await SaveStateAsync(state with { Attempts = state.Attempts.Where(a => a.Center.DistanceTo(nest.Center) > NestMemory.LinkDistance)
             .Append(new NestClearingAttempt(nest.Center, result.Tick, result.Status)).TakeLast(64).ToArray() }, token);
@@ -112,6 +130,48 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
                     && r.Products.Any(m => m.Name == p.Key && m.DeterministicItem))))
             .OrderByDescending(p => p.Value.RoundDamage ?? 0).ThenByDescending(p => stock.GetValueOrDefault(p.Key) > 0)
             .ThenBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key).ToArray();
+
+    /// <summary>
+    /// Ring points around own industry, beyond it by <see cref="ScoutMargin"/>, starting toward the latest attack: each local
+    /// photograph on the way enters the nest memory under normal visibility.
+    /// </summary>
+    internal static IReadOnlyList<MapPosition> ScoutRing(IReadOnlyList<IndustryCluster> industry, AttackLogState attacks)
+    {
+        double minX = industry.Min(i => i.Box.Min.X), minY = industry.Min(i => i.Box.Min.Y);
+        double maxX = industry.Max(i => i.Box.Max.X), maxY = industry.Max(i => i.Box.Max.Y);
+        var center = new MapPosition((minX + maxX) / 2, (minY + maxY) / 2);
+        double radius = Math.Max(128, Math.Sqrt((maxX - minX) * (maxX - minX) + (maxY - minY) * (maxY - minY)) / 2 + ScoutMargin);
+        var latest = attacks.Records.Where(r => r.Points.Count > 0).OrderByDescending(r => r.Tick).FirstOrDefault();
+        double start = latest is null ? 0 : Math.Atan2(latest.Points.Average(p => p.Y) - center.Y, latest.Points.Average(p => p.X) - center.X);
+        return Enumerable.Range(0, ScoutPoints).Select(i =>
+        {
+            // Alternate sides of the attack bearing: 0, +45, -45, +90, -90 degrees and so on.
+            int k = (i + 1) / 2 * (i % 2 == 1 ? 1 : -1);
+            double angle = start + k * 2 * Math.PI / ScoutPoints;
+            return new MapPosition(Math.Round(center.X + radius * Math.Cos(angle)), Math.Round(center.Y + radius * Math.Sin(angle)));
+        }).ToArray();
+    }
+
+    private async Task ScoutAsync(ProductionCatalog catalog, IReadOnlyList<IndustryCluster> industry, AttackLogState attacks,
+        Func<CancellationToken, Task<bool>> found, CancellationToken token)
+    {
+        await new SurvivalKitController(game, journal).BeforeTripAsync("nest-scouting", token);
+        await using var controller = new SpatialController(game, journal);
+        foreach (var point in ScoutRing(industry, attacks))
+        {
+            try { await controller.TravelAsync(point, 8, catalog, token); }
+            catch (Exception error) when (error is NavigationPlanningException or ExplorationDangerException
+                || error is InvalidOperationException && error is not ObjectDisposedException)
+            {
+                await journal.AppendAsync("nest-scouting-leg-failed", new { point, error = error.GetType().Name, error.Message }, token);
+                continue;
+            }
+            var view = await new SpatialClient(game).CaptureAsync(radius: 64, cancellationToken: token);
+            await journal.AppendAsync("nest-scouting-view", new { point, view.Actor.Position, view.CollectedTick,
+                structures = NestAssaultPlanner.Structures(view).Count }, token);
+            if (await found(token)) return;
+        }
+    }
 
     /// <summary>A staging point toward the actor, beyond every remembered worm range plus the travel margin.</summary>
     internal static MapPosition Staging(NestCluster nest, MapPosition actor)
