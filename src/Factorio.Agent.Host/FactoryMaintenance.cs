@@ -113,6 +113,19 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
                     await journal.AppendAsync("factory-rebuild-blocked", new { cell = missing.Cell.Id, missing.Role, missing.PreviousId, missing.Plan, error.Message }, token);
                     continue;
                 }
+                catch (NavigationPlanningException error)
+                {
+                    // BuildAt has not submitted a build when its approach planner refuses the route.
+                    // Preserve the missing role and refresh the same actor's stocks after navigation/defense.
+                    // Unknown receipts, death, scope changes and lease failures still stop the round.
+                    snapshot = await CaptureAsync();
+                    carried = FactoryLogistics.Carried(snapshot);
+                    blocked.Add(missing.PreviousId);
+                    await journal.AppendAsync("factory-rebuild-navigation-deferred", new { cell = missing.Cell.Id,
+                        missing.Role, missing.PreviousId, missing.Plan, routeStatus = error.Status, error.Message,
+                        snapshot.Scope, snapshot.CollectedTick, buildNotSubmitted = true }, token);
+                    continue;
+                }
                 catch (ConstructionItemUnavailableException error) when (error.Item == item)
                 {
                     // The initial bag count is historical after navigation and defense. This confirmed failed build

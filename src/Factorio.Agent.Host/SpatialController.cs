@@ -56,27 +56,20 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             double distance = map.Actor.Position.DistanceTo(destination);
             // A trip beyond the local area may leave defended ground: equip first (cheap when the loadout is unchanged).
             if (segment == 0 && distance > 24) await new SurvivalKitController(game, journal).BeforeTripAsync("travel", token);
-            bool local = distance <= 24;
-            if (!local && map.Bounds.Contains(destination))
-            {
-                // A reachable observed approach need not lie on an exploration grid point or take at least16tiles.
-                // Navigation reobserves before executing: this photograph only selects which planning path to try.
-                var route = new RoutePlanner().Find(new(map, ExplorationPlanner.ThreatMargin), destination,
-                    Math.Max(0, arrivalDistance - .2), token: token, requireStableArrival: arrivalDistance > .4,
-                    minimumFirstMoveDistance: NativeMoveTolerance);
-                await journal.AppendAsync("travel-local-route", new { map.Scope, map.CollectedTick, map.Actor.Position,
-                    destination, arrivalDistance, radius = map.Coverage.Radius, route.Status, route.Length }, token);
-                local = route.Status == RouteStatus.Found;
-            }
+            // A quick search budget is not a reason to explore around an already observed destination.
+            // Navigation owns the bounded search, wider reobservation and confirmed tree clearance.
+            bool local = distance <= 24 || map.Bounds.Contains(destination);
             if (local)
             {
+                await journal.AppendAsync("travel-local-navigation", new { map.Scope, map.CollectedTick, map.Actor.Position,
+                    destination, arrivalDistance, radius = map.Coverage.Radius, observedDestination = map.Bounds.Contains(destination) }, token);
                 await NavigateAsync(destination, arrivalDistance, token, inspectDestination);
                 return;
             }
             ExplorationWaypoint next = await FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
             await NavigateAsync(next.Position, cancellationToken: token, inspectDestination: inspectDestination);
         }
-        throw new InvalidOperationException("Travel exhausted its local segment budget.");
+        throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its local segment budget.");
     }
 
     public async Task<NavigationResult> NavigateAsync(MapPosition destination, double arrivalDistance = 0.4,

@@ -30,13 +30,31 @@ public sealed class SpatialControllerTests
         Assert.InRange(game.Submissions, 1, 3);
         Assert.True(game.KitChecks > 0);
         Assert.True(inspections > 1);
-        Assert.Contains("travel-local-route", journal.Types);
+        Assert.Contains("travel-local-navigation", journal.Types);
         Assert.DoesNotContain("exploration-waypoint", journal.Types);
         if (occupiedDestination) Assert.Contains("route-observation-expanded", journal.Types);
     }
 
+    [Fact]
+    public async Task AnObservedBlockedDestinationReturnsABoundedPlanningRefusalWithoutExplorationOscillation()
+    {
+        var game = new NarrowTravelGame { ClosedPassage = true };
+        var journal = new Journal();
+        var map = game.Map(48);
+        var catalog = new ProductionCatalog(map.Scope, map.CollectedTick, [], new Dictionary<string, NativeItem>(),
+            new Dictionary<string, NativeMaterial[]>(), new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>());
+        await using var controller = new SpatialController(game, journal);
+        var error = await Assert.ThrowsAsync<NavigationPlanningException>(() => controller.TravelAsync(new(77.5, 56.5), .4, catalog));
+        Assert.Contains(error.Status, new[] { RouteStatus.NoRouteOnKnownGrid, RouteStatus.BudgetExceeded });
+        Assert.Equal(new MapPosition(47.5, 56.5), game.Position);
+        Assert.Equal(0, game.Submissions);
+        Assert.Contains("travel-local-navigation", journal.Types);
+        Assert.DoesNotContain("exploration-waypoint", journal.Types);
+    }
+
     private sealed class NarrowTravelGame : IGameClient
     {
+        public bool ClosedPassage { get; init; }
         public MapPosition Position { get; private set; } = new(47.5, 56.5);
         public int Submissions { get; private set; }
         public int KitChecks { get; private set; }
@@ -48,7 +66,7 @@ public sealed class SpatialControllerTests
                 Bounds = new(new(x, y), new(x + radius * 2 + 1, y + radius * 2 + 1)),
                 Rows = Enumerable.Range(y, radius * 2 + 1).SelectMany(row => Enumerable.Range(x, radius * 2 + 1)
                     .Select(column => new TileRun(column, row, 1,
-                        column <= 48 || row == 56 && column <= 77 || column >= 77 && column <= 86 && row >= 53 && row <= 64
+                        column <= 48 || !ClosedPassage && (row == 56 && column <= 77 || column >= 77 && column <= 86 && row >= 53 && row <= 64)
                             ? "grass" : "water"))).ToArray(),
                 Entities = [new("own-chest", "chest", new(83, 62), new(new(82.65, 61.65), new(83.35, 62.35)), 0, "agent")],
                 StationaryThreats = [new("worm", new(62.38671875, 105.80859375), 25, map.CollectedTick)],
@@ -61,6 +79,10 @@ public sealed class SpatialControllerTests
             switch (request.Action)
             {
                 case "spatial": data = Map(request.Arguments.GetProperty("radius").GetInt32()); break;
+                case "production_catalog":
+                    data = new ProductionCatalog(Map(48).Scope, 100, [], new Dictionary<string, NativeItem>(),
+                        new Dictionary<string, NativeMaterial[]>(), new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>());
+                    break;
                 case "observe":
                     if (request.Arguments.TryGetProperty("entityLimit", out _)) KitChecks++;
                     var map = Map(32);
@@ -72,11 +94,14 @@ public sealed class SpatialControllerTests
                     break;
                 case "submit":
                     var submission = request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!;
-                    Assert.Equal("move", submission.Kind);
-                    Assert.True(new SpatialCollisionField(Map(48), ExplorationPlanner.ThreatMargin)
-                        .Walkable(submission.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!));
-                    Submissions++;
-                    Position = submission.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+                    Assert.Contains(submission.Kind, new[] { "move", "wait" });
+                    if (submission.Kind == "move")
+                    {
+                        Assert.True(new SpatialCollisionField(Map(48), ExplorationPlanner.ThreatMargin)
+                            .Walkable(submission.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!));
+                        Submissions++;
+                        Position = submission.Args.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+                    }
                     data = new { submission.OperationId, submission.Kind, status = "completed", acceptedTick = 100,
                         updatedTick = 100, effects = new { position = Position } };
                     break;

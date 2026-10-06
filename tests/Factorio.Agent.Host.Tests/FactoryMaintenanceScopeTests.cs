@@ -1,4 +1,5 @@
 using Factorio.Agent.Core;
+using Factorio.Agent.Infrastructure;
 using Xunit;
 
 namespace Factorio.Agent.Host.Tests;
@@ -78,6 +79,55 @@ public sealed class FactoryMaintenanceScopeTests
         new(id, 0, new(0, 0, true), kind, item, null, new Dictionary<string, string> { [kind] = entityId }, "ready", 1,
             Plan: new Dictionary<string, PlannedEntity> { [kind] = new(kind, item, position, 0) });
 
+    [Theory]
+    [InlineData(RouteStatus.BudgetExceeded)]
+    [InlineData(RouteStatus.NoRouteOnKnownGrid)]
+    public async Task AnUnresolvedRepairPreservesItsPlanAndDoesNotHideTheNextMaterialShortfall(RouteStatus status)
+    {
+        using var world = new World();
+        var turret = Cell("blocked-turret", "turret", "gun-turret", "gone-turret", new(80, 56));
+        var wall = Cell("wall", "wall", "stone-wall", "gone-wall", new(2.5, 2.5));
+        await world.Registry.SaveAsync(new(1, world.Catalog.Scope.WorldId, [], [turret, wall]), default);
+        world.Game.Carried["gun-turret"] = 1;
+        world.Game.SpatialFailure = new NavigationPlanningException(status, "Unresolved native approach.");
+        var result = await world.RunAsync();
+        Assert.Equal(["gone-turret"], result.Blocked);
+        Assert.Equal(1, result.Shortfall["stone-wall"]);
+        Assert.Empty(result.Rebuilt);
+        Assert.Equal(0, result.Actions);
+        Assert.Equal(1, world.Game.Carried["gun-turret"]);
+        Assert.Contains("factory-rebuild-navigation-deferred", world.Journal.Types);
+        var retained = (await world.Registry.LoadAsync(world.Catalog.Scope.WorldId, default)).Cells.Single(c => c.Id == turret.Id);
+        Assert.Equal(turret.Entities, retained.Entities);
+        Assert.Equal(turret.Plan, retained.Plan);
+    }
+
+    [Fact]
+    public async Task ARepairRefusalCannotHideAnActorChangeDuringItsFreshStockObservation()
+    {
+        using var world = new World();
+        await world.Registry.SaveAsync(new(1, world.Catalog.Scope.WorldId, [],
+            [Cell("turret", "turret", "gun-turret", "gone", new(80, 56))]), default);
+        world.Game.Carried["gun-turret"] = 1;
+        world.Game.SpatialFailure = new NavigationPlanningException(RouteStatus.BudgetExceeded, "Unresolved approach.");
+        world.Game.ChangeScopeAfterSpatialFailure = true;
+        await Assert.ThrowsAsync<InvalidDataException>(() => world.RunAsync());
+        Assert.DoesNotContain("factory-rebuild-navigation-deferred", world.Journal.Types);
+    }
+
+    [Fact]
+    public async Task AnUnknownRepairObservationStopsTheRoundWithoutTreatingItAsAPlanningRefusal()
+    {
+        using var world = new World();
+        await world.Registry.SaveAsync(new(1, world.Catalog.Scope.WorldId, [],
+            [Cell("turret", "turret", "gun-turret", "gone", new(80, 56))]), default);
+        world.Game.Carried["gun-turret"] = 1;
+        world.Game.SpatialFailure = new OperationOutcomeUnknownException("unknown", new IOException("Lost observation."));
+        await Assert.ThrowsAsync<OperationOutcomeUnknownException>(() => world.RunAsync());
+        Assert.DoesNotContain("factory-rebuild-navigation-deferred", world.Journal.Types);
+        Assert.DoesNotContain("submit", world.Game.Calls);
+    }
+
     private static FactoryRecord[] Turret(string id, MapPosition position, long rounds) =>
     [
         new(id, "entity", id, "gun-turret", Protocol.ToElement(new
@@ -133,9 +183,16 @@ public sealed class FactoryMaintenanceScopeTests
         public Dictionary<string, long> Carried { get; } = [];
         public List<FactoryRecord> Entities { get; } = [];
         public List<string> Calls { get; } = [];
+        public Exception? SpatialFailure { get; set; }
+        public bool ChangeScopeAfterSpatialFailure { get; set; }
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
             Calls.Add(request.Action);
+            if (request.Action == "spatial" && SpatialFailure is not null)
+            {
+                if (ChangeScopeAfterSpatialFailure) Scope = Scope with { Incarnation = Scope.Incarnation + 1 };
+                throw SpatialFailure;
+            }
             if (request.Action != "factory_snapshot") throw new InvalidOperationException($"Unexpected request: {request.Action}");
             FactoryRecord[] records =
             [
