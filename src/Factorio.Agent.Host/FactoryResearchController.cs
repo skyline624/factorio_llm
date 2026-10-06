@@ -45,6 +45,15 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         await EnsurePowerAsync(token);
         state = await ReadStateAsync();
         if (state.Researched) return await FinishAsync(state.CollectedTick, 0);
+        var registered = await new FactoryRegistry(directory).LoadAsync(observation.Scope.WorldId, token);
+        if (LabsWaitForStockedPacks(registered, await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token),
+                technology.Ingredients.Select(i => i.Name)))
+        {
+            await new FactoryLogistics(game, journal, directory).ServiceAsync(40, token, usePlannedBuffers: true,
+                targetCellIds: registered.Cells.Where(c => c.Kind == "lab" && c.Status == "ready").Select(c => c.Id).ToHashSet(StringComparer.Ordinal));
+            state = await ReadStateAsync();
+            if (state.Researched) return await FinishAsync(state.CollectedTick, 0);
+        }
         var director = new FactoryDirector(game, journal, directory);
         AutomationPlan? plan = null;
         foreach (var pack in technology.Ingredients)
@@ -151,6 +160,23 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
             return false;
         }
     }
+
+    /// <summary>
+    /// Whether a ready lab is low on one of the technology's packs while an output chest already holds it. Such labs are fed by
+    /// a lab-only tour before preparation: on 2026-10-06 the research goals of all three normal campaigns spent 12 to 37 minutes
+    /// servicing stages and growing raw supply before their first lab tour, while finished packs waited in output chests.
+    /// </summary>
+    internal static bool LabsWaitForStockedPacks(FactoryState state, FactorySnapshot snapshot, IEnumerable<string> packs)
+    {
+        var labs = state.Cells.Where(c => c.Kind == "lab" && c.Status == "ready" && c.Entities.ContainsKey("machine"))
+            .Select(c => c.Entities["machine"]).ToArray();
+        if (labs.Length == 0) return false;
+        var chests = FactoryLogistics.CollectedChests(state.Cells, snapshot);
+        return packs.Any(pack => labs.Any(lab => FactoryLogistics.Items(snapshot, lab).GetValueOrDefault(pack) < LowLabPacks)
+            && chests.Any(chest => FactoryLogistics.Items(snapshot, chest).GetValueOrDefault(pack) > 0));
+    }
+
+    private const long LowLabPacks = 10;
 
     /// <summary>
     /// Selects the goal's technology. A different selection left by an earlier goal, for instance one that reached its
