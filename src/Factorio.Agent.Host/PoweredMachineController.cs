@@ -142,7 +142,7 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
             if (validation.Candidates[0].Allowed && validation.Candidates[0].InReach)
             {
                 if (!direct) break;
-                try { return await BuildHereAsync(); }
+                try { return await BuildHereAsync(current); }
                 catch (PlacementRefusedException error)
                 {
                     // The actor drifted (a belt underfoot) or the exit check failed here: approach as before.
@@ -172,14 +172,16 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         }
         return await BuildHereAsync();
 
-        async Task<string> BuildHereAsync()
+        // A direct build reuses the photograph it was judged from: the actor has not moved since.
+        async Task<string> BuildHereAsync(SpatialSnapshot? photograph = null)
         {
             if (stoppedInserterItem is not null && (current.Prototypes[current.Items[item].EntityName].FilterSlots is not > 0
                 || !catalog.Items.ContainsKey(stoppedInserterItem))) throw new InvalidDataException("Stopped transport construction requires native filter geometry and item.");
             bool underground = current.Prototypes[current.Items[item].EntityName].Type == "underground-belt";
             if (underground ? candidate.UndergroundType is not ("input" or "output") : candidate.UndergroundType is not null)
                 throw new InvalidDataException("An underground endpoint requires an explicit native input/output type.");
-            var receipt = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction, candidate.UndergroundType, stoppedInserterItem }, 600, token: token);
+            var receipt = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction, candidate.UndergroundType, stoppedInserterItem }, 600,
+                token: token, photograph: photograph);
             string id = BuiltEntity(receipt, item);
             if (underground && (!receipt.Effects.TryGetProperty("undergroundType", out var type)
                 || type.GetString() != candidate.UndergroundType)) throw new InvalidDataException("Native underground build type differs from its intent; reconcile before continuing.");

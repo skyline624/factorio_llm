@@ -560,8 +560,10 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         return true;
     }
 
+    /// <param name="photograph">A caller's photograph taken since the actor last moved, with the build item when building.</param>
     public async Task<OperationReceipt> WorkAsync(string kind, object arguments, long durationTicks,
-        object? preconditions = null, CancellationToken token = default, Func<CancellationToken, Task>? inspectDestination = null)
+        object? preconditions = null, CancellationToken token = default, Func<CancellationToken, Task>? inspectDestination = null,
+        SpatialSnapshot? photograph = null)
     {
         if (durationTicks is < 1 or > 216000) throw new ArgumentOutOfRangeException(nameof(durationTicks));
         var build = kind == "build" ? JsonSerializer.SerializeToElement(arguments, Protocol.Json) : (JsonElement?)null;
@@ -569,7 +571,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         // The scope is fixed before the defense step so work for a dead incarnation is never submitted to its successor.
         // When that step only observed, this same photograph also serves the submission: a second capture cost about
         // 140 ms per operation in a 1100-entity base (seed 20261106, 2026-10-06), where operations waited 1 s apart.
-        SpatialSnapshot? photograph = await spatial.CaptureAsync(items, cancellationToken: token);
+        if (photograph is not null && items is not null && !photograph.Items.ContainsKey(items[0])) photograph = null;
+        photograph ??= await spatial.CaptureAsync(items, cancellationToken: token);
         RequireAi(photograph);
         ActorScope scope = photograph.Scope;
         int stale = 0;
