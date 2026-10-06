@@ -24,6 +24,17 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
 {
     public const int MaxConsecutiveFailures = 5;
 
+    /// <summary>A file beside the strategic memory that asks the campaign to stop at its next goal boundary.</summary>
+    public const string RestartRequestFile = "restart-requested";
+
+    private bool TakeRestartRequest()
+    {
+        string request = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(memoryPath))!, RestartRequestFile);
+        if (!File.Exists(request)) return false;
+        File.Delete(request);
+        return true;
+    }
+
     public async Task<StrategicCampaignResult> RunAsync(int maxGoals, CancellationToken token = default)
     {
         if (maxGoals is < 1 or > 10000) throw new ArgumentOutOfRangeException(nameof(maxGoals));
@@ -55,6 +66,9 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
         for (int index = 0; index < maxGoals; index++)
         {
             token.ThrowIfCancellationRequested();
+            // An operator restart (new binaries) is honoured only here: the previous goal has a verified outcome and no
+            // maintenance round has begun. Killing the process instead interrupted a nest clearing on 2026-10-06.
+            if (index > 0 && TakeRestartRequest()) return new(false, index, observation.Tick, "restart-requested");
             if (index > 0 && maintenance is not null)
             {
                 // A rejected proposal dispatched no goal actions. Let the model correct it once before a potentially

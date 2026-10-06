@@ -37,6 +37,21 @@ public sealed class CampaignJournalTests : IDisposable
     }
 
     [Fact]
+    public async Task ARestartRequestStopsAtTheNextGoalBoundaryAndIsConsumed()
+    {
+        using var journal = new CampaignJournal(Index);
+        var runner = new Runner(journal, Memory);
+        string request = Path.Combine(directory, StrategicCampaignController.RestartRequestFile);
+        await File.WriteAllTextAsync(request, "");
+        var result = await new StrategicCampaignController(new Game(), runner, Memory, Index, campaignJournal: journal).RunAsync(3);
+        // The first goal of a run always starts; the request is honoured before the second, after the first's verified outcome.
+        Assert.Equal("restart-requested", result.StopReason);
+        Assert.Equal(1, result.GoalsExecuted);
+        Assert.Single(runner.PendingPaths);
+        Assert.False(File.Exists(request));
+    }
+
+    [Fact]
     public async Task CancellationKeepsOnlyTheInterruptedSegmentLinkedForReconciliation()
     {
         using var cancellation = new CancellationTokenSource();
