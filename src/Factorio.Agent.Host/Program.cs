@@ -743,6 +743,26 @@ try
                                     {
                                         await maintenanceJournal.AppendAsync("transport-growth-error", new { error = error.GetType().FullName, error.Message }, token);
                                     }
+                                    // A radar charts ore and oil for hours before they are needed: on seed 20261072 crude oil took ten
+                                    // blind exploration goals (about 640 local steps). It is built once its recipe is enabled.
+                                    try
+                                    {
+                                        using var charting = CancellationTokenSource.CreateLinkedTokenSource(token);
+                                        charting.CancelAfter(TimeSpan.FromMinutes(10));
+                                        var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), charting.Token));
+                                        var current = await new FactoryRegistry(session.Directory).LoadAsync(session.ProposedWorldId, charting.Token);
+                                        if (catalog.Items.Any(p => p.Value.PlaceEntityType == "radar" && FactoryDirector.Enabled(catalog, p.Key))
+                                            && !current.Cells.Any(c => c.Kind == RadarController.Kind && c.Status == "ready"))
+                                        {
+                                            await using var walker = new SpatialController(game, maintenanceJournal);
+                                            using (ProductionReservations.EnterFactory(current))
+                                                await new RadarController(game, maintenanceJournal, session.Directory).EnsureAsync(catalog, walker, charting.Token);
+                                        }
+                                    }
+                                    catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+                                    {
+                                        await maintenanceJournal.AppendAsync("radar-growth-error", new { error = error.GetType().FullName, error.Message }, token);
+                                    }
                                 }
                             }
                             catch (Exception error) when (!token.IsCancellationRequested)

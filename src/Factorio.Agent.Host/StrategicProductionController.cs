@@ -125,6 +125,14 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                     .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => new { recipe = g.Key, cells = g.Count() }).ToArray(),
                 supplyLines = cells.Where(c => c.Kind == SupplyLinePlanner.Kind).Select(c => new { row = c.Slot.Band, product = c.Recipe,
                     feeders = SupplyLines.FeederCells(c.Entities.Keys).Count }).ToArray(),
+                radar = new
+                {
+                    enabled = catalog.Items.Any(p => p.Value.PlaceEntityType == "radar" && FactoryDirector.Enabled(catalog, p.Key)),
+                    standing = cells.Any(c => c.Kind == RadarController.Kind && c.Status == "ready"),
+                    unlockResearch = FactoryDirector.EquipmentUnlocks(catalog, science.Technologies,
+                        catalog.Items.Where(p => p.Value.PlaceEntityType == "radar").Select(p => p.Key).ToArray()).Select(u => u.Technology).ToArray(),
+                    interpretation = "Once its recipe is enabled, maintenance builds one radar. It charts up to 14 chunks around it, about 33 s per chunk, so charted ore and oil patches guide later expansion instead of blind walking."
+                },
                 cellArm = AutomationPlanner.CellInserter(catalog),
                 fasterArmResearch = FactoryDirector.EquipmentUnlocks(catalog, science.Technologies, AutomationPlanner.InserterPreference
                     .TakeWhile(i => i != AutomationPlanner.CellInserter(catalog)).ToArray()).Select(u => u.Technology).ToArray(),
