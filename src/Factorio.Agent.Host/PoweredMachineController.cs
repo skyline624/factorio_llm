@@ -3,6 +3,13 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
+internal sealed class ConstructionItemUnavailableException(string item, OperationReceipt receipt)
+    : InvalidOperationException($"The native build has no construction item: {item}.")
+{
+    public string Item { get; } = item;
+    public OperationReceipt Receipt { get; } = receipt;
+}
+
 /// <summary>Shared native installation and local steam maintenance for powered production machines.</summary>
 public sealed class PoweredMachineController(IGameClient game, IControllerJournal journal)
 {
@@ -143,7 +150,7 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         if (underground ? candidate.UndergroundType is not ("input" or "output") : candidate.UndergroundType is not null)
             throw new InvalidDataException("An underground endpoint requires an explicit native input/output type.");
         var receipt = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction, candidate.UndergroundType, stoppedInserterItem }, 600, token: token);
-        string id = BuiltEntity(receipt);
+        string id = BuiltEntity(receipt, item);
         if (underground && (!receipt.Effects.TryGetProperty("undergroundType", out var type)
             || type.GetString() != candidate.UndergroundType)) throw new InvalidDataException("Native underground build type differs from its intent; reconcile before continuing.");
         if (stoppedInserterItem is not null && (!receipt.Effects.TryGetProperty("stoppedInserterItem", out var configured)
@@ -153,8 +160,14 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
     }
 
     /// <summary>The native id of a completed build; a native placement refusal is told apart from shortages and other failures.</summary>
-    public static string BuiltEntity(OperationReceipt receipt)
+    public static string BuiltEntity(OperationReceipt receipt, string? item = null)
     {
+        // Defense can spend a carried construction item while approaching the repair. Only this verified terminal
+        // shortage with no inventory effect or built entity may return to maintenance as a material shortfall.
+        if (item is not null && receipt.Kind == "build" && receipt.Status == "failed" && receipt.Error?.Code == "missing_item"
+            && receipt.Effects.TryGetProperty("inventoryDelta", out var delta) && delta.ValueKind == System.Text.Json.JsonValueKind.Object
+            && !delta.EnumerateObject().Any() && !receipt.Effects.TryGetProperty("entityId", out _))
+            throw new ConstructionItemUnavailableException(item, receipt);
         if (receipt.Status != "completed" && receipt.Error?.Code is "placement_blocked" or "out_of_reach")
             throw new PlacementRefusedException($"Construction ended with {receipt.Status}: {receipt.Error.Code}.");
         Completed(receipt);

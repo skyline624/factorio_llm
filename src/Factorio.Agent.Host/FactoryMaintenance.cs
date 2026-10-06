@@ -113,6 +113,17 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
                     await journal.AppendAsync("factory-rebuild-blocked", new { cell = missing.Cell.Id, missing.Role, missing.PreviousId, missing.Plan, error.Message }, token);
                     continue;
                 }
+                catch (ConstructionItemUnavailableException error) when (error.Item == item)
+                {
+                    // The initial bag count is historical after navigation and defense. This confirmed failed build
+                    // changed nothing; leave the recorded role missing and never retry it in this round.
+                    carried[item] = 0;
+                    shortfall[item] = shortfall.GetValueOrDefault(item) + 1;
+                    await journal.AppendAsync("factory-rebuild-shortfall", new { cell = missing.Cell.Id, missing.Role,
+                        missing.PreviousId, item, reason = "construction-item-unavailable-after-approach",
+                        error.Receipt.OperationId, error.Receipt.UpdatedTick, nativeBuildHadNoEffect = true }, token);
+                    continue;
+                }
                 carried[item] = carried.GetValueOrDefault(item) - 1;
                 actions++;
             }
