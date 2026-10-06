@@ -48,7 +48,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         CancellationToken token = default, Func<CancellationToken, Task>? inspectDestination = null)
     {
         var exploration = new ExplorationPlanner();
-        int invalidatedWaypoints = 0;
+        int invalidatedWaypoints = 0, localFailures = 0;
+        bool skipLocal = false;
         for (int segment = 0; segment < 64; segment++)
         {
             if (inspectDestination is not null) await inspectDestination(token);
@@ -59,13 +60,28 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (segment == 0 && distance > 24) await new SurvivalKitController(game, journal).BeforeTripAsync("travel", token);
             // A quick search budget is not a reason to explore around an already observed destination.
             // Navigation owns the bounded search, wider reobservation and confirmed tree clearance.
-            bool local = distance <= 24 || map.Bounds.Contains(destination);
+            bool local = distance <= 24 || map.Bounds.Contains(destination) && !skipLocal;
+            skipLocal = false;
             if (local)
             {
                 await journal.AppendAsync("travel-local-navigation", new { map.Scope, map.CollectedTick, map.Actor.Position,
                     destination, arrivalDistance, radius = map.Coverage.Radius, observedDestination = map.Bounds.Contains(destination) }, token);
-                await NavigateAsync(destination, arrivalDistance, token, inspectDestination);
-                return;
+                try
+                {
+                    await NavigateAsync(destination, arrivalDistance, token, inspectDestination);
+                    return;
+                }
+                // A destination at the edge of the photograph can exhaust even the deepened search when obstacles extend
+                // past that edge (seed 20261106, 2026-10-06: 67 tiles, a failed research goal). Such a far destination then
+                // takes one waypoint segment toward it and is planned again from there; a refusal well inside the view stands.
+                catch (NavigationPlanningException error) when (distance > 24 && NearEdge(map.Bounds, destination) && localFailures++ < 3
+                    && error.Status is RouteStatus.BudgetExceeded or RouteStatus.NoRouteOnKnownGrid)
+                {
+                    await journal.AppendAsync("travel-local-fallback", new { map.Scope, map.CollectedTick, destination,
+                        error.Status, localFailures }, token);
+                    skipLocal = true;
+                    continue;
+                }
             }
             ExplorationWaypoint next = await FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
             if (!await NavigateExplorationAsync(next, map, catalog, token, inspectDestination) && ++invalidatedWaypoints > 4)
@@ -73,6 +89,10 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         }
         throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its local segment budget.");
     }
+
+    /// <summary>Within eight tiles of the photograph's edge, where an unseen obstacle can hide the only detour.</summary>
+    internal static bool NearEdge(WorldBox bounds, MapPosition point) => Math.Min(Math.Min(point.X - bounds.Min.X, bounds.Max.X - point.X),
+        Math.Min(point.Y - bounds.Min.Y, bounds.Max.Y - point.Y)) < 8;
 
     internal async Task<bool> NavigateExplorationAsync(ExplorationWaypoint waypoint, SpatialSnapshot origin,
         ProductionCatalog catalog, CancellationToken token, Func<CancellationToken, Task>? inspectDestination = null)

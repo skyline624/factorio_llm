@@ -17,7 +17,20 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
     internal string Directory => session.Directory;
     private string WatermarkPath => Path.Combine(session.Directory, "observation-watermark.json");
 
+    private CallTimings? timings;
+
     public async Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+    {
+        long started = Stopwatch.GetTimestamp();
+        TimeSpan engine = TimeSpan.Zero;
+        try { return await ExecuteCoreAsync(request, elapsed => engine += elapsed, cancellationToken); }
+        finally
+        {
+            (timings ??= new CallTimings(session.Directory)).Record(request.Action, Stopwatch.GetElapsedTime(started), engine);
+        }
+    }
+
+    private async Task<GameResponse> ExecuteCoreAsync(GameRequest request, Action<TimeSpan> engineTime, CancellationToken cancellationToken)
     {
         using IDisposable priority = await AcquireCallAsync(request.Action != "factory_snapshot", cancellationToken);
         await using FileStream guard = await AcquireLockAsync(cancellationToken);
@@ -30,12 +43,16 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
         // A stale save must be rejected before the submitted mutation can reach the engine.
         if (previous is not null && Mutations.Contains(request.Action))
         {
+            long probe = Stopwatch.GetTimestamp();
             GameResponse observed = await inner.ExecuteAsync(GameRequest.Create("observe", new { radius = 1, limit = 1 }), cancellationToken);
+            engineTime(Stopwatch.GetElapsedTime(probe));
             if (!observed.Ok) throw new GameRpcException(observed.Error!);
             previous = Verify(observed, previous);
             await PersistAsync(previous, cancellationToken);
         }
+        long call = Stopwatch.GetTimestamp();
         GameResponse response = await inner.ExecuteAsync(request, cancellationToken);
+        engineTime(Stopwatch.GetElapsedTime(call));
         if (response.Ok || previous is not null)
         {
             Watermark verified = Verify(response, previous);

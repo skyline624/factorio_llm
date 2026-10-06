@@ -52,6 +52,15 @@ public sealed class SpatialControllerTests
         Assert.DoesNotContain("exploration-waypoint", journal.Types);
     }
 
+    [Fact]
+    public void OnlyADestinationNearThePhotographEdgeMayHideItsDetour()
+    {
+        var bounds = new WorldBox(new(-48, -48), new(49, 49));
+        Assert.True(SpatialController.NearEdge(bounds, new(41.5, 46.5)));
+        Assert.True(SpatialController.NearEdge(bounds, new(-44, 0)));
+        Assert.False(SpatialController.NearEdge(bounds, new(30, 0)));
+    }
+
     private sealed class NarrowTravelGame : IGameClient
     {
         public bool ClosedPassage { get; init; }
