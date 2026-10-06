@@ -11,17 +11,32 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
 {
     public const string Kind = "fluid-link";
     public const int MaximumSections = 12;
+    /// <summary>Underground sections advance farther; sixteen of them cover a dry oil field several hundred tiles from water.</summary>
+    public const int MaximumUndergroundSections = 16;
+
+    /// <summary>The native pipe-to-ground item when its recipe is enabled; relays then tunnel under obstacles and distance.</summary>
+    internal static string? UndergroundItem(ProductionCatalog catalog) => catalog.Items
+        .Where(p => p.Value.PlaceEntityType == "pipe-to-ground" && FactoryDirector.Enabled(catalog, p.Key))
+        .OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key).FirstOrDefault();
+
+    /// <summary>A section's placed entities in route order, each with its native item and direction.</summary>
+    internal static IReadOnlyList<PlannedEntity> Pieces(PipeRoutePlan route, string pipeItem, string? undergroundItem) =>
+        (route.Pieces ?? route.Pipes.Select(p => new PipePiece(p, 0, false)).ToArray()).Select((piece, i) =>
+            new PlannedEntity($"pipe-{i}", piece.Underground ? undergroundItem ?? throw new InvalidDataException(
+                "A tunnel section requires a native pipe-to-ground item.") : pipeItem, piece.Position, piece.Direction)).ToArray();
 
     public async Task ExtendAsync(string fluid, MapPosition destination, ProductionCatalog catalog, SpatialController controller,
         FactoryGround ground, CancellationToken token)
     {
         string pipeItem = catalog.Items.Where(p => p.Value.PlaceEntityType == "pipe").OrderBy(p => p.Key, StringComparer.Ordinal)
             .Select(p => p.Key).FirstOrDefault() ?? throw new InvalidOperationException("No native pipe item for a remote supply.");
+        string? tunnelItem = UndergroundItem(catalog);
         string[] pumpItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "offshore-pump").OrderBy(p => p.Key, StringComparer.Ordinal)
             .Select(p => p.Key).ToArray();
+        int sections = tunnelItem is null ? MaximumSections : MaximumUndergroundSections;
         var registry = new FactoryRegistry(directory);
         var builder = new FactoryCellBuilder(game, journal, directory);
-        for (int section = 0; section < MaximumSections; section++)
+        for (int section = 0; section < sections; section++)
         {
             var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
             var cell = state.Cells.FirstOrDefault(c => c.Kind == Kind && c.Recipe == fluid && c.Status == "building" && c.FluidRoute is not null);
@@ -40,12 +55,12 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
                     if (boxes.Count == 0) continue;
                     if (source.Position.DistanceTo(destination) <= FluidRelayPlanner.Step) return;
                     site = await ControllerPlanning.RunAsync(t => new FluidRelayPlanner().Find(
-                        FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, t, boxes),
+                        FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, t, boxes, tunnelItem),
                         controller, TimeSpan.FromMinutes(2), token);
                     if (site is null)
                     {
                         var clearance = await ControllerPlanning.RunAsync(t => new FluidRelayPlanner().FindClearance(
-                            FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, catalog, t, boxes),
+                            FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, catalog, t, boxes, tunnelItem),
                             controller, TimeSpan.FromMinutes(2), token);
                         if (clearance is not null)
                         {
@@ -54,7 +69,7 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
                             boxes = WithdrawableBoxes(map, await StockAsync(), source.Id, fluid);
                             if (boxes.Count == 0) throw new InvalidOperationException("The cleared relay source has no current withdrawable native box.");
                             site = await ControllerPlanning.RunAsync(t => new FluidRelayPlanner().Find(
-                                FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, t, boxes),
+                                FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pipeItem, source.Id, fluid, destination, t, boxes, tunnelItem),
                                 controller, TimeSpan.FromMinutes(2), token);
                             if (site is null) throw new InvalidOperationException("The freshly observed cleared relay corridor still has no safe section.");
                         }
@@ -76,7 +91,7 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
                         foreach (string pumpItem in pumpItems)
                         {
                             site = await ControllerPlanning.RunAsync(t => new FluidRelayPlanner().FindOffshore(
-                                FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pumpItem, pipeItem, shore, fluid, destination, t),
+                                FactoryGround.Reserve(map, ground.Boxes(map), pipeItem), pumpItem, pipeItem, shore, fluid, destination, t, tunnelItem),
                                 controller, TimeSpan.FromMinutes(2), token);
                             if (site is not null) break;
                         }
@@ -88,7 +103,7 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
                 var plans = new Dictionary<string, PlannedEntity>(StringComparer.Ordinal)
                     { ["outlet"] = new("outlet", pipeItem, site.Outlet.Position, site.Outlet.Direction) };
                 if (site.Pump is { } pump) plans["pump"] = new("pump", pump.Item, pump.Placement.Position, pump.Placement.Direction);
-                for (int i = 0; i < site.Route.Pipes.Count; i++) plans[$"pipe-{i}"] = new($"pipe-{i}", pipeItem, site.Route.Pipes[i], 0);
+                foreach (var piece in Pieces(site.Route, pipeItem, tunnelItem)) plans[piece.Role] = piece;
                 cell = new($"fluid-link-{Guid.NewGuid():N}", 0, new(0, 0, true), Kind, pipeItem, fluid,
                     new Dictionary<string, string>(), "building", map.CollectedTick, Plan: plans, FluidRoute: site.Route);
                 await SaveAsync();
@@ -136,9 +151,10 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
             RequireCompatibleStock(await StockAsync(), adopted.Values, fluid);
             cell = cell with { Entities = adopted };
             await SaveAsync();
-            string[] roles = new[] { "outlet" }.Concat(Enumerable.Range(0, route.Pipes.Count).Select(i => $"pipe-{i}")).ToArray();
-            int missing = roles.Count(r => !cell.Entities.ContainsKey(r));
-            if (missing > 0) await builder.EnsureCarriedAsync(registry, catalog, pipeItem, missing, token);
+            string[] roles = new[] { "outlet" }.Concat(Enumerable.Range(0, cell.Plan!.Keys.Count(k => k.StartsWith("pipe-", StringComparison.Ordinal)))
+                .Select(i => $"pipe-{i}")).ToArray();
+            foreach (var need in roles.Where(r => !cell.Entities.ContainsKey(r)).GroupBy(r => cell.Plan![r].Item, StringComparer.Ordinal))
+                await builder.EnsureCarriedAsync(registry, catalog, need.Key, need.Count(), token);
             await controller.TravelAsync(cell.Plan!["outlet"].Position, 6, catalog, token);
             for (int index = 0; index < roles.Length; index++)
             {
@@ -158,7 +174,7 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
                         cell.Entities.Values.ToHashSet(StringComparer.Ordinal)))
                         throw new InvalidDataException("The next relay pipe would join an unplanned native port; preserve the partial section.");
                 }
-                string id = await new PoweredMachineController(game, journal).BuildAtAsync(pipeItem,
+                string id = await new PoweredMachineController(game, journal).BuildAtAsync(plan.Item,
                     new(plan.Position, plan.Direction, 0), catalog, controller, token,
                     roles.Skip(index + 1).Select(r => cell.Plan![r].Position).ToArray());
                 cell = cell with { Entities = new Dictionary<string, string>(cell.Entities) { [role] = id } };
@@ -222,7 +238,8 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
 
         async Task<SpatialSnapshot> MapAsync()
         {
-            var map = await new SpatialClient(game).CaptureAsync(new[] { pipeItem }.Concat(pumpItems).Concat(ground.Items).Distinct(StringComparer.Ordinal).ToArray(), 48, token);
+            var map = await new SpatialClient(game).CaptureAsync(new[] { pipeItem }.Concat(tunnelItem is null ? [] : [tunnelItem]).Concat(pumpItems)
+                .Concat(ground.Items).Distinct(StringComparer.Ordinal).ToArray(), 48, token);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor scope changed during fluid relay construction.");
             return map;
         }

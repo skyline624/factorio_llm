@@ -33,12 +33,13 @@ public sealed class OffshoreSupplyPlanner
     }
 
     public OffshoreSupplyPlan? Find(SpatialSnapshot map, string pumpItem, string pipeItem, string targetId, string fluid,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, string? undergroundItem = null)
     {
         foreach (var (candidate, proposed) in Proposals(map, pumpItem, targetId, fluid, cancellationToken))
         {
             var withPump = map with { Entities = [.. map.Entities, proposed] };
-            var route = new PipeRoutePlanner().Find(withPump, pipeItem, proposed.Id, targetId, fluid, cancellationToken: cancellationToken);
+            var route = new PipeRoutePlanner().Find(withPump, pipeItem, proposed.Id, targetId, fluid, cancellationToken: cancellationToken,
+                undergroundItem: undergroundItem);
             if (route.Status == PipeRouteStatus.Found) return new(candidate, route);
         }
         return null;

@@ -65,7 +65,8 @@ public sealed record FluidBoxGeometry(int Index, string ProductionType,
     string? Filter = null, double? MinimumTemperature = null, double? MaximumTemperature = null);
 public sealed record FluidPortGeometry(int Index, string Type, int Direction, string FlowDirection,
     [property: JsonConverter(typeof(NativeArrayConverter<MapPosition>))] IReadOnlyList<MapPosition> Positions,
-    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Categories);
+    [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string> Categories,
+    int? MaxUndergroundDistance = null);
 public sealed record TileBuildRule(WorldBox Area, CollisionMask CollidingTiles, CollisionMask RequiredTiles);
 public sealed record SpatialActor(string Id, string Name, MapPosition Position, double BuildDistance, double ReachDistance, string ControlMode,
     double? ResourceReachDistance = null, ObservedMovement? Movement = null);

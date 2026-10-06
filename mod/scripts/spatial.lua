@@ -52,7 +52,8 @@ local function prototype(value)
       for index, connection in ipairs(fluidbox.pipe_connections) do
         connections[#connections + 1] = {index = index, type = connection.connection_type,
           direction = connection.direction, flowDirection = connection.flow_direction,
-          positions = U.copy(connection.positions), categories = U.copy(connection.connection_category)}
+          positions = U.copy(connection.positions), categories = U.copy(connection.connection_category),
+          maxUndergroundDistance = connection.max_underground_distance}
       end
       result.fluidBoxes[#result.fluidBoxes + 1] = {index = fluidbox.index, productionType = fluidbox.production_type,
         filter = fluidbox.filter and fluidbox.filter.name, minimumTemperature = fluidbox.minimum_temperature,

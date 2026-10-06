@@ -224,6 +224,29 @@ public sealed class FluidCellPlanner
         return planned;
     }
 
+    /// <summary>
+    /// A route's ordinary pipes as <see cref="WithPipes"/> projects them, plus its pipe-to-ground endpoints as reserved tiles
+    /// exposing only their open port: a tunnel joins nothing through its closed sides.
+    /// </summary>
+    internal static SpatialSnapshot WithPieces(SpatialSnapshot map, string pipeItem, string? undergroundItem, PipeRoutePlan route,
+        string force, string tag)
+    {
+        var projected = WithPipes(map, pipeItem, route.Pipes, force, tag, reserveTiles: true);
+        if (undergroundItem is null) return projected;
+        var tunnel = PipeRoutePlanner.Tunnel(map, undergroundItem);
+        return projected with
+        {
+            Entities = [.. projected.Entities, .. (route.Pieces ?? []).Where(p => p.Underground).Select((piece, index) =>
+            {
+                var forward = ExtractionPlanner.Rotate(new(0, -1), (tunnel.OpenDirection + piece.Direction) % 16);
+                return new SpatialEntity($"{PlannedId}:{tag}:tunnel:{index}", tunnel.Entity.Name, piece.Position,
+                    new(new(piece.Position.X - .5, piece.Position.Y - .5), new(piece.Position.X + .5, piece.Position.Y + .5)),
+                    piece.Direction, force, FluidConnections: [new(1, 1, piece.Position,
+                        new(piece.Position.X + forward.X, piece.Position.Y + forward.Y), Type: "normal", FlowDirection: "input-output")]);
+            })]
+        };
+    }
+
     // Planned pipes join every neighbour, so later routes keep their distance as they would from built ones.
     internal static SpatialSnapshot WithPipes(SpatialSnapshot map, string pipeItem, IReadOnlyList<MapPosition> pipes, string force, string tag,
         bool reserveTiles = false)

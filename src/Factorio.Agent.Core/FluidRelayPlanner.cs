@@ -9,6 +9,11 @@ public sealed class FluidRelayPlanner
 {
     public const string PlannedId = "planned:fluid-relay";
     public const int Step = 24;
+    /// <summary>
+    /// With pipe-to-ground, a section reaches farther inside the same radius-48 photograph: on seed 20261072 the dry oil
+    /// field stood about 330 tiles from the only lake, beyond twelve 24-tile surface sections.
+    /// </summary>
+    public const int UndergroundStep = 40;
     public const int MaximumPipes = 40;
     public const int MaximumClearanceTrees = 16;
 
@@ -19,7 +24,7 @@ public sealed class FluidRelayPlanner
     /// </summary>
     public FluidRelayClearancePlan? FindClearance(SpatialSnapshot map, string pipeItem, string sourceId, string fluid,
         MapPosition destination, ProductionCatalog catalog, CancellationToken cancellationToken = default,
-        IReadOnlySet<int>? sourceBoxIndices = null)
+        IReadOnlySet<int>? sourceBoxIndices = null, string? undergroundItem = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Relay clearance requires the current actor scope.");
@@ -27,10 +32,10 @@ public sealed class FluidRelayPlanner
         if (trees.Length == 0) return null;
         var treeIds = trees.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
         var projected = map with { Entities = map.Entities.Where(e => !treeIds.Contains(e.Id)).ToArray() };
-        var proposal = Find(projected, pipeItem, sourceId, fluid, destination, cancellationToken, sourceBoxIndices);
+        var proposal = Find(projected, pipeItem, sourceId, fluid, destination, cancellationToken, sourceBoxIndices, undergroundItem);
         if (proposal is null) return null;
         var geometry = map.Prototypes[map.Items[pipeItem].EntityName];
-        var positions = proposal.Route.Pipes.Append(proposal.Outlet.Position).Distinct().ToArray();
+        var positions = Positions(proposal.Route).Append(proposal.Outlet.Position).Distinct().ToArray();
         var footprints = positions.Select(p => geometry.CollisionBox.Translate(p)).ToArray();
         var chosen = new List<SpatialEntity>();
         foreach (var tree in trees)
@@ -43,25 +48,27 @@ public sealed class FluidRelayPlanner
         if (chosen.Count == 0) return null;
         var selected = chosen.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
         var limited = map with { Entities = map.Entities.Where(e => !selected.Contains(e.Id)).ToArray() };
-        var site = Find(limited, pipeItem, sourceId, fluid, destination, cancellationToken, sourceBoxIndices);
+        var site = Find(limited, pipeItem, sourceId, fluid, destination, cancellationToken, sourceBoxIndices, undergroundItem);
         return site is null ? null : new(site, chosen.AsReadOnly(), positions.Where(p => chosen.Any(tree =>
             new OrientedCollisionBox(tree.Bounds, tree.BoundsOrientation).TouchesOrOverlaps(geometry.CollisionBox.Translate(p)))).ToArray());
     }
 
     public FluidRelaySite? Find(SpatialSnapshot map, string pipeItem, string sourceId, string fluid, MapPosition destination,
-        CancellationToken cancellationToken = default, IReadOnlySet<int>? sourceBoxIndices = null)
+        CancellationToken cancellationToken = default, IReadOnlySet<int>? sourceBoxIndices = null, string? undergroundItem = null)
     {
         var source = map.Entities.Single(e => e.Id == sourceId);
         var geometry = map.Prototypes[map.Items[pipeItem].EntityName];
         if (geometry.Type != "pipe" || geometry.TileWidth != 1 || geometry.TileHeight != 1 || geometry.FluidBoxes?.Count != 1)
             throw new InvalidDataException("Fluid relays require native ordinary one-tile pipe geometry.");
+        var (step, reach) = Reach(undergroundItem);
         double distance = source.Position.DistanceTo(destination);
         if (!double.IsFinite(distance) || distance <= Step) return null;
-        var preferred = new MapPosition(source.Position.X + (destination.X - source.Position.X) * Step / distance,
-            source.Position.Y + (destination.Y - source.Position.Y) * Step / distance);
+        double advance = undergroundItem is null ? Step : Math.Min(step, distance - Step / 2.0);
+        var preferred = new MapPosition(source.Position.X + (destination.X - source.Position.X) * advance / distance,
+            source.Position.Y + (destination.Y - source.Position.Y) * advance / distance);
         var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
         foreach (var outlet in new PlacementPlanner().FindCandidates(field, pipeItem, preferred, requireBuildReach: false,
-            eligible: p => p.Direction == 0 && p.Position.DistanceTo(source.Position) <= 32
+            eligible: p => p.Direction == 0 && p.Position.DistanceTo(source.Position) <= reach
                 && p.Position.DistanceTo(destination) <= distance - 8, cancellationToken: cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -73,12 +80,12 @@ public sealed class FluidRelayPlanner
                 p.Position == other.TargetPosition && p.TargetPosition == other.Position)))) continue;
             var projected = map with { Entities = [.. field.Map.Entities, entity] };
             var route = new PipeRoutePlanner().Find(projected, pipeItem, sourceId, PlannedId, fluid, cancellationToken: cancellationToken,
-                sourceBoxIndices: sourceBoxIndices);
-            if (route.Status != PipeRouteStatus.Found || route.Pipes.Count > MaximumPipes) continue;
-            var after = FluidCellPlanner.WithPipes(projected, pipeItem, route.Pipes, source.Force, "relay", reserveTiles: true);
+                sourceBoxIndices: sourceBoxIndices, undergroundItem: undergroundItem);
+            if (route.Status != PipeRouteStatus.Found || Positions(route).Count > MaximumPipes) continue;
+            var after = FluidCellPlanner.WithPieces(projected, pipeItem, undergroundItem, route, source.Force, "relay");
             after = after with { Entities = after.Entities.Select(e => e.Id == PlannedId ? e with
                 { Bounds = new(new(outlet.Position.X - .5, outlet.Position.Y - .5), new(outlet.Position.X + .5, outlet.Position.Y + .5)) } : e).ToArray() };
-            if (new PlacementPlanner().FindApproach(field, pipeItem, outlet, route.Pipes, after, cancellationToken) is null) continue;
+            if (new PlacementPlanner().FindApproach(field, pipeItem, outlet, Positions(route), after, cancellationToken) is null) continue;
             return new(outlet, route);
         }
         return null;
@@ -86,13 +93,15 @@ public sealed class FluidRelayPlanner
 
     /// <summary>Starts a separate terrain intake near an observed source when its existing ports cannot supply a safe relay.</summary>
     public FluidRelaySite? FindOffshore(SpatialSnapshot map, string pumpItem, string pipeItem, MapPosition near,
-        string fluid, MapPosition destination, CancellationToken cancellationToken = default)
+        string fluid, MapPosition destination, CancellationToken cancellationToken = default, string? undergroundItem = null)
     {
+        var (step, reach) = Reach(undergroundItem);
         double distance = near.DistanceTo(destination);
         if (!double.IsFinite(distance) || distance <= Step) return null;
         if (!map.Rows.Any(r => map.TileFluids?.GetValueOrDefault(r.Name) == fluid)) return null;
-        var preferred = new MapPosition(near.X + (destination.X - near.X) * Step / distance,
-            near.Y + (destination.Y - near.Y) * Step / distance);
+        double advance = undergroundItem is null ? Step : Math.Min(step, distance - Step / 2.0);
+        var preferred = new MapPosition(near.X + (destination.X - near.X) * advance / distance,
+            near.Y + (destination.Y - near.Y) * advance / distance);
         var geometry = map.Prototypes[map.Items[pipeItem].EntityName];
         var pump = map.Prototypes[map.Items[pumpItem].EntityName];
         if (geometry.Type != "pipe" || geometry.TileWidth != 1 || geometry.TileHeight != 1 || geometry.FluidBoxes?.Count != 1
@@ -101,7 +110,7 @@ public sealed class FluidRelayPlanner
         var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
         string force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
         foreach (var outlet in new PlacementPlanner().FindCandidates(field, pipeItem, preferred, requireBuildReach: false,
-            eligible: p => p.Direction == 0 && p.Position.DistanceTo(near) <= 32
+            eligible: p => p.Direction == 0 && p.Position.DistanceTo(near) <= reach
                 && p.Position.DistanceTo(destination) <= distance - 8, cancellationToken: cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -110,21 +119,27 @@ public sealed class FluidRelayPlanner
             if (entity.FluidConnections!.Any(p => map.Entities.Any(e => (e.FluidConnections ?? []).Any(other =>
                 p.Position == other.TargetPosition && p.TargetPosition == other.Position)))) continue;
             var projected = map with { Entities = [.. field.Map.Entities, entity] };
-            var supply = new OffshoreSupplyPlanner().Find(projected, pumpItem, pipeItem, PlannedId, fluid, cancellationToken);
+            var supply = new OffshoreSupplyPlanner().Find(projected, pumpItem, pipeItem, PlannedId, fluid, cancellationToken, undergroundItem);
             // The outlet already advances at least eight tiles from the known shore. A new intake can stand
             // beside it; requiring another eight tiles from that intake rejects short, valid native connections.
-            if (supply is null || supply.Route.Pipes.Count > MaximumPipes) continue;
+            if (supply is null || Positions(supply.Route).Count > MaximumPipes) continue;
             var nativePump = new SpatialEntity(supply.Route.Source!.EntityId, pump.Name, supply.Pump.Position,
                 pump.CollisionBox.Rotate(supply.Pump.Direction).Translate(supply.Pump.Position), supply.Pump.Direction, force,
                 FluidConnections: FluidCellPlanner.Ports(pump, supply.Pump));
-            var after = FluidCellPlanner.WithPipes(projected with { Entities = [.. projected.Entities, nativePump] },
-                pipeItem, supply.Route.Pipes, force, "relay", reserveTiles: true);
+            var after = FluidCellPlanner.WithPieces(projected with { Entities = [.. projected.Entities, nativePump] },
+                pipeItem, undergroundItem, supply.Route, force, "relay");
             after = after with { Entities = after.Entities.Select(e => e.Id == PlannedId ? e with
                 { Bounds = new(new(outlet.Position.X - .5, outlet.Position.Y - .5), new(outlet.Position.X + .5, outlet.Position.Y + .5)) } : e).ToArray() };
-            if (new PlacementPlanner().FindApproach(field, pumpItem, supply.Pump, supply.Route.Pipes.Append(outlet.Position).ToArray(), after, cancellationToken) is null
-                || new PlacementPlanner().FindApproach(field, pipeItem, outlet, supply.Route.Pipes, after, cancellationToken) is null) continue;
+            if (new PlacementPlanner().FindApproach(field, pumpItem, supply.Pump, Positions(supply.Route).Append(outlet.Position).ToArray(), after, cancellationToken) is null
+                || new PlacementPlanner().FindApproach(field, pipeItem, outlet, Positions(supply.Route), after, cancellationToken) is null) continue;
             return new(outlet, supply.Route, new("pump", pumpItem, supply.Pump));
         }
         return null;
     }
+
+    /// <summary>Every entity a route places, ordinary pipes and pipe-to-ground endpoints alike, in route order.</summary>
+    public static IReadOnlyList<MapPosition> Positions(PipeRoutePlan route) =>
+        route.Pieces?.Select(p => p.Position).ToArray() ?? route.Pipes;
+
+    private static (int Step, int Reach) Reach(string? undergroundItem) => undergroundItem is null ? (Step, 32) : (UndergroundStep, 44);
 }

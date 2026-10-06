@@ -107,6 +107,23 @@ public sealed class FluidRelayTests
     }
 
     [Fact]
+    public void AnUndergroundRelayTunnelsUnderAWallAndAdvancesBeyondASurfaceSection()
+    {
+        var map = PipeRoutePlannerTests.Tunnels(Map());
+        // The character walks around the wall's ends; the tunnelled section crosses it in a straight line.
+        map = map with { Entities = [.. map.Entities, .. Enumerable.Range(-10, 21).Select(y => OilMaps.Wall($"wall-{y}", new(-10.5, y + .5)))] };
+        var destination = new MapPosition(130.5, .5);
+        var site = new FluidRelayPlanner().Find(map, "pipe", "source", "water", destination, undergroundItem: "pipe-to-ground");
+        Assert.NotNull(site);
+        Assert.True(site.Outlet.Position.DistanceTo(new(-20.5, .5)) > FluidRelayPlanner.Step);
+        Assert.Contains(site.Route.Pieces!, p => p.Underground);
+        Assert.InRange(FluidRelayPlanner.Positions(site.Route).Count, 2, FluidRelayPlanner.MaximumPipes);
+        var plans = FluidRelayController.Pieces(site.Route, "pipe", "pipe-to-ground");
+        Assert.Equal(site.Route.Pieces!.Count, plans.Count);
+        Assert.All(plans.Zip(site.Route.Pieces!), p => Assert.Equal(p.Second.Underground ? "pipe-to-ground" : "pipe", p.First.Item));
+    }
+
+    [Fact]
     public void ARelayAvoidsOccupiedSitesAndAnUnrelatedFluidNetwork()
     {
         var map = Map();
