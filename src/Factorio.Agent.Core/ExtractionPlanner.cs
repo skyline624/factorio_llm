@@ -21,7 +21,7 @@ public sealed class ExtractionPlanner
 
     /// <summary>Whether this atomic, complete view contains the drill's whole native mining area.</summary>
     public static bool MiningAreaObserved(SpatialSnapshot map, SpatialEntity installed) =>
-        map.Coverage.Complete && map.Coverage.Atomic && map.Bounds.Contains(MiningArea(map, installed));
+        map.Coverage.Complete && map.Coverage.Atomic && map.Coverage.Resources && map.Bounds.Contains(MiningArea(map, installed));
 
     private static WorldBox MiningArea(SpatialSnapshot map, SpatialEntity installed)
     {

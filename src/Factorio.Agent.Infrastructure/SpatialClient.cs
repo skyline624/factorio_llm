@@ -6,11 +6,16 @@ namespace Factorio.Agent.Infrastructure;
 
 public sealed class SpatialClient(IGameClient game)
 {
+    /// <param name="light">Collisions only (no ore, transport graphs, fluid ports or power): about half the cost on ore fields.</param>
     public async Task<SpatialSnapshot> CaptureAsync(IReadOnlyList<string>? items = null, int radius = 32,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool light = false)
     {
         if (radius is < 4 or > SpatialSnapshot.MaximumRadius) throw new ArgumentOutOfRangeException(nameof(radius));
-        return SpatialSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("spatial", new { radius, items = items ?? [] }), cancellationToken));
+        object arguments = light ? new { radius, items = items ?? [], light } : new { radius, items = items ?? [] };
+        var map = SpatialSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("spatial", arguments), cancellationToken));
+        // A mod that ignores the light request returns a full photograph, which is still valid; the reverse is not.
+        if (!light && !map.Coverage.Resources) throw new InvalidDataException("A full spatial photograph came back without resources.");
+        return map;
     }
 
     public async Task<PlacementValidation> ValidateAsync(ActorScope scope, string item, IReadOnlyList<PlacementCandidate> candidates,

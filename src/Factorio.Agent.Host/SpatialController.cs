@@ -53,7 +53,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         for (int segment = 0; segment < 64; segment++)
         {
             if (inspectDestination is not null) await inspectDestination(token);
-            SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
+            SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token, light: true);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during travel to a known destination.");
             double distance = map.Actor.Position.DistanceTo(destination);
             // A trip beyond the local area may leave defended ground: equip first (cheap when the loadout is unchanged).
@@ -138,7 +138,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         bool requireStableArrival = arrivalDistance > 0.4;
         var unstableArrivals = new HashSet<MapPosition>();
         (MapPosition Waypoint, OperationReceipt Receipt)? completedMove = null;
-        SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: deadline.Token);
+        SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: deadline.Token, light: true);
         RequireAi(initial);
         ActorScope scope = initial.Scope;
         using var protectedDestination = defense.ProtectNavigationDestination(scope, destination);
@@ -154,7 +154,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 continue;
             }
             SpatialSnapshot map;
-            try { map = await spatial.CaptureAsync(radius: observationRadius, cancellationToken: deadline.Token); }
+            try { map = await spatial.CaptureAsync(radius: observationRadius, cancellationToken: deadline.Token, light: true); }
             catch (GameRpcException error) when (error.Error.Code == "actor_dead")
             {
                 throw new InvalidDataException("The actor died during navigation; reconcile before choosing a new route.", error);
@@ -506,7 +506,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             // without extending the native deadline or dispatching a competing movement.
             if (!receipt.IsTerminal && watchedPath is not null && receipt.UpdatedTick - lastTerrainTick >= 30)
             {
-                SpatialSnapshot current = await spatial.CaptureAsync(cancellationToken: token);
+                SpatialSnapshot current = await spatial.CaptureAsync(cancellationToken: token, light: true);
                 lastTerrainTick = current.CollectedTick;
                 // The active corner and position must come from one native frame; a receipt queried before this
                 // photograph can already refer to a corner that the continuously walking character has passed.
@@ -572,7 +572,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         // When that step only observed, this same photograph also serves the submission: a second capture cost about
         // 140 ms per operation in a 1100-entity base (seed 20261106, 2026-10-06), where operations waited 1 s apart.
         if (photograph is not null && items is not null && !photograph.Items.ContainsKey(items[0])) photograph = null;
-        photograph ??= await spatial.CaptureAsync(items, cancellationToken: token);
+        photograph ??= await spatial.CaptureAsync(items, cancellationToken: token, light: true);
         RequireAi(photograph);
         ActorScope scope = photograph.Scope;
         int stale = 0;
@@ -588,7 +588,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             }
             // A respawn or pilot takeover seen by the defense step forbids reusing the earlier photograph.
             if (reflex.Scope != scope || reflex.ControlMode != "ai") photograph = null;
-            SpatialSnapshot map = photograph ?? await spatial.CaptureAsync(items, cancellationToken: token);
+            SpatialSnapshot map = photograph ?? await spatial.CaptureAsync(items, cancellationToken: token, light: true);
             photograph = null;
             if (map.Scope != scope) throw new InvalidDataException("Actor scope changed before work submission; reconcile the previous intent.");
             RequireAi(map);

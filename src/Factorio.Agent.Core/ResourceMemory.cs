@@ -50,6 +50,8 @@ public sealed record ResourceMemorySnapshot(string WorldId, int SurfaceIndex, lo
         ValidateFor(map);
         if (!map.Coverage.Atomic || !map.Coverage.Complete || map.Coverage.Visibility != "current-character-local-area")
             throw new InvalidDataException("Only complete native local observations can update resource history.");
+        // A light photograph leaves ore out: its absence there proves nothing.
+        if (!map.Coverage.Resources) return this;
         var current = map.Entities.Where(e => map.Prototypes.TryGetValue(e.Name, out var p) && p.Type is "resource" or "tree"
                 && e.Amount is null or > 0)
             .Select(e => new ResourceSighting(e.Id, e.Name, e.Position, map.CollectedTick));

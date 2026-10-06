@@ -61,7 +61,7 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
         if (request.Action == "spatial" && response.Ok)
         {
             var map = SpatialSnapshot.Parse(response);
-            await new ResourceMemoryStore(session.Directory).RecordAsync(map, cancellationToken);
+            if (map.Coverage.Resources) await new ResourceMemoryStore(session.Directory).RecordAsync(map, cancellationToken);
             // Enemy bases enter memory only from the actor's own photographs, which already follow normal visibility.
             await new NestMemoryStore(session.Directory).RecordAsync(map, cancellationToken);
         }

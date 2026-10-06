@@ -96,6 +96,9 @@ function M.observe(args)
   -- A radius-64 square stays inside the normal 5x5 occupied-character chunk coverage.
   -- Visibility checks and chart/generation requests are unchanged; this is a larger local photograph only.
   local radius = U.number(args.radius, "radius", 4, 64, 32, true)
+  -- A light photograph serves movement and work checks: collisions only, without ore, transport graphs, fluid ports or power.
+  U.check(args.light == nil or type(args.light) == "boolean", "invalid_arguments", "light must be a boolean")
+  local light = args.light == true
   local x0, y0 = math.floor(c.position.x) - radius, math.floor(c.position.y) - radius
   local x1, y1 = math.floor(c.position.x) + radius + 1, math.floor(c.position.y) + radius + 1
   local area = {{x0, y0}, {x1, y1}}
@@ -105,7 +108,7 @@ function M.observe(args)
       buildDistance = c.build_distance, reachDistance = c.reach_distance,
       resourceReachDistance = c.resource_reach_distance, controlMode = Actor.state().controlMode},
     prototypes = {[c.name] = prototype(c.prototype)}, tilePrototypes = {}, tileFluids = {}, rows = {}, entities = {}, items = {}, stationaryThreats = {},
-    coverage = {atomic = true, complete = true, visibility = "current-character-local-area", radius = radius}}
+    coverage = {atomic = true, complete = true, visibility = "current-character-local-area", radius = radius, resources = not light}}
   local state = Actor.state()
   local active = state.activeId and state.receipts[state.activeId]
   if active and active.request.kind == 'move' and active.work and active.work.waypoints then
@@ -139,11 +142,12 @@ function M.observe(args)
   local found = c.surface.find_entities_filtered{area = area, limit = 20001}
   U.check(#found <= 20000, "spatial_snapshot_too_large", "Spatial entity budget exceeded; no partial map returned")
   for _, entity in ipairs(found) do
-    if Visibility.is_visible(c, entity) then
+    if not (light and entity.type == "resource") and Visibility.is_visible(c, entity) then
       result.prototypes[entity.name] = result.prototypes[entity.name] or prototype(entity.prototype)
       local value = {id = U.entity_id(entity), name = entity.name, position = U.copy(entity.position),
         bounds = box(entity.bounding_box), boundsOrientation = entity.bounding_box.orientation or 0,
         direction = entity.direction, force = entity.force.name}
+      if not light then
       if entity.type == "assembling-machine" or entity.type == "furnace" or entity.type == "inserter" then
         value.status = status_names[entity.status]
       end
@@ -172,6 +176,7 @@ function M.observe(args)
       if entity.type == "electric-pole" or entity.prototype.electric_energy_source_prototype then
         value.power = {energy = entity.energy, networkId = entity.electric_network_id,
           generatedLastTick = entity.type == "generator" and entity.energy_generated_last_tick or nil}
+      end
       end
       result.entities[#result.entities + 1] = value
     end

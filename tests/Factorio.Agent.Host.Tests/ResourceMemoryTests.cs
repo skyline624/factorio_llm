@@ -27,6 +27,15 @@ public sealed class ResourceMemoryTests : IDisposable
     }
 
     [Fact]
+    public void ALightPhotographWithoutOreForgetsNothing()
+    {
+        var map = Map();
+        var memory = ResourceMemorySnapshot.Empty(map).Merge(map);
+        var light = map with { CollectedTick = 120, Entities = [], Coverage = map.Coverage with { Resources = false } };
+        Assert.Equal(memory.Resources, memory.Merge(light).Resources);
+    }
+
+    [Fact]
     public void CompleteReobservationRemovesDisappearedDepositButKeepsDistantHistory()
     {
         var map = Map();

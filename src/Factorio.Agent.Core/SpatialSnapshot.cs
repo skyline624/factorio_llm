@@ -98,7 +98,8 @@ public sealed record ObservedFluidConnection(int BoxIndex, int PortIndex, MapPos
     string? Type = null, string? FlowDirection = null, string? Filter = null);
 public sealed record ObservedPower(double Energy, long? NetworkId = null, double? GeneratedLastTick = null);
 public sealed record PlaceableItem(string EntityName, int StackSize);
-public sealed record SpatialCoverage(bool Atomic, bool Complete, string Visibility, int Radius);
+/// <param name="Resources">False for a light photograph: collisions only, no ore, transport graphs, fluid ports or power.</param>
+public sealed record SpatialCoverage(bool Atomic, bool Complete, string Visibility, int Radius, bool Resources = true);
 public sealed record StationaryThreat(string Id, MapPosition Position, double Range, long CollectedTick);
 public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int SurfaceIndex, WorldBox Bounds, SpatialActor Actor,
     IReadOnlyDictionary<string, EntityGeometry> Prototypes, IReadOnlyDictionary<string, CollisionMask> TilePrototypes,
