@@ -8,7 +8,8 @@ public sealed class BeltTransportPlanner
 {
     public BeltTransportPlan? Find(SpatialSnapshot map, BeltTransportEquipment equipment, string sourceId, string targetId,
         CancellationToken cancellationToken = default, int maximumBelts = 200, int nodeBudget = 12000,
-        Func<BeltTransportPlan, bool>? eligible = null)
+        Func<BeltTransportPlan, bool>? eligible = null, PlacementCandidate? sourceInserter = null,
+        PlacementCandidate? targetInserter = null)
     {
         if (maximumBelts is < 1 or > 1536 || nodeBudget is < 1 or > 100000) throw new ArgumentOutOfRangeException(nameof(maximumBelts));
         var source = map.Entities.Single(e => e.Id == sourceId);
@@ -24,9 +25,13 @@ public sealed class BeltTransportPlanner
         var field = new SpatialCollisionField(clearMap);
         var placements = new PlacementPlanner();
         var outputs = placements.FindCandidates(field, equipment.Inserter, source.Position, requireBuildReach: false,
-            eligible: p => source.Bounds.Contains(At(p, arm.InserterPickup)), cancellationToken: cancellationToken);
+            eligible: p => source.Bounds.Contains(At(p, arm.InserterPickup)) && TransportConstructionSafety.Allows(map, p.Position)
+                && (sourceInserter is null || p.Position == sourceInserter.Position && p.Direction == sourceInserter.Direction),
+            cancellationToken: cancellationToken);
         var inputs = placements.FindCandidates(field, equipment.Inserter, target.Position, requireBuildReach: false,
-            eligible: p => target.Bounds.Contains(At(p, arm.InserterDrop)), cancellationToken: cancellationToken);
+            eligible: p => target.Bounds.Contains(At(p, arm.InserterDrop)) && TransportConstructionSafety.Allows(map, p.Position)
+                && (targetInserter is null || p.Position == targetInserter.Position && p.Direction == targetInserter.Direction),
+            cancellationToken: cancellationToken);
         var pairs = (from output in outputs from input in inputs select (Output: output, Input: input))
             .OrderBy(p => At(p.Output, arm.InserterDrop).DistanceTo(At(p.Input, arm.InserterPickup)));
         var crossings = new List<(PlacementCandidate Output, PlacementCandidate Input, SpatialCollisionField Field,
@@ -51,7 +56,7 @@ public sealed class BeltTransportPlanner
                 var box = arm.CollisionBox.Rotate(candidate.Direction).Translate(candidate.Position);
                 if (projected.Entities.Any(e => Covers(e, box))) continue;
                 var extension = placements.FindCandidates(projectedField, equipment.Pole, candidate.Position, requireBuildReach: false,
-                    eligible: p => Coverage(p.Position, pole.SupplyArea.Value).Overlaps(box)
+                    eligible: p => TransportConstructionSafety.Allows(map, p.Position) && Coverage(p.Position, pole.SupplyArea.Value).Overlaps(box)
                         && beltPorts.All(port => !port.Overlaps(pole.CollisionBox.Rotate(p.Direction).Translate(p.Position)))
                         && projected.Entities.Any(e => e.Force == source.Force && e.Power?.NetworkId is not null
                             && map.Prototypes[e.Name].MaxWireDistance is > 0

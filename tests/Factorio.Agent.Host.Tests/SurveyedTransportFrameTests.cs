@@ -6,6 +6,21 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class SurveyedTransportFrameTests
 {
     [Fact]
+    public void AStationaryEnvelopeKeepsItsActualSightingDateAfterTheActorWalksAway()
+    {
+        var atlas = new SurveyedTransportFrame();
+        atlas.Add(Photo(0, 10) with { StationaryThreats = [new("seen-worm", new(.5, .5), 25, 10)] });
+        atlas.Add(Photo(100, 20) with { StationaryThreats = [] });
+        var map = atlas.Build();
+        var threat = Assert.Single(map.StationaryThreats!);
+        Assert.Equal(10, threat.CollectedTick);
+        Assert.Equal(20, map.CollectedTick);
+        Assert.Equal("historical-character-survey-with-blocked-unknown-tiles", map.Coverage.Visibility);
+        Assert.False(TransportConstructionSafety.Allows(map, new(30.5, .5)));
+        Assert.True(TransportConstructionSafety.Allows(map, new(60.5, .5)));
+    }
+
+    [Fact]
     public void UnsurveyedGapsCannotBecomeAFreeRouteBetweenDistantFactories()
     {
         var atlas = new SurveyedTransportFrame();

@@ -22,7 +22,7 @@ public sealed class FactoryTransportControl(IGameClient game, IControllerJournal
         {
             // Native wiring checks both endpoints. Approaching only the arm can leave a long arm's chest out of reach.
             var chest = map.Entities.Single(e => e.Id == chestId);
-            var approach = new PlacementPlanner().FindInteractionApproach(new(map), [arm, chest], token)
+            var approach = new PlacementPlanner().FindInteractionApproach(new(map, ExplorationPlanner.ThreatMargin), [arm, chest], token)
                 ?? throw new InvalidOperationException("No reachable position can interact with both the inserter and its chest.");
             await controller.TravelAsync(approach, .2, catalog, token);
         }

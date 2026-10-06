@@ -9,6 +9,31 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class ConstructionThreatMarginTests
 {
     [Fact]
+    public async Task InteractionSelectsAnApproachOutsideTheSameNavigationReserve()
+    {
+        var placement = new PlacementCandidate(new(18.5, 37.5), 12, 0);
+        var map = World(new(27.5, 41));
+        var belt = new EntityGeometry("belt", "transport-belt", new(new(-.35, -.35), new(.35, .35)),
+            new CollisionMask([], false, false, false), 1, 1, BeltSpeed: .03125);
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { ["belt"] = belt },
+            Entities = [new("under-actor", "belt", new(27.5, 41.5), belt.CollisionBox.Translate(new(27.5, 41.5)), 4, "own"),
+                new("target", "belt", placement.Position, belt.CollisionBox.Translate(placement.Position), 12, "own")],
+            StationaryThreats = [new("worm", new(0, 0), 25, map.CollectedTick)] };
+        var old = new PlacementPlanner().FindInteractionApproach(new(map), map.Entities[1]);
+        Assert.NotNull(old);
+        Assert.False(new SpatialCollisionField(map, ExplorationPlanner.ThreatMargin).Walkable(old));
+        var game = new Game(map, placement);
+        var catalog = new ProductionCatalog(map.Scope, map.CollectedTick, [], new Dictionary<string, NativeItem>(),
+            new Dictionary<string, NativeMaterial[]>(), new Dictionary<string, NativeFurnace>(), new Dictionary<string, bool>());
+        await using var controller = new SpatialController(game, new Journal());
+        await controller.ApproachEntityAsync("target", placement.Position, catalog);
+        Assert.Equal(0, game.Builds);
+        Assert.True(game.Moves > 0);
+        Assert.True(game.Map.Actor.Position.DistanceTo(placement.Position) <= 9);
+        Assert.True(PlacementPlanner.CanStop(new(game.Map, ExplorationPlanner.ThreatMargin), game.Map.Actor.Position));
+    }
+
+    [Fact]
     public async Task ConstructionChoosesAnApproachThatNavigationCanReachOutsideTheWormReserve()
     {
         // Synthetic boundary: the nearest place off the existing belt is inside navigation's worm reserve.

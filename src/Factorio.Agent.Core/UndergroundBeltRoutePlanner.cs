@@ -56,7 +56,8 @@ public sealed class UndergroundBeltRoutePlanner
         {
             var key = (p, direction, input);
             if (endpoints.TryGetValue(key, out bool cached)) return cached;
-            bool allowed = collision.PlacementClear(tunnel, p, direction) && !ports.Contains(p)
+            bool allowed = TransportConstructionSafety.Allows(map, p)
+                && collision.PlacementClear(tunnel, p, direction) && !ports.Contains(p)
                 && !incoming.Contains(p) && (input || !occupied.Contains(BeltRoutingField.Front(p, direction)))
                 && !conveyors.Any(e => map.Prototypes[e.Name].Type == "splitter"
                     && new WorldBox(new(e.Bounds.Min.X - 1, e.Bounds.Min.Y - 1), new(e.Bounds.Max.X + 1, e.Bounds.Max.Y + 1)).Contains(p))

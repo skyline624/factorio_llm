@@ -128,12 +128,14 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
         SpatialController controller, CancellationToken token)
     {
         if (bus.PendingRetirements is not { Count: > 0 }) return bus;
-        if (bus.Graph is null || bus.ActorReserve is null) throw new InvalidDataException("Recovery requires a recorded graph and restorable source stock control.");
+        if (bus.ActorReserve is null || bus.Graph is null && bus.Consumers.Count != 1)
+            throw new InvalidDataException("Recovery requires a recorded line or graph and restorable source stock control.");
         var registry = new FactoryRegistry(directory);
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
         var cell = state.Cells.Single(c => c.Id == bus.CellId);
         string sourceChest = state.Cells.Single(c => c.Id == bus.SourceCellId).Entities["output-chest"];
         int sourceSurface = 0;
+        double observationReach = 0;
         string sourceArm = await EnsureSourcePausedAsync();
         foreach (var retirement in bus.PendingRetirements.ToArray())
         {
@@ -175,7 +177,8 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
                         || !SourceWiringIsExclusive(snapshot, sourceChest, sourceArm, requireConnection: true))
                         throw new InvalidDataException("Source feeding resumed before transport recovery.");
                     var all = cell.Entities.Values.Concat(bus.PendingRetirements!.Select(r => r.EntityId)).ToHashSet(StringComparer.Ordinal);
-                    var incoming = FactoryTransportRecoveryCapacity.Incoming(snapshot, bus.PendingRetirements, all, bus.Item);
+                    var incoming = FactoryTransportRecoveryCapacity.Incoming(snapshot, bus.PendingRetirements, all, bus.Item,
+                        bus.Graph is null ? PowerFuelTransport.MaximumBelts : 201);
                     if (!FactoryTransportRecoveryCapacity.Fits(snapshot, catalog, incoming))
                         throw new InvalidOperationException("Transport recovery awaits enough shared actor inventory capacity.");
                     var receipt = await controller.WorkAsync("mine", new { entityId = target.Id, count = 1 }, 1800, token: token);
@@ -201,7 +204,7 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
 
             async Task<SpatialSnapshot> ObservePartAsync()
             {
-                await controller.TravelAsync(retirement.Part.Position, 4, catalog, token);
+                await controller.TravelAsync(retirement.Part.Position, observationReach, catalog, token);
                 var captured = await new SpatialClient(game).CaptureAsync([retirement.Part.Item], 48, token);
                 RequireScope(captured.Scope, catalog);
                 if (captured.SurfaceIndex != sourceSurface) throw new InvalidDataException("Recovery left the native source surface.");
@@ -227,11 +230,14 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
             cell = state.Cells.Single(c => c.Id == bus.CellId);
             var part = cell.Plan?.GetValueOrDefault("source-inserter")
                 ?? throw new InvalidDataException("Recovery requires the recorded source inserter plan.");
-            if (part.Role != "source-inserter" || part.Item != Equipment.Inserter)
+            if (part.Role != "source-inserter" || !catalog.Items.TryGetValue(part.Item, out var sourceItem)
+                || sourceItem.PlaceEntityType != "inserter")
                 throw new InvalidDataException("Recovery requires the original source inserter equipment.");
             await controller.TravelAsync(part.Position, 4, catalog, token);
             var map = await new SpatialClient(game).CaptureAsync([part.Item], 48, token);
             RequireScope(map.Scope, catalog);
+            observationReach = map.Actor.ReachDistance - 1;
+            if (observationReach <= 0) throw new InvalidDataException("Recovery requires a positive native interaction approach range.");
             var snapshot = await CaptureAsync(catalog, token);
             var chest = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == sourceChest);
             sourceSurface = chest.Data.GetProperty("surfaceIndex").GetInt32();

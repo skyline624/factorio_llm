@@ -1,5 +1,11 @@
 # Navigation et placement C#
 
+Si un ver nouvellement observé rend interdit un point d'exploration déjà choisi, un refus de route confirmé permet de choisir un autre point depuis une photographie fraîche. C# exige le même acteur et la même surface, une enveloppe absente du relevé d'origine et aucune opération détenue à résultat inconnu. Les obstructions inchangées et les délais épuisés restent des échecs. Cette adaptation est limitée à **quatre invalidations** par voyage ou corridor, dans les budgets existants de segments, de photographies et de temps.
+
+Les recherches de tapis réservent aussi les enveloppes d'attaque stationnaires normalement observées par le personnage, avec les **24 cases de marge** de la navigation. Les centres des pièces de surface et des extrémités souterraines restent hors de cette réserve ; une liaison souterraine peut traverser celle-ci si ses deux extrémités sont constructibles. Les bras et les nouveaux poteaux de la liaison respectent également cette contrainte. La portée native et les collisions continuent de valider chaque approche effective.
+
+Un corridor conserve les positions et dates des vers vus pendant le parcours, même lorsque sa dernière photographie ne les voit plus. Ce relevé historique ne prétend pas à une visibilité actuelle. Une ligne simple inachevée issue de l'ancien routage est examinée avant reprise ; si nécessaire, C# propose un détour borné à **512 tapis, 24 000 nœuds et 45 secondes**. Le nouveau plan, les identités conservées et les retraits exacts sont persistés avant récupération. Chaque retrait exige l'identité native, la propriété, la capacité commune d'inventaire, un reçu terminé concordant et l'absence locale constatée. Un résultat inconnu reste à réconcilier ; il n'est pas répété aveuglément. Les bras déjà payés et leurs circuits sont conservés, et l'alimentation est arrêtée pendant la récupération. La validation de ce composant ne constitue pas une preuve de progression normale jusqu'à la fusée.
+
 Le mod fournit la géométrie native ; C# choisit les trajets, les positions et les orientations. Cette première version déplace le personnage dans sa zone observée et place un bâtiment à la fois. La synthèse d'une usine avec chaînes de production, tapis, tuyaux et raccordements reste à développer.
 
 ## Observation du terrain

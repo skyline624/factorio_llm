@@ -38,7 +38,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while approaching an entity.");
         }
         var entity = map.Entities.SingleOrDefault(e => e.Id == entityId) ?? throw new EntityMissingException(entityId, knownPosition);
-        MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map), entity, token)
+        MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map, ExplorationPlanner.ThreatMargin), entity, token)
             ?? throw new InvalidOperationException("No reachable interaction position for the observed entity.");
         // Navigation starts with a smaller local view and can expand it when a detour is clipped.
         await TravelAsync(approach, .2, catalog, token);
@@ -48,6 +48,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         CancellationToken token = default, Func<CancellationToken, Task>? inspectDestination = null)
     {
         var exploration = new ExplorationPlanner();
+        int invalidatedWaypoints = 0;
         for (int segment = 0; segment < 64; segment++)
         {
             if (inspectDestination is not null) await inspectDestination(token);
@@ -67,9 +68,39 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 return;
             }
             ExplorationWaypoint next = await FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
-            await NavigateAsync(next.Position, cancellationToken: token, inspectDestination: inspectDestination);
+            if (!await NavigateExplorationAsync(next, map, catalog, token, inspectDestination) && ++invalidatedWaypoints > 4)
+                throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its newly observed threat invalidation budget.");
         }
         throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its local segment budget.");
+    }
+
+    internal async Task<bool> NavigateExplorationAsync(ExplorationWaypoint waypoint, SpatialSnapshot origin,
+        ProductionCatalog catalog, CancellationToken token, Func<CancellationToken, Task>? inspectDestination = null)
+    {
+        try
+        {
+            await NavigateAsync(waypoint.Position, cancellationToken: token, inspectDestination: inspectDestination);
+            return true;
+        }
+        catch (NavigationPlanningException error) when (error.Status == RouteStatus.NoRouteOnKnownGrid)
+        {
+            // Only new native information may invalidate this selected exploration point. Unknown mutations,
+            // unchanged obstructions, timeouts and exhausted searches retain their original failure semantics.
+            if (ownedOperation is not null || ownedStopRequested) throw;
+            var fresh = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
+            if (fresh.Scope != catalog.Scope || fresh.SurfaceIndex != origin.SurfaceIndex || fresh.CollectedTick < waypoint.CollectedTick)
+                throw new InvalidDataException("Exploration invalidation changed actor, surface or observation time.");
+            RequireAi(fresh);
+            var introduced = (fresh.StationaryThreats ?? []).Where(t =>
+                !(origin.StationaryThreats ?? []).Any(previous => previous.Id == t.Id && previous.Position == t.Position && previous.Range == t.Range)
+                && waypoint.Position.DistanceTo(t.Position) < Math.Min(t.Range + ExplorationPlanner.ThreatMargin,
+                    fresh.Actor.Position.DistanceTo(t.Position)) - 1e-9).ToArray();
+            if (introduced.Length == 0) throw;
+            await journal.AppendAsync("exploration-waypoint-threat-invalidated", new { fresh.Scope, fresh.CollectedTick,
+                waypoint, observedFrom = fresh.Actor.Position, introduced, originalStatus = error.Status,
+                evidence = "new-native-stationary-envelope-and-no-unconfirmed-owned-operation" }, token);
+            return false;
+        }
     }
 
     public async Task<NavigationResult> NavigateAsync(MapPosition destination, double arrivalDistance = 0.4,

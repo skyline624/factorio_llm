@@ -29,7 +29,8 @@ public sealed record FactoryTransportRetirement(string EntityId, PlannedEntity P
 public sealed record FactoryTransportBus(string Id, string SourceCellId, string Item, string CellId,
     IReadOnlyList<FactoryTransportConsumer> Consumers, int? ActorReserve = null,
     IReadOnlyDictionary<string, FactoryConveyorEdges>? Graph = null,
-    IReadOnlyList<FactoryTransportRetirement>? PendingRetirements = null);
+    IReadOnlyList<FactoryTransportRetirement>? PendingRetirements = null,
+    int ConstructionRoutingVersion = 0);
 /// <summary>Resource cells use zone 0; their slot band is the id of their <see cref="ResourceRow"/>.</summary>
 /// <summary>Targets are the automation rates requested so far, item to items per minute; older registries load without them.</summary>
 public sealed record FactoryState(int Version, string WorldId, IReadOnlyList<FactoryZone> Zones, IReadOnlyList<FactoryCell> Cells,

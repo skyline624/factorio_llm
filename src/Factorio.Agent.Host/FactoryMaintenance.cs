@@ -68,7 +68,9 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         }
         if (obsolete.Length > 0) await registry.SaveAsync(state, token);
         var carried = FactoryLogistics.Carried(snapshot);
-        var registered = state.Cells.SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal);
+        var registered = state.Cells.SelectMany(c => c.Entities.Values)
+            .Concat((state.Transports ?? []).SelectMany(b => b.PendingRetirements ?? []).Select(r => r.EntityId))
+            .ToHashSet(StringComparer.Ordinal);
         var zones = game is IDangerZoneReader reader
             ? await reader.ReadActiveDeathsAsync(catalog.Scope, 1, snapshot.CollectedTick, token) : [];
         foreach (var missing in Missing(state, Present(snapshot)).Where(m => Selected(m.Cell)))

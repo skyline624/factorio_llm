@@ -11,6 +11,7 @@ public sealed class SurveyedTransportFrame
     private readonly Dictionary<string, CollisionMask> terrain = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PlaceableItem> items = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> fluids = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, StationaryThreat> threats = new(StringComparer.Ordinal);
     private SpatialSnapshot? latest;
     private WorldBox? bounds;
     public int Samples { get; private set; }
@@ -39,6 +40,10 @@ public sealed class SurveyedTransportFrame
         foreach (var entry in sample.TilePrototypes) terrain[entry.Key] = entry.Value;
         foreach (var entry in sample.Items) items[entry.Key] = entry.Value;
         foreach (var entry in sample.TileFluids ?? new Dictionary<string, string>()) fluids[entry.Key] = entry.Value;
+        // These are dated sightings, not a new sensor or a claim of current visibility. Merely walking away
+        // must not forget an attack envelope which could make the proposed construction impossible.
+        foreach (var threat in sample.StationaryThreats ?? []) threats[threat.Id] = threat;
+        if (threats.Count > 1000) throw new InvalidOperationException("Transport survey exceeds its stationary sighting budget.");
         if (latest is null) FirstTick = sample.CollectedTick;
         latest = sample; bounds = next; Samples++;
     }
@@ -67,6 +72,7 @@ public sealed class SurveyedTransportFrame
         {
             Bounds = bounds, Rows = rows, Entities = entities.Values.ToArray(), Prototypes = new Dictionary<string, EntityGeometry>(prototypes),
             TilePrototypes = masks, Items = new Dictionary<string, PlaceableItem>(items), TileFluids = new Dictionary<string, string>(fluids),
+            StationaryThreats = threats.Values.ToArray(),
             Coverage = new(false, false, "historical-character-survey-with-blocked-unknown-tiles", latest.Coverage.Radius)
         };
     }

@@ -41,7 +41,8 @@ internal sealed class BeltRoutingField
     {
         if (BeltRoutePlanner.Cell(position) != position) return false;
         if (clearance.TryGetValue(position, out bool known)) return known;
-        return clearance[position] = field.PlacementClear(geometry, position, 0) && !flowBlocked.Contains(position);
+        return clearance[position] = TransportConstructionSafety.Allows(field.Map, position)
+            && field.PlacementClear(geometry, position, 0) && !flowBlocked.Contains(position);
     }
 
     internal static MapPosition Front(MapPosition position, int direction, int distance = 1)

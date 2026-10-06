@@ -7,9 +7,10 @@ namespace Factorio.Agent.Host;
 internal static class FactoryTransportRecoveryCapacity
 {
     internal static IReadOnlyDictionary<string, long> Incoming(FactorySnapshot snapshot,
-        IReadOnlyList<FactoryTransportRetirement> retirements, IReadOnlySet<string> busEntities, string item)
+        IReadOnlyList<FactoryTransportRetirement> retirements, IReadOnlySet<string> busEntities, string item, int maximumRetirements = 201)
     {
-        if (retirements.Count is < 1 or > 201 || retirements.Select(r => r.EntityId).Distinct(StringComparer.Ordinal).Count() != retirements.Count
+        if (maximumRetirements is < 1 or > PowerFuelTransport.MaximumBelts || retirements.Count < 1 || retirements.Count > maximumRetirements
+            || retirements.Select(r => r.EntityId).Distinct(StringComparer.Ordinal).Count() != retirements.Count
             || retirements.Any(r => !busEntities.Contains(r.EntityId)))
             throw new InvalidDataException("Recovery requires a bounded, distinct set of owned bus pieces.");
         var incoming = retirements.GroupBy(r => r.Part.Item).ToDictionary(g => g.Key, g => (long)g.Count(), StringComparer.Ordinal);

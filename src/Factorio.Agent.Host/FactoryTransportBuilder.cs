@@ -202,7 +202,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var cell = new FactoryCell(cellId, 0, new(0, 0, true), "transport", equipment.Belt, null,
             new Dictionary<string, string>(), "building", tick, Plan: entities);
         var bus = new FactoryTransportBus($"bus-{Guid.NewGuid():N}", sourceCellId, item, cellId,
-            [new(targetCellId, "target-inserter-0", maximum)]);
+            [new(targetCellId, "target-inserter-0", maximum)], ConstructionRoutingVersion: 1);
         return (cell, bus);
         void Add(string role, string equipment, PlacementCandidate p) => entities[role] = new(role, equipment, p.Position, p.Direction, p.UndergroundType);
     }
@@ -439,6 +439,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromMinutes(40));
         token = deadline.Token;
+        bus = await new FactoryTransportReplanning(game, journal, directory).PrepareAsync(bus, catalog, controller, token);
         bus = await new FactoryTransportConversion(game, journal, directory).RetireAsync(bus, catalog, controller, token);
         var registry = new FactoryRegistry(directory);
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);

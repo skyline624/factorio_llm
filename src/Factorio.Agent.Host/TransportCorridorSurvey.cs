@@ -36,6 +36,7 @@ internal sealed class TransportCorridorSurvey(IGameClient game, IControllerJourn
         await controller.ApproachEntityAsync(required[0], source, catalog, token);
         var observed = await ReadAsync();
         var exploration = new ExplorationPlanner();
+        int invalidatedWaypoints = 0;
         if (observed.Actor.Position.DistanceTo(target) > 24)
             await new SurvivalKitController(game, journal).BeforeTripAsync("transport-survey", token);
         while (observed.Actor.Position.DistanceTo(target) > 24)
@@ -50,7 +51,8 @@ internal sealed class TransportCorridorSurvey(IGameClient game, IControllerJourn
             // A straight interpolated point can lie in a lake. Use the same observed, reachable local
             // steps as ordinary travel, and photograph each completed step rather than its intended line.
             var next = await controller.FindExplorationWaypointAsync(exploration, catalog, "", target, token);
-            await controller.NavigateAsync(next.Position, cancellationToken: token);
+            if (!await controller.NavigateExplorationAsync(next, observed, catalog, token) && ++invalidatedWaypoints > 4)
+                throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Corridor survey exhausted its newly observed threat invalidation budget.");
             observed = await ReadAsync();
         }
         await controller.ApproachEntityAsync(required[1], target, catalog, token);
