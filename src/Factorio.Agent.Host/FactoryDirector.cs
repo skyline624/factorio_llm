@@ -70,6 +70,20 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         var deferredRaw = await SeedRawAsync(catalog, plan.RawPerMinute, item, token, isObjectiveComplete);
         var builder = new FactoryCellBuilder(game, journal, directory);
         var fluids = new FluidChainDirector(game, journal, directory);
+        var first = BootstrapStages(catalog, plan, await registry.LoadAsync(catalog.Scope.WorldId, token));
+        if (first.Count > 0) await journal.AppendAsync("factory-bootstrap-plan", new { item, stages = first }, token);
+        foreach (var stage in first)
+        {
+            if (await DeferAsync()) return plan;
+            if (stage.Kind == FluidCellBuilder.MachineKind) await fluids.EnsureStageAsync(stage, catalog, token);
+            else
+            {
+                await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync(stage.MachineItem, 1, true, token);
+                await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
+                await ExpandPowerAsync(catalog.Scope, token);
+            }
+            await StartStageAsync(stage, catalog, new HashSet<string>(StringComparer.Ordinal), token, isObjectiveComplete);
+        }
         // Consumers after their suppliers keeps early cells useful even if a later build is interrupted.
         foreach (var stage in plan.Stages)
         {
@@ -113,6 +127,20 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         }
 
     }
+
+    /// <summary>
+    /// Stages without any ready machine, each reduced to the rate of one machine, in supply order. On seed 20261072 a
+    /// 30-per-minute chemical-science chain built every copper-cable assembler first; the goal was interrupted for hours before
+    /// any downstream stage existed. One machine per stage lets the requested item flow at a low rate before the main pass grows
+    /// every stage to the planned rate. Silos keep their single dedicated cell and are left to the main pass.
+    /// </summary>
+    internal static IReadOnlyList<AutomationStage> BootstrapStages(ProductionCatalog catalog, AutomationPlan plan, FactoryState state) =>
+        plan.Stages.Where(s => s.Kind != SiloCellPlanner.Kind
+                && !state.Cells.Any(c => c.Kind == s.Kind && c.Recipe == s.Recipe && c.Status == "ready"))
+            .Select(s => s with { CraftsPerMinute = Math.Min(s.CraftsPerMinute,
+                AutomationPlanner.CellCraftsPerMinute(catalog, catalog.Recipes.Single(r => r.Name == s.Recipe), s.MachineItem)),
+                Machines = 1 })
+            .ToArray();
 
     /// <summary>Refills this stage before downstream construction, including suppliers retained from a previous call.</summary>
     internal async Task StartStageAsync(AutomationStage stage, ProductionCatalog catalog, IReadOnlySet<string> existing,

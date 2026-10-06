@@ -23,6 +23,21 @@ public sealed class AutomationDemandTests
     }
 
     [Fact]
+    public void EveryMissingStageFirstGetsOneMachineInSupplyOrder()
+    {
+        var catalog = Catalogs.Early();
+        var plan = AutomationPlanner.Plan(catalog, "automation-science-pack", 120, Machines);
+        Assert.Contains(plan.Stages, s => s.Machines > 1);
+        var gears = plan.Stages.Single(s => s.Recipe == "iron-gear-wheel");
+        var state = new FactoryState(1, "world", [], [new FactoryCell("gears", 1, new(0, 0, true), gears.Kind, gears.MachineItem,
+            gears.Recipe, new Dictionary<string, string>(), "ready", 1)]);
+        var first = FactoryDirector.BootstrapStages(catalog, plan, state);
+        Assert.Equal(plan.Stages.Where(s => s.Recipe != "iron-gear-wheel").Select(s => s.Recipe), first.Select(s => s.Recipe));
+        Assert.All(first, stage => Assert.Equal(1, AutomationPlanner.MissingMachines(catalog, stage, [])));
+        Assert.All(first, stage => Assert.Equal(1, stage.Machines));
+    }
+
+    [Fact]
     public void MissingCellsComeFromTheNativeCapacityOfReadyCellsNotTheirCount()
     {
         var catalog = WithFastAssembler(Catalogs.Early());
