@@ -8,6 +8,7 @@ namespace Factorio.Agent.Host;
 public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal journal, string directory)
 {
     internal const int FuelPlanningRadius = SpatialSnapshot.MaximumRadius;
+    private const int BalancedSearches = 4, BalancedSuppliersPerItem = 2;
 
     private static readonly BeltTransportEquipment Equipment = new("transport-belt", "inserter", "small-electric-pole");
     private static readonly string[] Items = [Equipment.Belt, Equipment.Inserter, Equipment.Pole];
@@ -35,10 +36,13 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             .Select(p => p.Cell.Id).ToHashSet(StringComparer.Ordinal);
         if (maximumLinks - connected >= 2 && FactoryDirector.Enabled(catalog, "splitter"))
         {
+            // Split links have their own budget. On 2026-10-06 (seed 20261106) every round spent the shared budget of eight on one
+            // unplannable iron pair, tried from eight smelters, and single links were never searched again for seven hours.
+            int balancedSearches = 0;
             foreach (var bus in (state.Transports ?? []).Where(b => b.Graph is null && b.Consumers.Count == 2
                 && b.Consumers.All(c => !pausedCells.Contains(c.TargetCellId) && (targetCellIds is null || targetCellIds.Contains(c.TargetCellId)))))
             {
-                if (++considered > 8) return connected;
+                if (++balancedSearches > BalancedSearches) break;
                 if (!await new FactoryTransportConversion(game, journal, directory).PlanAsync(bus, catalog, controller, token)) continue;
                 state = await registry.LoadAsync(catalog.Scope.WorldId, token);
                 await FinishAsync(state.Transports!.Single(b => b.Id == bus.Id), catalog, controller, token);
@@ -58,16 +62,22 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             foreach (var group in needs.GroupBy(n => n.Ingredient.Name).OrderByDescending(g => g.Sum(n => InputVolume(catalog, n.Target, n.Ingredient)))
                 .ThenBy(g => g.Key, StringComparer.Ordinal))
             {
-                foreach (var source in state.Cells.Where(c => c.Status == "ready" && c.Entities.ContainsKey("output-chest")
-                    && Product(catalog, c) == group.Key && !(state.Transports ?? []).Any(b => b.SourceCellId == c.Id)))
+                if (balancedSearches >= BalancedSearches) break;
+                // The nearest suppliers first; a pair no near supplier can feed is left to single links and the actor.
+                var suppliers = state.Cells.Where(c => c.Status == "ready" && c.Entities.ContainsKey("output-chest")
+                    && Product(catalog, c) == group.Key && !(state.Transports ?? []).Any(b => b.SourceCellId == c.Id))
+                    .Select(c => (Cell: c, From: Position(stockSnapshot, c.Entities["output-chest"])))
+                    .Where(c => c.From is not null)
+                    .OrderBy(c => group.Select(n => Position(stockSnapshot, n.Target.Entities["input-chest"])?.DistanceTo(c.From!) ?? double.MaxValue)
+                        .DefaultIfEmpty(double.MaxValue).Min())
+                    .ThenBy(c => c.Cell.Id, StringComparer.Ordinal).Take(BalancedSuppliersPerItem).ToArray();
+                foreach (var (source, from) in suppliers)
                 {
-                    var from = Position(stockSnapshot, source.Entities["output-chest"]);
-                    if (from is null) continue;
                     var targets = group.Where(n => n.Target.Id != source.Id && Position(stockSnapshot, n.Target.Entities["input-chest"]) is not null)
-                        .OrderBy(n => Position(stockSnapshot, n.Target.Entities["input-chest"])!.DistanceTo(from)).Take(2).ToArray();
+                        .OrderBy(n => Position(stockSnapshot, n.Target.Entities["input-chest"])!.DistanceTo(from!)).Take(2).ToArray();
                     if (targets.Length != 2 || PlanningCenter(stockSnapshot,
                         [source.Entities["output-chest"], .. targets.Select(n => n.Target.Entities["input-chest"])]) is null) continue;
-                    if (++considered > 8) return connected;
+                    if (++balancedSearches > BalancedSearches) break;
                     int Limit(int index) => checked((int)Math.Clamp(targets[index].Ingredient.Amount!.Value
                         * FactoryLogistics.CellBufferCrafts(targets[index].Target, shares, 40), 1, 10000));
                     if (!await LinkPairAsync(source.Id, targets[0].Target.Id, targets[1].Target.Id, group.Key,
