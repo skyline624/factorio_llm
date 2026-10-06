@@ -9,15 +9,18 @@ internal sealed class ResourceCellStartup(IGameClient game, IControllerJournal j
 {
     /// <summary>One native census skips already supplied equipment; each selected cell is reobserved before any transfer.</summary>
     public async Task StartManyAsync(IEnumerable<FactoryCell> cells, ProductionCatalog catalog, SpatialController controller,
-        CancellationToken token, Func<CancellationToken, Task<bool>>? isObjectiveComplete = null)
+        CancellationToken token, Func<CancellationToken, Task<bool>>? isObjectiveComplete = null, FactorySnapshot? census = null)
     {
         var producers = cells.Where(c => c.IsResource).ToArray();
         if (producers.Length == 0 || isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
-        var snapshot = await new FactorySnapshotClient(game).CaptureAsync([FactoryLogistics.Fuel], cancellationToken: token);
+        var snapshot = census ?? await new FactorySnapshotClient(game).CaptureAsync([FactoryLogistics.Fuel], cancellationToken: token);
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while inspecting retained resource producers.");
-        var cold = producers.Where(c => BurnerEntities(c).Any(id => Cold(snapshot, id))).ToArray();
+        var missing = producers.Select(c => new { cell = c.Id,
+            entities = BurnerEntities(c).Where(id => Entity(snapshot, id) is null).ToArray() }).Where(c => c.entities.Length > 0).ToArray();
+        var unavailable = missing.Select(c => c.cell).ToHashSet(StringComparer.Ordinal);
+        var cold = producers.Where(c => !unavailable.Contains(c.Id) && BurnerEntities(c).Any(id => Cold(snapshot, id))).ToArray();
         await journal.AppendAsync("resource-startup-scan", new { snapshot.Scope, snapshot.CollectedTick,
-            inspectedCells = producers.Length, selectedCells = cold.Select(c => c.Id).ToArray() }, token);
+            inspectedCells = producers.Length, selectedCells = cold.Select(c => c.Id).ToArray(), missingCells = missing }, token);
         foreach (var cell in cold)
         {
             if (isObjectiveComplete is not null && await isObjectiveComplete(token)) return;
@@ -29,13 +32,14 @@ internal sealed class ResourceCellStartup(IGameClient game, IControllerJournal j
     {
         if (!cell.IsResource) return;
         var reader = new FactorySnapshotClient(game);
-        foreach (string id in BurnerEntities(cell)) await StartBurnerAsync(id);
+        foreach (string id in BurnerEntities(cell)) if (!await StartBurnerAsync(id)) return;
 
-        async Task StartBurnerAsync(string id)
+        async Task<bool> StartBurnerAsync(string id)
         {
             var stock = await reader.CaptureAsync([FactoryLogistics.Fuel], cancellationToken: token);
             Require(stock);
-            if (!Cold(stock, id)) return; // Electric equipment and already burning equipment need no starter mutation.
+            if (!await PresentAsync(stock, id)) return false;
+            if (!Cold(stock, id)) return true; // Electric equipment and already burning equipment need no starter mutation.
             var production = new ProductionController(game, journal);
             var actor = await production.ObserveAsync(token);
             RequireActor(actor);
@@ -44,11 +48,14 @@ internal sealed class ResourceCellStartup(IGameClient game, IControllerJournal j
 
             stock = await reader.CaptureAsync([FactoryLogistics.Fuel], cancellationToken: token);
             Require(stock);
-            var entity = stock.Records.Single(r => r.Kind == "entity" && r.EntityId == id);
+            if (!await PresentAsync(stock, id)) return false;
+            if (!Cold(stock, id)) return true;
+            var entity = Entity(stock, id)!;
             await controller.ApproachEntityAsync(id, entity.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!, catalog, token);
             stock = await reader.CaptureAsync([FactoryLogistics.Fuel], cancellationToken: token);
             Require(stock);
-            if (!Cold(stock, id)) return;
+            if (!await PresentAsync(stock, id)) return false;
+            if (!Cold(stock, id)) return true;
             actor = await production.ObserveAsync(token);
             RequireActor(actor);
             var inventory = FuelInventory(stock, id);
@@ -62,6 +69,15 @@ internal sealed class ResourceCellStartup(IGameClient game, IControllerJournal j
             if (Cold(proof, id)) throw new InvalidDataException("The completed starter transfer did not leave native loaded or burning fuel.");
             await journal.AppendAsync(cell.Kind == "miner" && cell.Recipe == FactoryLogistics.Fuel ? "coal-producer-started" : "resource-producer-started",
                 new { cell.Id, cell.Recipe, drillId = id, count, receipt.OperationId, proof.CollectedTick }, token);
+            return true;
+        }
+
+        async Task<bool> PresentAsync(FactorySnapshot snapshot, string id)
+        {
+            if (Entity(snapshot, id) is not null) return true;
+            await journal.AppendAsync("resource-startup-deferred", new { cell.Id, cell.Recipe, entityId = id,
+                snapshot.Scope, snapshot.CollectedTick, reason = "native-entity-missing-before-transfer" }, token);
+            return false;
         }
 
         void Require(FactorySnapshot snapshot)
@@ -83,11 +99,14 @@ internal sealed class ResourceCellStartup(IGameClient game, IControllerJournal j
 
     internal static bool Cold(FactorySnapshot snapshot, string id)
     {
-        var entity = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == id);
+        var entity = Entity(snapshot, id) ?? throw new InvalidOperationException("The resource producer is absent from the native photograph.");
         if (!entity.Data.TryGetProperty("burnerRemainingJoules", out var burning)) return false;
         if (burning.GetDouble() > 0) return false;
         return !FuelInventory(snapshot, entity.EntityId).Data.GetProperty("items").EnumerateObject().Any(p => p.Value.GetInt64() > 0);
     }
+
+    private static FactoryRecord? Entity(FactorySnapshot snapshot, string id) =>
+        snapshot.Records.SingleOrDefault(r => r.Kind == "entity" && r.EntityId == id);
 
     private static FactoryRecord FuelInventory(FactorySnapshot snapshot, string id)
     {

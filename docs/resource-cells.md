@@ -139,6 +139,8 @@ Cette preuve de composant vérifie le démarrage et le réemploi avant un consom
 
 ### Remplacement d'une capacité entièrement épuisée
 
+Avant de démarrer les fournisseurs retenus ou de compter leur capacité, la préparation applique le même contrôle natif de santé que la logistique. Une pièce absente rouvre sa cellule pour reconstruction, en conservant les pièces encore debout ; un gisement épuisé retire sa capacité. Le calcul et la sélection utilisent cette photographie commune, puis chaque brûleur sélectionné est réobservé avant tout transfert. Si l'équipement disparaît avant le transfert, son démarrage est différé et journalisé ; une disparition après un transfert payé ne peut pas être déclarée comme un démarrage réussi. Les zones de mort, les réservations et les budgets de reconstruction restent ceux des contrôleurs existants.
+
 Le 3 octobre 2026, dans la partie normale de graine **20261070**, les trois cellules à charbon sont `depleted` et la recherche attend un stock de 260 charbons provenant d'une ancienne foreuse thermique. La règle de croissance attendait une deuxième tournée logistique avant de remplacer cette capacité, ce qui prolongeait la collecte sur cette seule foreuse.
 
 La recherche peut maintenant remplacer **une cellule** dès sa première tournée avec pénurie lorsque le registre contient une cellule de cette ressource explicitement épuisée, sans aucune cellule prête ou en construction et avec une capacité restante nulle. Un manque de courant, une cellule interrompue ou une usine sans historique d'épuisement garde la règle habituelle de persistance. Le budget de cellules et le délai après une croissance refusée restent appliqués ; la nouvelle cellule doit ensuite livrer avant une extension supplémentaire.

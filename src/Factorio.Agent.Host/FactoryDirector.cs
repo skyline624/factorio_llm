@@ -199,12 +199,12 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         var supply = ResourceCellPlanner.Supply(catalog, item)
             ?? throw new InvalidOperationException($"{item} is neither mined nor smelted from a single ore.");
-        var registry = new FactoryRegistry(directory);
         var builder = new ResourceCellBuilder(game, journal, directory);
         await using var startupController = new SpatialController(game, journal);
         for (int built = 0; ; built++)
         {
-            var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+            var snapshot = await new FactorySnapshotClient(game).CaptureAsync([FactoryLogistics.Fuel], cancellationToken: token);
+            var state = await ReconcileRawCellsAsync(catalog, snapshot, token);
             if (isObjectiveComplete is not null && await isObjectiveComplete(token))
             {
                 var existing = RawCapacity(state, item);
@@ -212,7 +212,9 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             }
             await new ResourceCellStartup(game, journal).StartManyAsync(
                 state.Cells.Where(c => c.IsResource && c.Recipe == item && c.Status == "ready"),
-                catalog, startupController, token, isObjectiveComplete);
+                catalog, startupController, token, isObjectiveComplete, snapshot);
+            snapshot = await new FactorySnapshotClient(game).CaptureAsync([FactoryLogistics.Fuel], cancellationToken: token);
+            state = await ReconcileRawCellsAsync(catalog, snapshot, token);
             var (cells, current) = RawCapacity(state, item);
             if (current >= perMinute - 1e-9 || built >= maximumNewCells)
             {
@@ -355,6 +357,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         if (powerFuel > 0) startupRaw[FactoryLogistics.Fuel] = startupRaw.GetValueOrDefault(FactoryLogistics.Fuel) + powerFuel;
         var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Raw preparation stock scope changed.");
+        current = await ReconcileRawCellsAsync(catalog, snapshot, token);
         var deferredStartup = DeferredRawStartupItems(catalog, current, startupRaw, FactoryLogistics.AvailableStock(snapshot),
             priorityItem, powerFuel);
         await journal.AppendAsync("factory-raw-startup-deferred", new { priorityItem, snapshot.Scope, snapshot.CollectedTick,
@@ -362,11 +365,11 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         await using (var controller = new SpatialController(game, journal))
             await new ResourceCellStartup(game, journal).StartManyAsync(
                 RawStartupCells(catalog, current, startupRaw).Where(c => !deferredStartup.Contains(c.Recipe!)),
-                catalog, controller, token, isObjectiveComplete);
+                catalog, controller, token, isObjectiveComplete, snapshot);
         snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Raw preparation stock scope changed.");
         var available = FactoryLogistics.AvailableStock(snapshot);
-        current = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        current = await ReconcileRawCellsAsync(catalog, snapshot, token);
         var seeds = RawSeeds(catalog, current, raw, available, powerFuel, priorityItem);
         var first = seeds.Select(s => s.Item).ToHashSet(StringComparer.Ordinal);
         var deferred = RawSeeds(catalog, current, raw, available, powerFuel).Where(s => !first.Contains(s.Item))
@@ -388,14 +391,14 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         if (deferred.Count == 0) return;
         var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Deferred raw growth stock scope changed.");
-        var state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
+        var state = await ReconcileRawCellsAsync(catalog, snapshot, token);
         await using (var controller = new SpatialController(game, journal))
             await new ResourceCellStartup(game, journal).StartManyAsync(
                 RawStartupCells(catalog, state, raw).Where(c => deferred.Contains(c.Recipe!)),
-                catalog, controller, token, isObjectiveComplete);
+                catalog, controller, token, isObjectiveComplete, snapshot);
         snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Deferred raw growth stock scope changed.");
-        state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
+        state = await ReconcileRawCellsAsync(catalog, snapshot, token);
         var seeds = RawSeeds(catalog, state, raw, FactoryLogistics.AvailableStock(snapshot))
             .Where(s => deferred.Contains(s.Item)).ToArray();
         await journal.AppendAsync("factory-raw-growth", new { snapshot.Scope, snapshot.CollectedTick,
@@ -457,6 +460,20 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         if (wanted.Any(item => ResourceCellPlanner.Supply(catalog, item)?.Kind == "smelter")) wanted.Add(FactoryLogistics.Fuel);
         return state.Cells.Where(c => c.IsResource && c.Status == "ready" && c.Recipe is not null && wanted.Contains(c.Recipe))
             .OrderBy(c => c.Recipe == FactoryLogistics.Fuel ? 0 : 1).ThenBy(c => c.Id, StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>Reuse native cell health before selecting retained producers or counting their ready capacity.</summary>
+    internal async Task<FactoryState> ReconcileRawCellsAsync(ProductionCatalog catalog, FactorySnapshot snapshot, CancellationToken token)
+    {
+        if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while checking raw producer health.");
+        var registry = new FactoryRegistry(directory);
+        var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        var changed = ResourceCellHealth.Inspect(snapshot, state.Cells);
+        if (changed.Count == 0) return state;
+        state = changed.Aggregate(state, (current, cell) => current.With(cell));
+        await registry.SaveAsync(state, token);
+        await journal.AppendAsync("resource-cell-health", changed, token);
+        return state;
     }
 
     /// <summary>Buffered suppliers can restart after the requested chain; its raw-rate target and boiler fuel cannot wait.</summary>

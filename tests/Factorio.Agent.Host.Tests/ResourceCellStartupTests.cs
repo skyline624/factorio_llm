@@ -89,6 +89,132 @@ public sealed class ResourceCellStartupTests
         Assert.Equal(24, journal.Inspected);
     }
 
+    [Fact]
+    public async Task AnAbsentRetainedCellDoesNotBlockInspectionOfStandingProducers()
+    {
+        var live = Cell with { Id = "live", Entities = new Dictionary<string, string> { ["drill"] = "live-drill" } };
+        var game = new CensusGame(Records("live-drill", 1));
+        var journal = new ScanJournal();
+        await using var controller = new SpatialController(game, journal);
+
+        await new ResourceCellStartup(game, journal).StartManyAsync([Cell, live], Catalogs.Raw(), controller, default);
+
+        Assert.Equal(1, game.Photos);
+        Assert.Empty(journal.Selected);
+        Assert.Equal([Cell.Id], journal.Missing);
+        Assert.Equal(2, journal.Inspected);
+    }
+
+    [Fact]
+    public async Task DisappearanceAfterTheCensusDefersStartupBeforeAnyActorWork()
+    {
+        var game = new CensusGame(Records("drill", 0), disappearAfterCensus: true);
+        var journal = new ScanJournal();
+        await using var controller = new SpatialController(game, journal);
+
+        await new ResourceCellStartup(game, journal).StartManyAsync([Cell], Catalogs.Raw(), controller, default);
+
+        Assert.Equal([Cell.Id], journal.Selected);
+        Assert.Equal(["drill"], journal.Deferred);
+        Assert.Equal(2, game.Photos);
+    }
+
+    [Fact]
+    public async Task AnExplicitFreshCensusIsUsedOnlyForSelectionAndNotForFuelInsertion()
+    {
+        var game = new CensusGame(Records("drill", 1));
+        var journal = new ScanJournal();
+        await using var controller = new SpatialController(game, journal);
+
+        await new ResourceCellStartup(game, journal).StartManyAsync([Cell], Catalogs.Raw(), controller, default,
+            census: Snapshot(0, 0) with { Scope = Catalogs.Raw().Scope });
+
+        Assert.Equal([Cell.Id], journal.Selected);
+        Assert.Equal(1, game.Photos);
+        Assert.Empty(journal.Deferred);
+    }
+
+    [Fact]
+    public async Task AnExplicitCensusFromAnotherActorIsRejectedBeforeSelection()
+    {
+        var game = new CensusGame([]);
+        var journal = new ScanJournal();
+        await using var controller = new SpatialController(game, journal);
+        var scope = Catalogs.Raw().Scope;
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => new ResourceCellStartup(game, journal)
+            .StartManyAsync([Cell], Catalogs.Raw(), controller, default,
+                census: Snapshot(0, 0) with { Scope = scope with { Generation = scope.Generation + 1 } }));
+
+        Assert.Equal(0, game.Photos);
+        Assert.Equal(0, journal.Inspected);
+    }
+
+    [Theory]
+    [InlineData("missing-drill", "building", 1)]
+    [InlineData("missing-chest", "building", 1)]
+    [InlineData("depleted", "depleted", 2)]
+    [InlineData("no-power", "ready", 2)]
+    public async Task NativeHealthPersistsBeforeStartupAndRemovesLostCapacity(string condition, string status, int retained)
+    {
+        string directory = Directory.CreateTempSubdirectory("raw-census-").FullName;
+        try
+        {
+            var catalog = Catalogs.Raw();
+            var row = new ResourceRow(1, "miner", "coal", "coal", new("electric-mining-drill", "iron-chest", Pole: "small-electric-pole"),
+                new(0, 0), 0, 3, 1, 30);
+            var cell = Cell with { Slot = new(1, 0, true), Attempts = 2,
+                Entities = new Dictionary<string, string> { ["drill"] = "drill", ["output-chest"] = "chest" } };
+            var registry = new FactoryRegistry(directory);
+            await registry.SaveAsync(new(1, catalog.Scope.WorldId, [], [cell], [row]), default);
+            var records = new List<FactoryRecord>();
+            foreach (string id in new[] { "drill", "chest" }.Where(id => condition != "missing-" + id))
+                records.Add(new(id, "entity", id, id, Protocol.ToElement(new { role = "factory" })));
+            records.Add(new("work", "work", "drill", "drill", Protocol.ToElement(new
+                { statusName = condition == "depleted" ? "no_minable_resources" : "no_power" })));
+            var snapshot = Snapshot(0, 0) with { Scope = catalog.Scope, Records = records.ToArray() };
+            var journal = new HealthJournal();
+            var director = new FactoryDirector(new CensusGame([]), journal, directory);
+
+            var state = await director.ReconcileRawCellsAsync(catalog, snapshot, default);
+
+            var changed = Assert.Single(state.Cells);
+            Assert.Equal(status, changed.Status);
+            Assert.Equal(retained, changed.Entities.Count);
+            Assert.Equal(status == "building" ? 0 : 2, changed.Attempts);
+            Assert.Equal(status == "ready" ? (1, 30.0) : (0, 0.0), FactoryDirector.RawCapacity(state, "coal"));
+            Assert.Equal(status == "ready" ? 1 : 0, FactoryDirector.RawStartupCells(catalog, state,
+                new Dictionary<string, double> { ["coal"] = 30 }).Count);
+            Assert.Equal(status, Assert.Single((await registry.LoadAsync(catalog.Scope.WorldId, default)).Cells).Status);
+            Assert.Equal(status == "ready" ? 0 : 1, journal.Changes);
+            await director.ReconcileRawCellsAsync(catalog, snapshot, default);
+            Assert.Equal(status == "ready" ? 0 : 1, journal.Changes); // A fresh unchanged photo does not reopen/reset attempts again.
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public async Task ChangedActorCannotInvalidateTheRetainedRegistry()
+    {
+        string directory = Directory.CreateTempSubdirectory("raw-scope-").FullName;
+        try
+        {
+            var catalog = Catalogs.Raw();
+            var registry = new FactoryRegistry(directory);
+            await registry.SaveAsync(new(1, catalog.Scope.WorldId, [], [Cell]), default);
+            string before = await File.ReadAllTextAsync(registry.Path);
+            var snapshot = Snapshot(0, 0) with { Scope = catalog.Scope with { Incarnation = catalog.Scope.Incarnation + 1 }, Records = [] };
+            var journal = new HealthJournal();
+
+            await Assert.ThrowsAsync<InvalidDataException>(() => new FactoryDirector(new CensusGame([]), journal, directory)
+                .ReconcileRawCellsAsync(catalog, snapshot, default));
+
+            Assert.Equal(before, await File.ReadAllTextAsync(registry.Path));
+            Assert.Equal(0, journal.Changes);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     [Theory]
     [InlineData(599, false)]
     [InlineData(600, true)]
@@ -215,18 +341,39 @@ public sealed class ResourceCellStartupTests
     private sealed class ScanJournal : IControllerJournal
     {
         public string[] Selected { get; private set; } = [];
+        public string[] Missing { get; private set; } = [];
+        public List<string> Deferred { get; } = [];
         public int Inspected { get; private set; }
         public Task AppendAsync(string type, object data, CancellationToken token)
         {
-            Assert.Equal("resource-startup-scan", type);
             var scan = Protocol.ToElement(data);
+            if (type == "resource-startup-deferred")
+            {
+                Assert.Equal("native-entity-missing-before-transfer", scan.GetProperty("reason").GetString());
+                Deferred.Add(scan.GetProperty("entityId").GetString()!);
+                return Task.CompletedTask;
+            }
+            Assert.Equal("resource-startup-scan", type);
             Selected = scan.GetProperty("selectedCells").EnumerateArray().Select(c => c.GetString()!).ToArray();
             Inspected = scan.GetProperty("inspectedCells").GetInt32();
+            Missing = scan.GetProperty("missingCells").EnumerateArray().Select(c => c.GetProperty("cell").GetString()!).ToArray();
             return Task.CompletedTask;
         }
     }
 
-    private sealed class CensusGame(FactoryRecord[] records, bool warmAfterCensus = false, bool changedActor = false) : IGameClient
+    private sealed class HealthJournal : IControllerJournal
+    {
+        public int Changes { get; private set; }
+        public Task AppendAsync(string type, object data, CancellationToken token)
+        {
+            Assert.Equal("resource-cell-health", type);
+            Changes += ((IReadOnlyList<FactoryCell>)data).Count;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CensusGame(FactoryRecord[] records, bool warmAfterCensus = false, bool changedActor = false,
+        bool disappearAfterCensus = false) : IGameClient
     {
         public int Photos { get; private set; }
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
@@ -235,7 +382,7 @@ public sealed class ResourceCellStartupTests
             Photos++;
             var scope = Catalogs.Raw().Scope;
             if (changedActor) scope = scope with { Incarnation = scope.Incarnation + 1 };
-            var current = warmAfterCensus && Photos > 1 ? records.Select(r => r.Kind == "inventory"
+            var current = disappearAfterCensus && Photos > 1 ? [] : warmAfterCensus && Photos > 1 ? records.Select(r => r.Kind == "inventory"
                 ? r with { Data = Protocol.ToElement(new { items = new Dictionary<string, long> { ["coal"] = 1L } }) } : r).ToArray() : records;
             return Task.FromResult(new GameResponse(1, request.RequestId, true, 100 + Photos, Protocol.ToElement(new
             {
