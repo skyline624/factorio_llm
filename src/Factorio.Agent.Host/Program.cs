@@ -287,6 +287,12 @@ try
             Print(new { report = await new AttackResponseQualification(session).RunAsync(shutdown.Token) });
             break;
         }
+        case "verify-fluid-tunnel":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new FluidTunnelQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
         case "verify-nest-clearing":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
