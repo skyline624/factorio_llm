@@ -51,16 +51,27 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
         }
         if (memory.Pending) throw new InvalidDataException("An earlier strategic execution has no verified terminal outcome. Reconcile its journal and native effects before resuming.");
         string? lastGoal = null;
-        int repeated = 0, consecutiveFailures = 0;
+        int repeated = 0, consecutiveFailures = 0, consecutiveUnsupported = 0;
         for (int index = 0; index < maxGoals; index++)
         {
             token.ThrowIfCancellationRequested();
             if (index > 0 && maintenance is not null)
             {
-                // Persistent cells keep producing only if restocked between decisions. A maintenance failure is the
-                // maintainer's own journal entry; an operation it left active still blocks the next goal below.
-                try { await maintenance(token); }
-                catch (Exception) when (!token.IsCancellationRequested) { }
+                // A rejected proposal dispatched no goal actions. Let the model correct it once before a potentially
+                // long logistics round; further rejections still service persistent cells and consume the goal budget.
+                // The concrete runner keeps deterministic defense active while every new proposal is pending.
+                if (consecutiveUnsupported == 1)
+                {
+                    if (activeJournalPath is not null)
+                        await new ControllerJournal(activeJournalPath).AppendAsync("strategic-proposal-correction",
+                            new { maintenanceDeferred = true, immediateCorrections = 1 }, token);
+                }
+                else
+                {
+                    // A maintenance failure belongs to its own journal. An operation left active still blocks the next goal.
+                    try { await maintenance(token); }
+                    catch (Exception) when (!token.IsCancellationRequested) { }
+                }
                 observation = await ObserveAsync(token, allowDead: true);
                 // A death between goals, such as an attack during logistics, follows the same recovery as one during a goal.
                 // On 2026-10-01 (seed 20261002) the campaign stopped instead because the actor died during maintenance.
@@ -96,6 +107,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             }
             catch (Exception error) when (!token.IsCancellationRequested && activeJournalPath is not null)
             {
+                consecutiveUnsupported = 0;
                 string failureCode = error switch
                 {
                     GameRpcException rpc => rpc.Error.Code,
@@ -126,6 +138,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 continue;
             }
             consecutiveFailures = 0;
+            consecutiveUnsupported = result.UnsupportedReason is null ? 0 : consecutiveUnsupported + 1;
             string feedback = Feedback(result, after.Tick, compact: false);
             if (feedback.Length > 4000) feedback = Feedback(result, after.Tick, compact: true);
             memory = new(1, after.Scope, after.Tick, false, feedback, Deferred: memory.Deferred);
@@ -156,6 +169,8 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             observedTick = tick,
             goal = new { result.Goal.Category, result.Goal.Target, result.Goal.Quantity, result.Goal.Unit },
             result.UnsupportedReason,
+            nextDecision = result.UnsupportedReason is null ? null
+                : "The proposal was rejected before goal execution. Revise it using the advertised capabilities and exact native identifiers from fresh observations.",
             result.Production,
             result.Fluid,
             discovery = result.Discovery is { } discovery ? new { discovery.Resource, discovery.NativeAmount,
@@ -179,6 +194,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
             {
                 observedTick = tick,
                 goal = new { result.Goal.Category, result.Goal.Target, result.Goal.Quantity, result.Goal.Unit },
+                result.UnsupportedReason,
                 completed = result.UnsupportedReason is null && result.SearchProgress is null, evidenceTruncated = true,
                 evidenceScope = "Verified details exceeded the context budget; observe current stock and conditions again."
             }, Protocol.Json);

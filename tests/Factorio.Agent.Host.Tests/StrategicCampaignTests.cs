@@ -243,6 +243,111 @@ public sealed class StrategicCampaignTests : IDisposable
         Assert.Equal(2, calls);
     }
 
+    [Fact]
+    public async Task RejectedProposalIsCorrectedBeforeTheNextFactoryLogisticsRound()
+    {
+        var order = new List<string>();
+        int goal = 0;
+        var runner = new Runner(() =>
+        {
+            int attempt = goal++;
+            order.Add($"goal-{attempt}");
+            return attempt == 0
+                ? Completed() with { Research = null, UnsupportedReason = "Unsupported recovery target" }
+                : Completed() with { Goal = Completed().Goal with { Target = $"goal-{attempt}" } };
+        });
+        var result = await new StrategicCampaignController(new Game(), runner, Memory, Journal, maintenance: _ =>
+        {
+            order.Add("maintenance");
+            return Task.CompletedTask;
+        }).RunAsync(3);
+
+        Assert.Equal(["goal-0", "goal-1", "maintenance", "goal-2"], order);
+        Assert.Equal(3, result.GoalsExecuted);
+        using var feedback = JsonDocument.Parse(runner.History[1]!);
+        Assert.Equal("Unsupported recovery target", feedback.RootElement.GetProperty("unsupportedReason").GetString());
+        Assert.Contains("Revise", feedback.RootElement.GetProperty("nextDecision").GetString());
+        Assert.Contains("strategic-proposal-correction", await File.ReadAllTextAsync(Journal));
+    }
+
+    [Fact]
+    public async Task DifferentRejectedProposalsCannotStarveMaintenanceOrBypassTheGoalBudget()
+    {
+        int goal = 0, maintenanceCalls = 0;
+        var runner = new Runner(() => Completed() with { Research = null, UnsupportedReason = "Unsupported target",
+            Goal = Completed().Goal with { Target = $"unsupported-{goal++}" } });
+        var result = await new StrategicCampaignController(new Game(), runner, Memory, maintenance: _ =>
+        {
+            maintenanceCalls++;
+            return Task.CompletedTask;
+        }).RunAsync(5);
+
+        Assert.Equal("goal-budget", result.StopReason);
+        Assert.Equal(5, runner.History.Count);
+        Assert.Equal(3, maintenanceCalls);
+    }
+
+    [Fact]
+    public async Task IdenticalRejectedProposalsStillStopAfterThreeAttemptsAndServiceTheFactory()
+    {
+        int maintenanceCalls = 0;
+        var runner = new Runner(() => Completed() with { Research = null, UnsupportedReason = "Unsupported target" });
+        var result = await new StrategicCampaignController(new Game(), runner, Memory, maintenance: _ =>
+        {
+            maintenanceCalls++;
+            return Task.CompletedTask;
+        }).RunAsync(100);
+
+        Assert.Equal("repeated-goal", result.StopReason);
+        Assert.Equal(3, runner.History.Count);
+        Assert.Equal(1, maintenanceCalls);
+    }
+
+    [Fact]
+    public async Task ANewRejectionAfterAnAcceptedGoalGetsOneImmediateCorrection()
+    {
+        int goal = 0;
+        var order = new List<string>();
+        var runner = new Runner(() =>
+        {
+            int attempt = goal++;
+            order.Add($"goal-{attempt}");
+            return Completed() with { Goal = Completed().Goal with { Target = $"goal-{attempt}" },
+                Research = attempt % 2 == 0 ? null : Completed().Research,
+                UnsupportedReason = attempt % 2 == 0 ? "Unsupported target" : null };
+        });
+        await new StrategicCampaignController(new Game(), runner, Memory, maintenance: _ =>
+        {
+            order.Add("maintenance");
+            return Task.CompletedTask;
+        }).RunAsync(5);
+
+        Assert.Equal(["goal-0", "goal-1", "maintenance", "goal-2", "goal-3", "maintenance", "goal-4"], order);
+    }
+
+    [Fact]
+    public async Task AnExecutionFailureDuringCorrectionResumesMaintenanceAfterReconciliation()
+    {
+        int maintenanceCalls = 0;
+        var game = new Game { OperationStatus = null };
+        var runner = new JournaledRunner(game, Journal, attempt => attempt switch
+        {
+            0 => Completed() with { Research = null, UnsupportedReason = "Unsupported target" },
+            1 => throw new NavigationPlanningException(RouteStatus.NoRouteOnKnownGrid, "NoRouteOnKnownGrid: trapped"),
+            _ => Completed()
+        });
+        var result = await new StrategicCampaignController(game, runner, Memory, Journal, maintenance: _ =>
+        {
+            maintenanceCalls++;
+            return Task.CompletedTask;
+        }).RunAsync(3);
+
+        Assert.Equal(3, result.GoalsExecuted);
+        Assert.Equal(1, maintenanceCalls);
+        Assert.Contains("navigation_blocked", runner.History[2]);
+        Assert.False(JsonSerializer.Deserialize<StrategicMemory>(await File.ReadAllTextAsync(Memory), Protocol.Json)!.Pending);
+    }
+
     private string Journal => Path.Combine(directory, "journal.jsonl");
     private static StrategicGoalResult Completed() => new(new("o", "Research automation", GoalCategory.Research,
         "automation", 1, GoalUnit.Completion, GoalPriority.Normal, new(TimeSpan.Zero, 1, null, null, null)),

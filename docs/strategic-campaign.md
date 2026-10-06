@@ -12,6 +12,8 @@ L'indicateur en cours est écrit avant l'appel au contrôleur d'objectif et effa
 
 Les propositions refusées par la validation sémantique reviennent comme résultats `unsupportedReason` au modèle. Trois propositions successives de même catégorie, cible, quantité et unité arrêtent la boucle avec `repeated-goal`. Après une erreur d’exécution, une réconciliation réussie permet une nouvelle décision sur les stocks observés, dans le budget d’objectifs restant. Une annulation demandée, une opération inconnue ou active, un arrêt non confirmé, un journal incohérent ou un changement d’avatar inexpliqué maintiennent l’incertitude et arrêtent la boucle.
 
+Après le premier refus d'une série, la boucle permet une nouvelle proposition avant la tournée logistique entre objectifs. Le retour précise le refus et demande une correction selon les capacités annoncées et les identifiants natifs observés. Cette tentative consomme le budget normal ; la défense déterministe reste active pendant l'attente du modèle. Si la proposition suivante est encore refusée, les tournées de maintenance reprennent avant chaque décision jusqu'à l'acceptation d'un objectif. Une erreur d'exécution réconciliée reprend également la maintenance. L'événement `strategic-proposal-correction` consigne ce report unique ; il ne prouve ni une correction réussie du modèle ni une progression de l'usine.
+
 La boucle signale `rocket-observed` uniquement lorsque le compteur natif de fusées est strictement positif. Cela constate un lancement dans le monde ; cela ne qualifie pas à lui seul l'historique, la graine, l'absence d'assistance ou les trois campagnes finales.
 
 ## Journaux séparés par objectif
