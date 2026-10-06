@@ -6,6 +6,8 @@ Pour le charbon des chaudières, le bras normal reste prioritaire. Lorsque le ca
 
 Avant de câbler le contrôle de stock, C# calcule un arrêt stable et accessible depuis lequel le personnage peut atteindre à la fois le bras et le coffre, avec une marge sur sa portée native. Atteindre seulement le bras ne suffit pas, notamment lorsque sa portée de prise ou de dépôt dépasse une case. Un montage sans point d'interaction commun est refusé ; les contrôles de portée natifs restent appliqués.
 
+Une limite de recherches ou de nœuds peut laisser un lot incomplet avec des routes entièrement calculées. C# construit ces liaisons validées, au plus deux par appel, même lorsque la borne géométrique d'affectation est plus élevée. Cette borne ne prouve pas l'existence de toutes les routes. Le planificateur conserve les ports natifs accessibles des autres demandes ; les chaudières encore sans alimentation gardent leur ravitaillement par le personnage. Un délai expiré qui ne renvoie aucun plan reste un refus sans mutation, et chaque liaison construite doit passer son contrôle natif avant de couvrir un besoin.
+
 Le point de préparation du cadrage de combustible doit permettre un arrêt stable du personnage. Un tapis, un tapis souterrain ou un répartiteur reste traversable, mais ne convient pas à cet arrêt. C# vérifie cette condition au centre puis sur les autres candidats observés, en conservant la marge de cadrage des extrémités. Si aucun point stable connu ne convient, le cadrage est différé ; les tapis ne sont pas retirés et aucun terrain inconnu n'est supposé libre.
 
 ## Corridors entre zones éloignées — développement

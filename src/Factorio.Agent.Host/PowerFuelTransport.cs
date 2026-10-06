@@ -173,7 +173,9 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         await journal.AppendAsync("power-fuel-batch-search", new { targets = targets.Length, sources = sources.Length,
             links = plan.Links.Count, plan.Searches, plan.BudgetExhausted, plan.AssignmentUpperBound, equipment,
             selection = "first-feasible-delivery-batch", maximumLinks, map.CollectedTick }, token);
-        if (plan.Links.Count == 0 || plan.Links.Count != Math.Min(maximumLinks, plan.AssignmentUpperBound ?? targets.Length)) return (0, true);
+        // The matching bound does not prove that every route exists. Returned links have complete calculated routes
+        // and preserve the other native ports; build that verified subset and retain actor delivery for unserved targets.
+        if (plan.Links.Count == 0) return (0, true);
         var records = plan.Links.Select(link => FactoryTransportBuilder.NewBus(
             sources.Single(c => c.Entities["output-chest"] == link.SourceId).Id,
             targets.Single(c => c.Entities["input-chest"] == link.TargetId).Id, FactoryLogistics.Fuel,

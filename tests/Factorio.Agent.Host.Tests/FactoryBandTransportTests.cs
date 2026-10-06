@@ -180,6 +180,25 @@ public sealed class FactoryBandTransportTests
     }
 
     [Fact]
+    public void BoundedFuelBatchReturnsACompleteRouteWithoutClaimingBothAssignments()
+    {
+        var map = SeveralConsumers();
+        var equipment = new BeltTransportEquipment("transport-belt", "inserter", "small-electric-pole");
+        BeltTransportRequest[] requests = [new("first-target", ["first-source"]), new("second-target", ["second-source"])];
+        var partial = new BeltTransportBatchPlanner().Find(map, equipment, requests, maximumSearches: 1,
+            stopAfterComplete: true, stopAfterMaximumAssignments: true, maximumLinks: 2);
+        Assert.Equal(2, partial.AssignmentUpperBound);
+        Assert.True(partial.BudgetExhausted);
+        var link = Assert.Single(partial.Links);
+        Assert.NotEmpty(link.Plan.Belts);
+        Assert.Equal("first-source", link.SourceId);
+        Assert.Equal("first-target", link.TargetId);
+        var projected = ProjectBus(map, "partial", link.Plan);
+        var remaining = new BeltTransportPlanner().Find(projected, equipment, "second-source", "second-target");
+        Assert.NotNull(remaining);
+    }
+
+    [Fact]
     public void MaximumAssignmentUsesAlternativeSourcesInsteadOfGreedyCounting()
     {
         var plan = PowerFuelTransport.SearchBatch(SeveralConsumers(), new("transport-belt", "inserter", "small-electric-pole"),
