@@ -59,7 +59,7 @@ public sealed record EntityGeometry(string Name, string Type, WorldBox Collision
     MapPosition? InserterPickup = null, MapPosition? InserterDrop = null, double? BeltSpeed = null,
     double? MiningSpeed = null, double? MiningTime = null, double? EnergyPerTick = null, double? BurnerEffectivity = null,
     double? MaxPowerOutput = null, double? NormalResourceAmount = null, bool InfiniteResource = false, int? FilterSlots = null,
-    int? MaxUndergroundDistance = null);
+    int? MaxUndergroundDistance = null, double? AttackRange = null);
 public sealed record FluidBoxGeometry(int Index, string ProductionType,
     [property: JsonConverter(typeof(NativeArrayConverter<FluidPortGeometry>))] IReadOnlyList<FluidPortGeometry> Connections,
     string? Filter = null, double? MinimumTemperature = null, double? MaximumTemperature = null);

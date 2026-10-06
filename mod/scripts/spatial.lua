@@ -44,6 +44,7 @@ local function prototype(value)
     result.inserterDrop = drop and {x = drop[1], y = drop[2]}
   end
   if value.type == "underground-belt" then result.maxUndergroundDistance = value.max_underground_distance end
+  if value.type == "ammo-turret" and value.attack_parameters then result.attackRange = value.attack_parameters.range end
   if value.type == "transport-belt" or value.type == "underground-belt" or value.type == "splitter" then result.beltSpeed = value.belt_speed end
   if #value.fluidbox_prototypes > 0 then
     result.fluidBoxes = {}
