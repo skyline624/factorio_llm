@@ -6,23 +6,31 @@ public sealed record PlacementCandidate(MapPosition Position, int Direction, dou
 public sealed class PlacementPlanner
 {
     public MapPosition? FindInteractionApproach(SpatialCollisionField field, SpatialEntity entity,
+        CancellationToken cancellationToken = default) => FindInteractionApproach(field, [entity], cancellationToken);
+
+    public MapPosition? FindInteractionApproach(SpatialCollisionField field, IReadOnlyList<SpatialEntity> entities,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (entities.Count == 0) throw new ArgumentException("At least one observed interaction target is required.", nameof(entities));
         double reach = field.Map.Actor.ReachDistance - 1;
         if (reach <= 0) return null;
         MapPosition start = field.Map.Actor.Position;
-        if (start.DistanceTo(entity.Position) <= reach && CanStop(field, start)) return start;
+        if (WithinReach(start) && CanStop(field, start)) return start;
         var candidates = new List<MapPosition>();
-        for (double x = Math.Ceiling((entity.Position.X - reach) * 2) / 2; x <= entity.Position.X + reach; x += 0.5)
-            for (double y = Math.Ceiling((entity.Position.Y - reach) * 2) / 2; y <= entity.Position.Y + reach; y += 0.5)
+        double left = entities.Max(e => e.Position.X - reach), right = entities.Min(e => e.Position.X + reach);
+        double top = entities.Max(e => e.Position.Y - reach), bottom = entities.Min(e => e.Position.Y + reach);
+        for (double x = Math.Ceiling(left * 2) / 2; x <= right; x += 0.5)
+            for (double y = Math.Ceiling(top * 2) / 2; y <= bottom; y += 0.5)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var point = new MapPosition(x, y);
-                if (point.DistanceTo(entity.Position) <= reach && CanStop(field, point)) candidates.Add(point);
+                if (WithinReach(point) && CanStop(field, point)) candidates.Add(point);
             }
-        return candidates.OrderBy(p => p.DistanceTo(start)).ThenBy(p => p.DistanceTo(entity.Position))
+        return candidates.OrderBy(p => p.DistanceTo(start)).ThenBy(p => entities.Sum(e => p.DistanceTo(e.Position)))
             .FirstOrDefault(p => new RoutePlanner().Find(field, p, token: cancellationToken).Status == RouteStatus.Found);
+
+        bool WithinReach(MapPosition point) => entities.All(e => point.DistanceTo(e.Position) <= reach);
     }
 
     public MapPosition? FindApproach(SpatialCollisionField field, string item, PlacementCandidate placement,

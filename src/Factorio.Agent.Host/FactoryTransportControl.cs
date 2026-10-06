@@ -17,7 +17,15 @@ public sealed class FactoryTransportControl(IGameClient game, IControllerJournal
         if (Matches(arm.InserterControl, item, chestId, maximum, comparator)) return;
         if (map.Prototypes[arm.Name].FilterSlots is not > 0)
             throw new InvalidOperationException("Persistent transport requires native inserter filters; update the mod if their geometry is missing.");
-        await controller.ApproachEntityAsync(inserterId, arm.Position, catalog, token);
+        if (chestId is null) await controller.ApproachEntityAsync(inserterId, arm.Position, catalog, token);
+        else
+        {
+            // Native wiring checks both endpoints. Approaching only the arm can leave a long arm's chest out of reach.
+            var chest = map.Entities.Single(e => e.Id == chestId);
+            var approach = new PlacementPlanner().FindInteractionApproach(new(map), [arm, chest], token)
+                ?? throw new InvalidOperationException("No reachable position can interact with both the inserter and its chest.");
+            await controller.TravelAsync(approach, .2, catalog, token);
+        }
         var receipt = await controller.WorkAsync("configure_inserter", new { entityId = inserterId, item, chestEntityId = chestId, maximum, comparator },
             600, token: token);
         if (receipt.Status != "completed" || receipt.Effects.GetProperty("targetId").GetString() != inserterId

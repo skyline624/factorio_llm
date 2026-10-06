@@ -150,16 +150,20 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         var endpoints = targetIds.Concat(sources.Select(c => c.Entities["output-chest"])).ToArray();
         var steam = await powerController.SteamItemsAsync(catalog, token);
         var equipment = SelectEquipment(catalog);
+        string? alternativeInserter = SelectAlternativeInserter(catalog);
         var builder = new FactoryTransportBuilder(game, journal, directory);
         var map = await builder.CaptureFuelFrameAsync(state, snapshot, endpoints, steam, catalog, controller, token,
-            equipment.UndergroundBelt);
+            equipment.UndergroundBelt, alternativeInserter);
         if (map is null) return (0, true);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel batch planning scope changed.");
         if (endpoints.Any(id => !map.Entities.Any(e => e.Id == id))
             || map.Prototypes[map.Items["inserter"].EntityName].FilterSlots is not > 0) return (0, true);
         var planning = FactoryTransportBuilder.ProtectBands(map, state, steam, sources.Select(c => c.Slot.Band).ToHashSet());
-        var plan = await ControllerPlanning.RunAsync(t => SearchBatch(planning, equipment, requests, t, token, maximumLinks),
+        var search = await ControllerPlanning.RunAsync(t => SearchWithInserterFallback(planning, equipment, requests,
+            alternativeInserter, t, token, maximumLinks),
             controller, TimeSpan.FromSeconds(45), token);
+        var plan = search.Plan;
+        equipment = search.Equipment;
         if (plan is null)
         {
             await journal.AppendAsync("power-fuel-batch-budget-exceeded", new { targets = targets.Length, sources = sources.Length,
@@ -173,7 +177,7 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         var records = plan.Links.Select(link => FactoryTransportBuilder.NewBus(
             sources.Single(c => c.Entities["output-chest"] == link.SourceId).Id,
             targets.Single(c => c.Entities["input-chest"] == link.TargetId).Id, FactoryLogistics.Fuel,
-            FactoryLogistics.PowerChestStacks * catalog.Items[FactoryLogistics.Fuel].StackSize, link.Plan, map.CollectedTick)).ToArray();
+            FactoryLogistics.PowerChestStacks * catalog.Items[FactoryLogistics.Fuel].StackSize, link.Plan, map.CollectedTick, equipment)).ToArray();
         foreach (var record in records) state = state.With(record.Cell).With(record.Bus);
         await registry.SaveAsync(state, token);
         await journal.AppendAsync("power-fuel-batch-plan", new { map.Scope, map.CollectedTick, buses = records.Select(r => r.Bus),
@@ -194,6 +198,30 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
             && !string.IsNullOrWhiteSpace(item.PlaceEntity)
             && catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == "underground-belt" && p.DeterministicItem))
             ? "underground-belt" : null);
+
+    internal static string? SelectAlternativeInserter(ProductionCatalog catalog) =>
+        catalog.Items.TryGetValue("long-handed-inserter", out var item) && item.PlaceEntityType == "inserter"
+            && !string.IsNullOrWhiteSpace(item.PlaceEntity)
+            && catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == "long-handed-inserter" && p.DeterministicItem))
+            ? "long-handed-inserter" : null;
+
+    internal static (BeltTransportBatchPlan? Plan, BeltTransportEquipment Equipment) SearchWithInserterFallback(
+        SpatialSnapshot planning, BeltTransportEquipment equipment, IReadOnlyList<BeltTransportRequest> requests,
+        string? alternativeInserter, CancellationToken planningToken, CancellationToken callerToken, int maximumLinks = 2)
+    {
+        var plan = SearchBatch(planning, equipment, requests, planningToken, callerToken, maximumLinks);
+        // Zero native assignments means no route search was spent. Both arm geometries share this caller's deadline
+        // and the unchanged collision/reservation map; a failed or expired route never starts another search budget.
+        if (plan is not { AssignmentUpperBound: 0, Searches: 0, BudgetExhausted: false, Links.Count: 0 }
+            || alternativeInserter is null || alternativeInserter == equipment.Inserter
+            || !planning.Items.TryGetValue(alternativeInserter, out var item)
+            || !planning.Prototypes.TryGetValue(item.EntityName, out var geometry)
+            || geometry.Type != "inserter" || !geometry.IsElectric || geometry.FilterSlots is not > 0
+            || geometry.InserterPickup is null || geometry.InserterDrop is null)
+            return (plan, equipment);
+        equipment = equipment with { Inserter = alternativeInserter };
+        return (SearchBatch(planning, equipment, requests, planningToken, callerToken, maximumLinks), equipment);
+    }
 
     internal static BeltTransportBatchPlan? SearchBatch(SpatialSnapshot planning, BeltTransportEquipment equipment,
         IReadOnlyList<BeltTransportRequest> requests,

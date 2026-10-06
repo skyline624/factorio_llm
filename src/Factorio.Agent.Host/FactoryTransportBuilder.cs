@@ -189,16 +189,17 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     }
 
     internal static (FactoryCell Cell, FactoryTransportBus Bus) NewBus(string sourceCellId, string targetCellId, string item,
-        int maximum, BeltTransportPlan plan, long tick)
+        int maximum, BeltTransportPlan plan, long tick, BeltTransportEquipment? equipment = null)
     {
+        equipment ??= Equipment;
         var entities = new Dictionary<string, PlannedEntity>(StringComparer.Ordinal);
-        Add("source-inserter", Equipment.Inserter, plan.SourceInserter);
-        Add("target-inserter-0", Equipment.Inserter, plan.TargetInserter);
-        for (int i = 0; i < plan.Belts.Count; i++) Add($"belt-{i}", plan.Belts[i].UndergroundType is null ? Equipment.Belt
+        Add("source-inserter", equipment.Inserter, plan.SourceInserter);
+        Add("target-inserter-0", equipment.Inserter, plan.TargetInserter);
+        for (int i = 0; i < plan.Belts.Count; i++) Add($"belt-{i}", plan.Belts[i].UndergroundType is null ? equipment.Belt
             : plan.UndergroundBeltItem ?? throw new InvalidDataException("Underground route has no construction item."), plan.Belts[i]);
-        for (int i = 0; i < plan.Poles.Count; i++) Add($"pole-{i}", Equipment.Pole, plan.Poles[i]);
+        for (int i = 0; i < plan.Poles.Count; i++) Add($"pole-{i}", equipment.Pole, plan.Poles[i]);
         string cellId = $"transport-{Guid.NewGuid():N}";
-        var cell = new FactoryCell(cellId, 0, new(0, 0, true), "transport", Equipment.Belt, null,
+        var cell = new FactoryCell(cellId, 0, new(0, 0, true), "transport", equipment.Belt, null,
             new Dictionary<string, string>(), "building", tick, Plan: entities);
         var bus = new FactoryTransportBus($"bus-{Guid.NewGuid():N}", sourceCellId, item, cellId,
             [new(targetCellId, "target-inserter-0", maximum)]);
@@ -243,9 +244,10 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         if (surveyed && (target.Kind == "power" || !TransportCorridorSurvey.CanSurvey(snapshot, frameEntities))) return false;
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
         var equipment = target.Kind == "power" ? PowerFuelTransport.SelectEquipment(catalog) : Equipment;
+        string? alternativeInserter = target.Kind == "power" ? PowerFuelTransport.SelectAlternativeInserter(catalog) : null;
         SpatialSnapshot? map;
         if (target.Kind == "power") map = await CaptureFuelFrameAsync(state, snapshot, frameEntities, steam, catalog, controller, token,
-            equipment.UndergroundBelt);
+            equipment.UndergroundBelt, alternativeInserter);
         else if (surveyed)
             map = await new TransportCorridorSurvey(game, journal).CaptureAsync(snapshot, frameEntities, GeometryItems(state, steam), catalog, controller, token);
         else
@@ -263,10 +265,22 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         map = ProtectBands(map, state, steam, target.Kind == "power" && source.IsResource ? new HashSet<int> { source.Slot.Band } : null);
         if (bus is null)
         {
-            var plan = new BeltTransportPlanner().Find(map, equipment, source.Entities["output-chest"], target.Entities["input-chest"], token,
+            BeltTransportPlan? plan;
+            if (target.Kind == "power")
+            {
+                BeltTransportRequest[] requests = [new(target.Entities["input-chest"], [source.Entities["output-chest"]])];
+                var search = await ControllerPlanning.RunAsync(t => PowerFuelTransport.SearchWithInserterFallback(map,
+                    equipment, requests, alternativeInserter, t, token, maximumLinks: 1), controller, TimeSpan.FromSeconds(45), token);
+                equipment = search.Equipment;
+                await journal.AppendAsync("power-fuel-single-search", new { sourceCellId, targetCellId, equipment,
+                    links = search.Plan?.Links.Count, search.Plan?.Searches, search.Plan?.BudgetExhausted,
+                    search.Plan?.AssignmentUpperBound, budgetSeconds = 45, map.CollectedTick }, token);
+                plan = search.Plan?.Links.SingleOrDefault()?.Plan;
+            }
+            else plan = new BeltTransportPlanner().Find(map, equipment, source.Entities["output-chest"], target.Entities["input-chest"], token,
                 maximumBelts: surveyed ? TransportCorridorSurvey.MaximumBelts : 200, nodeBudget: surveyed ? 100000 : 12000);
             if (plan is null) return false;
-            var record = NewBus(sourceCellId, targetCellId, item, maximum, plan, map.CollectedTick);
+            var record = NewBus(sourceCellId, targetCellId, item, maximum, plan, map.CollectedTick, equipment);
             await registry.SaveAsync(state.With(record.Cell).With(record.Bus), token);
             await journal.AppendAsync("factory-transport-plan", new { bus = record.Bus, record.Cell.Plan, map.CollectedTick }, token);
             await FinishAsync(record.Bus, catalog, controller, token);
@@ -441,7 +455,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         {
             if (ids.ContainsKey(p.Role)) continue;
             string id = await new PoweredMachineController(game, journal).BuildAtAsync(p.Item, new(p.Position, p.Direction, 0, p.UndergroundType), catalog, controller, token,
-                stoppedInserterItem: p.Item == Equipment.Inserter ? bus.Item : null);
+                stoppedInserterItem: catalog.Items[p.Item].PlaceEntityType == "inserter" ? bus.Item : null);
             ids[p.Role] = id;
             cell = cell with { Entities = new Dictionary<string, string>(ids, StringComparer.Ordinal) };
             await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
@@ -512,10 +526,11 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     // Built entities already export their geometry in the local photograph. Only unfinished non-transport plans need
     // additional item prototypes; retaining every historical plan eventually exceeds the native 16-item request budget.
     internal static string[] GeometryItems(FactoryState state, PowerExpansionController.SteamItems? steam = null,
-        string? undergroundBelt = null) =>
+        string? undergroundBelt = null, string? alternativeInserter = null) =>
         [.. Items.Concat(new FactoryGround(state, steam).Items)
             .Concat(UnfinishedParts(state).Select(p => p.Item))
-            .Concat(undergroundBelt is null ? [] : new[] { undergroundBelt }).Distinct(StringComparer.Ordinal)];
+            .Concat(undergroundBelt is null ? [] : new[] { undergroundBelt })
+            .Concat(alternativeInserter is null ? [] : new[] { alternativeInserter }).Distinct(StringComparer.Ordinal)];
 
     private static IEnumerable<PlannedEntity> UnfinishedParts(FactoryState state) =>
         state.Cells.Where(c => c.Status == "building" && c.Kind != "transport").SelectMany(c => c.Plan?.Values ?? []);
@@ -550,12 +565,12 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             ?? (cell.IsResource ? cell.Recipe : null);
     internal async Task<SpatialSnapshot?> CaptureFuelFrameAsync(FactoryState state, FactorySnapshot snapshot,
         IReadOnlyList<string> entityIds, PowerExpansionController.SteamItems? steam, ProductionCatalog catalog,
-        SpatialController controller, CancellationToken token, string? undergroundBelt = null)
+        SpatialController controller, CancellationToken token, string? undergroundBelt = null, string? alternativeInserter = null)
     {
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame factory scope changed.");
         if (PlanningCenter(snapshot, entityIds, 1, FuelPlanningRadius) is not { } center) return null;
         var spatial = new SpatialClient(game);
-        var items = GeometryItems(state, steam, undergroundBelt);
+        var items = GeometryItems(state, steam, undergroundBelt, alternativeInserter);
         var map = await spatial.CaptureAsync(items, FuelPlanningRadius, token);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Fuel frame planning scope changed.");
         bool moved = false;

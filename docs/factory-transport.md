@@ -2,6 +2,10 @@
 
 `FactoryDirector` ajoute au plus deux liaisons par appel après la construction des étapes de production. C# choisit un producteur enregistré et un ingrédient solide de la recette destinataire, puis calcule les bras, les poteaux et les tapis depuis la géométrie native observée. Les ateliers conservent leurs coffres d'entrée et de sortie.
 
+Pour le charbon des chaudières, le bras normal reste prioritaire. Lorsque le calcul des ports natifs donne zéro affectation possible sans avoir lancé de recherche de route, C# peut essayer le bras long, si sa recette est débloquée et si sa géométrie électrique et ses filtres sont observés. Cet essai garde toutes les réservations, le délai commun de 45 secondes et la limite de 64 recherches. Un trajet impossible après recherche ou un délai expiré ne déclenche pas un second budget. Le même choix s'applique au dernier consommateur isolé. Le registre conserve les articles réellement sélectionnés ; chaque bras de transport, quel que soit son article natif, est construit arrêté et filtré avant la configuration de son contrôle. Les extensions d'un bus existant conservent encore leur calcul avec bras normal ; elles peuvent être différées faute de port.
+
+Avant de câbler le contrôle de stock, C# calcule un arrêt stable et accessible depuis lequel le personnage peut atteindre à la fois le bras et le coffre, avec une marge sur sa portée native. Atteindre seulement le bras ne suffit pas, notamment lorsque sa portée de prise ou de dépôt dépasse une case. Un montage sans point d'interaction commun est refusé ; les contrôles de portée natifs restent appliqués.
+
 Le point de préparation du cadrage de combustible doit permettre un arrêt stable du personnage. Un tapis, un tapis souterrain ou un répartiteur reste traversable, mais ne convient pas à cet arrêt. C# vérifie cette condition au centre puis sur les autres candidats observés, en conservant la marge de cadrage des extrémités. Si aucun point stable connu ne convient, le cadrage est différé ; les tapis ne sont pas retirés et aucun terrain inconnu n'est supposé libre.
 
 ## Corridors entre zones éloignées — développement
