@@ -99,6 +99,83 @@ public sealed class SpatialControllerTests
         Assert.Equal(new MapPosition[] { new(7, 3) }, SpatialController.SelectMovePath(field, new(RouteStatus.Found, points, 0, 8)));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TightStableTravelRetainsItsCornersWithoutANetworkStopAtEveryPoint(bool continuous)
+    {
+        var map = TightThreatTravelMap(continuous);
+        MapPosition destination = new(30, -14);
+        var field = new SpatialCollisionField(map, ExplorationPlanner.ThreatMargin);
+        Assert.True(field.SegmentClear(map.Actor.Position, destination));
+        Assert.False(field.SteeringRegionClear(map.Actor.Position, destination));
+        var points = SpatialController.Subdivide(map.Actor.Position, [destination]);
+        var path = SpatialController.SelectMovePath(field, new(RouteStatus.Found, points, 0, 9));
+        Assert.True(PlacementPlanner.CanStop(field, path[0]));
+        if (!continuous) { Assert.Single(path); return; }
+        Assert.True(path.Count > 1);
+        Assert.True(path[^1].DistanceTo(destination) < path[0].DistanceTo(destination));
+        map = map with { Actor = map.Actor with { Movement = new("move", 1, path.Count) } };
+        Assert.True(SpatialController.MovementPathIsClear(map, map.Scope, "move", field.Map.Actor.Position, path, out _));
+        var blocked = new SpatialEntity("new-obstacle", "wall", new(26, -12), new(new(25.7, -12.3), new(26.3, -11.7)), 0, "agent");
+        map = map with { Entities = [blocked] };
+        Assert.False(SpatialController.MovementPathIsClear(map, map.Scope, "move", field.Map.Actor.Position, path, out _));
+    }
+
+    [Fact]
+    public void GroupedTightTravelKeepsTheTotalDistanceAndWaypointBudgets()
+    {
+        var map = TightThreatTravelMap(true);
+        var field = new SpatialCollisionField(map, ExplorationPlanner.ThreatMargin);
+        var points = SpatialController.Subdivide(map.Actor.Position, [new(65, -31.5)]);
+        var path = SpatialController.SelectMovePath(field, new(RouteStatus.Found, points, 0, 48));
+        double length = map.Actor.Position.DistanceTo(path[0]) + path.Zip(path.Skip(1), (a, b) => a.DistanceTo(b)).Sum();
+        Assert.InRange(length, 0, 24.000000001);
+        Assert.InRange(path.Count, 2, 64);
+        Assert.NotEqual(points[^1], path[^1]);
+    }
+
+    private static SpatialSnapshot TightThreatTravelMap(bool continuous)
+    {
+        var map = SpatialPlannerTests.Map([]);
+        return map with { ContinuousMovePaths = continuous, Actor = map.Actor with { Position = new(22, -10) },
+            Bounds = new(new(-26, -58), new(71, 39)), Coverage = map.Coverage with { Radius = 48 },
+            Rows = Enumerable.Range(-58, 97).Select(y => new TileRun(-26, y, 97, "grass")).ToArray(),
+            StationaryThreats = [new("worm", new(44, 34), 25, map.CollectedTick)] };
+    }
+
+    [Fact]
+    public void ReusedShortFirstCornerIncludesThePreviousNativeArrivalOffset()
+    {
+        var map = TightThreatTravelMap(true);
+        var intendedStart = map.Actor.Position;
+        var points = SpatialController.Subdivide(intendedStart, [new(30, -14)]);
+        map = map with { Actor = map.Actor with { Position = new(21.9375, -9.87890625) } };
+        var path = SpatialController.SelectMovePath(new(map, ExplorationPlanner.ThreatMargin), new(RouteStatus.Found, points, 0, 9));
+        Assert.True(path.Count > 1);
+        Assert.InRange(map.Actor.Position.DistanceTo(path[0]), .75, .9);
+        var submittedStart = map.Actor.Position;
+        map = map with { Actor = map.Actor with { Movement = new("move", 1, path.Count) } };
+        Assert.True(SpatialController.MovementPathIsClear(map, map.Scope, "move", submittedStart, path, out _));
+    }
+
+    [Fact]
+    public void AContinuousDistanceBoundOnABeltHandsOffAtTheLastStableCorner()
+    {
+        var map = SpatialPlannerTests.Map([]);
+        map = map with { ContinuousMovePaths = true,
+            Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
+                { ["belt"] = new("belt", "transport-belt", new(new(-.4, -.4), new(.4, .4)), new([], false, false, false), 1, 1) },
+            Entities = [new("wall", "wall", new(1.5, 1.5), new(new(.5, .5), new(2.5, 2.5)), 0, "agent"),
+                new("belt", "belt", new(1.5, 3), new(new(1.1, 2.6), new(1.9, 3.4)), 0, "agent")] };
+        var field = new SpatialCollisionField(map);
+        var points = SpatialController.Subdivide(map.Actor.Position, [new(0, 3), new(3, 3)]);
+        var path = SpatialController.SelectMovePath(field, new(RouteStatus.Found, points, 0, 6), 5);
+        Assert.True(PlacementPlanner.CanStop(field, path[^1]));
+        Assert.DoesNotContain(new MapPosition(1.5, 3), path);
+        Assert.True(path[^1].DistanceTo(new(3, 3)) < map.Actor.Position.DistanceTo(new(3, 3)));
+    }
+
     private static SpatialSnapshot BeltCornerMap()
     {
         var map = SpatialPlannerTests.Map([]);

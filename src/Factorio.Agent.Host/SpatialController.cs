@@ -330,7 +330,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         return SelectWaypoint(field, route, field.Map.Actor.Position, maximumMoveDistance);
     }
 
-    /// <summary>Continues through moving terrain without a network pause at each planned corner.</summary>
+    /// <summary>Groups validated corners into a bounded native move, preferring a stable handoff.</summary>
     public static IReadOnlyList<MapPosition> SelectMovePath(SpatialCollisionField field, RoutePlan route, int maximumMoveDistance = 24)
     {
         if (maximumMoveDistance is < 1 or > 24) throw new ArgumentOutOfRangeException(nameof(maximumMoveDistance));
@@ -340,6 +340,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         var path = new List<MapPosition>();
         MapPosition from = field.Map.Actor.Position;
         double length = 0;
+        int stablePathCount = 0;
         var remaining = route;
         while (remaining.Waypoints.Count > 0 && path.Count < 64)
         {
@@ -352,10 +353,14 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             }
             path.Add(next);
             length += distance;
-            if (PlacementPlanner.CanStop(field, next)) break;
+            if (PlacementPlanner.CanStop(field, next)) stablePathCount = path.Count;
             remaining = remaining with { Waypoints = remaining.Waypoints.SkipWhile(p => p != next).Skip(1).ToArray() };
             from = next;
         }
+        // If the bound cuts a moving belt, hand off at the last stable point already in this path.
+        // A path entirely on moving terrain retains its previous bounded behavior and is reobserved.
+        if (stablePathCount > 0 && stablePathCount < path.Count)
+            path.RemoveRange(stablePathCount, path.Count - stablePathCount);
         return path.AsReadOnly();
     }
 
@@ -486,7 +491,10 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             // invalidating an unchanged future corner during the preceding long leg. Classification uses
             // the submitted path: a long move approaching its end must not become a tight-step exception.
             MapPosition plannedFrom = index == 0 ? plannedStart : path[index - 1];
-            bool tightStep = path.Count > 1 && plannedFrom.DistanceTo(path[index]) <= .75 + 1e-9;
+            // A reused first subdivided step can include the previous receipt's arrival offset.
+            // Subsequent legs keep their planned lengths; a long submitted leg never becomes tight near its end.
+            double tightLength = .75 + (index == 0 ? NativeMoveTolerance : 0);
+            bool tightStep = path.Count > 1 && plannedFrom.DistanceTo(path[index]) <= tightLength + 1e-9;
             if (!field.SteeringRegionClear(from, path[index])
                 && (!tightStep || from.DistanceTo(path[index]) > .75 + .15 + 1e-9
                     || !field.SegmentClear(from, path[index]))) return false;
