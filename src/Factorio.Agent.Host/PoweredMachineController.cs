@@ -125,7 +125,7 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         }
         for (int cleared = 0; ; cleared++)
         {
-            MapPosition approach = new PlacementPlanner().FindApproach(new(current), item, candidate, remainingTargets,
+            MapPosition approach = new PlacementPlanner().FindApproach(new(current, ExplorationPlanner.ThreatMargin), item, candidate, remainingTargets,
                 cancellationToken: token)
                 ?? throw new PlacementRefusedException("No reachable approach outside the planned footprint.");
             await controller.NavigateAsync(approach, .2, token);

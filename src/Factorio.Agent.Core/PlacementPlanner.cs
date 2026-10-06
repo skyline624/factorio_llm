@@ -69,7 +69,7 @@ public sealed class PlacementPlanner
             {
                 Actor = field.Map.Actor with { Position = approach },
                 Entities = completedSite?.Entities ?? futureEntities
-            });
+            }, field.ThreatMargin);
             if (!CanStop(after, approach)) return false;
             if (!CanEscape(after, futureBounds, cancellationToken)) return false;
             if (remainingTargets is null || remainingTargets.Count == 0) return true;
@@ -87,7 +87,8 @@ public sealed class PlacementPlanner
             ? new(new(placement.Position.X - .5, placement.Position.Y - .5), new(placement.Position.X + .5, placement.Position.Y + .5))
             : building.CollisionBox.Rotate(placement.Direction).Translate(placement.Position);
         return CanEscape(new(field.Map with { Entities = field.Map.Entities.Append(new SpatialEntity(
-            "planned-construction", building.Name, placement.Position, footprint, placement.Direction, "planned")).ToArray() }), footprint, cancellationToken);
+            "planned-construction", building.Name, placement.Position, footprint, placement.Direction, "planned")).ToArray() },
+            field.ThreatMargin), footprint, cancellationToken);
     }
 
     // Prove a continuous, body-sized exit beyond the construction neighbourhood. Merely being

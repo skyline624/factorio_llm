@@ -13,6 +13,7 @@ public sealed class SpatialCollisionField
     private readonly SpatialCollisionField? basis;
     private readonly double stationaryThreatMargin;
     public SpatialSnapshot Map { get; }
+    public double ThreatMargin => stationaryThreatMargin;
     public EntityGeometry Character => Map.Prototypes[Map.Actor.Name];
 
     public SpatialCollisionField(SpatialSnapshot map, double stationaryThreatMargin = StationaryThreatMargin)
