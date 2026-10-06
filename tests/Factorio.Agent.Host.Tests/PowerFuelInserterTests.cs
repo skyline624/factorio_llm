@@ -125,6 +125,56 @@ public sealed class PowerFuelInserterTests
         Assert.Equal(expanded.Length, expanded.Distinct().Count());
     }
 
+    [Fact]
+    public void DenseObservedConsumerIsDeferredWithoutDiscardingOtherConsumers()
+    {
+        var map = BlockTarget(Map(false), 1, 2);
+        var unavailable = PowerFuelTransport.InaccessibleFuelTargets(map, Equipment, ["target-0", "target-1"], LongArm);
+        Assert.Equal(new[] { "target-0" }, unavailable);
+        Assert.Equal(new[] { "target-0" }, BeltTransportBatchPlanner.InaccessibleTargets(map, Equipment,
+            ["target-0", "target-1"]));
+        Assert.Equal(new[] { "target-0" }, BeltTransportBatchPlanner.InaccessibleTargets(map,
+            Equipment with { Inserter = LongArm }, ["target-0", "target-1"]));
+    }
+
+    [Fact]
+    public void NativeLongArmAccessPreventsDeferringAnOrdinaryBlockedConsumer()
+    {
+        var map = BlockTarget(Map(false), 1);
+        Assert.Contains("target-0", BeltTransportBatchPlanner.InaccessibleTargets(map, Equipment, ["target-0"]));
+        Assert.Empty(PowerFuelTransport.InaccessibleFuelTargets(map, Equipment, ["target-0"], LongArm));
+        Assert.Contains("target-0", PowerFuelTransport.InaccessibleFuelTargets(map, Equipment, ["target-0"], null));
+    }
+
+    [Fact]
+    public void UnavailableSourcesDoNotDeclareFreeConsumersInaccessible()
+    {
+        var map = Map(true);
+        Assert.Equal(0, PowerFuelTransport.SearchBatch(map, Equipment, Requests(1), default, default)!.AssignmentUpperBound);
+        Assert.Empty(PowerFuelTransport.InaccessibleFuelTargets(map, Equipment, ["target-0", "target-1"], LongArm));
+    }
+
+    [Fact]
+    public void ANewNativePhotographRetriesAConsumerWhoseObstructionsWereRemoved()
+    {
+        var before = BlockTarget(Map(false), 1, 2);
+        Assert.Contains("target-0", PowerFuelTransport.InaccessibleFuelTargets(before, Equipment, ["target-0"], LongArm));
+        var after = before with { CollectedTick = before.CollectedTick + 1,
+            Entities = before.Entities.Where(e => !e.Id.StartsWith("target-obstruction-", StringComparison.Ordinal)).ToArray() };
+        Assert.Empty(PowerFuelTransport.InaccessibleFuelTargets(after, Equipment, ["target-0"], LongArm));
+    }
+
+    private static SpatialSnapshot BlockTarget(SpatialSnapshot map, params int[] distances)
+    {
+        var target = map.Entities.Single(e => e.Id == "target-0");
+        var geometry = map.Prototypes["iron-chest"];
+        var added = distances.SelectMany(d => new MapPosition[] { new(0, -d), new(0, d), new(-d, 0), new(d, 0) })
+            .Select((offset, i) => new SpatialEntity($"target-obstruction-{i}", geometry.Name,
+                new(target.Position.X + offset.X, target.Position.Y + offset.Y),
+                geometry.CollisionBox.Translate(new(target.Position.X + offset.X, target.Position.Y + offset.Y)), 0, "own"));
+        return map with { Entities = [.. map.Entities, .. added] };
+    }
+
     private static BeltTransportRequest[] Requests(int count) => Enumerable.Range(0, count)
         .Select(i => new BeltTransportRequest($"target-{i}", [$"source-{i}"])).ToArray();
 

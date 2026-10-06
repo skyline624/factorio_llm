@@ -9,6 +9,20 @@ public sealed record BeltTransportBatchProgress(int Search, int Selected, string
 /// <summary>Compares bounded route orders before one ingredient bus consumes another's chest port or passage.</summary>
 public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>? progress = null)
 {
+    /// <summary>Reports consumers with no native input port in this photograph; it does not test source access or routes.</summary>
+    public static IReadOnlySet<string> InaccessibleTargets(SpatialSnapshot map, BeltTransportEquipment equipment,
+        IReadOnlyList<string> targetIds, CancellationToken token = default)
+    {
+        if (targetIds.Count is < 1 or > 8 || targetIds.Any(string.IsNullOrWhiteSpace)
+            || targetIds.Distinct(StringComparer.Ordinal).Count() != targetIds.Count)
+            throw new ArgumentException("One to eight distinct observed targets required.", nameof(targetIds));
+        var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
+        var routing = new BeltRoutingField(map, map.Prototypes[map.Items[equipment.Belt].EntityName], map.Actor.Position,
+            token, collisionField: field);
+        return targetIds.Where(id => NativePorts(map, field, routing, equipment, id, false, token).Count == 0)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
     public BeltTransportBatchPlan Find(SpatialSnapshot map, BeltTransportEquipment equipment, IReadOnlyList<string> sourceIds,
         string targetId, int maximumSearches = 48, CancellationToken token = default)
     {
