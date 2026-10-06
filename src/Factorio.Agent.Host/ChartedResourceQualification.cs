@@ -12,11 +12,14 @@ namespace Factorio.Agent.Host;
 /// radar stands. Charting, deaths, extraction, power and research stay native; only the terrain, deposit, equipment and
 /// prerequisites are prepared.
 /// </summary>
-public sealed class ChartedResourceQualification(RuntimeSession session, bool radar = false, bool danger = false)
+public sealed class ChartedResourceQualification(RuntimeSession session, bool radar = false, bool danger = false, bool ring = false)
 {
     // Chunk (2,0) is inside the 5x5 square the actor requests from (0,0). The actor otherwise stands in chunks (-1,-1) to (0,0),
     // whose squares never reach chunk (2,-3); a radar beside the steam pole scans that chunk early in its third ring.
     private static readonly MapPosition Deposit = new(80.5, 24.5), HiddenDeposit = new(80.5, -80.5);
+    // On the 160-tile search ring, beside its point nearest the origin (ties go to the most negative y), far outside the square
+    // the actor requests from the origin, with no radar: only the search ring can lead the actor there.
+    private static readonly MapPosition RingDeposit = new(0.5, -158.5);
     private static readonly MapPosition Home = new(0, 0), HiddenHome = new(-8, 8);
     // Far from the base and the hidden deposit; the actor dies on arrival, before its square is charted there.
     private static readonly MapPosition[] DeathPlaces = [new(90.5, 40.5), new(100.5, -20.5)];
@@ -31,13 +34,14 @@ public sealed class ChartedResourceQualification(RuntimeSession session, bool ra
         var journal = new ControllerJournal(journalPath);
         var evidence = new List<object>();
         bool hidden = radar || danger, passed = false;
-        var deposit = hidden ? HiddenDeposit : Deposit;
+        if (ring && (radar || danger)) throw new ArgumentException("The ring search variant has no radar and no prepared deaths.");
+        var deposit = ring ? RingDeposit : hidden ? HiddenDeposit : Deposit;
         try
         {
             // The native marker keeps at most 128 bytes of reason.
             var mark = await game.ExecuteAsync(GameRequest.Create("mark_fixture", new
             {
-                reason = "Prepared shore, out-of-view oil, kit, oil-gathering" + (hidden ? ", radar" : "")
+                reason = "Prepared shore, out-of-view oil, kit, oil-gathering" + (hidden ? ", radar" : "") + (ring ? ", ring oil" : "")
                     + (danger ? ", two deaths" : "") + "; native charting, oil trigger. Not a campaign."
             }), token);
             Require(mark.Ok, $"Fixture marker rejected: {mark.Error?.Code}.");
@@ -81,7 +85,8 @@ public sealed class ChartedResourceQualification(RuntimeSession session, bool ra
                 rememberedCrudeOil = memory.Resources.Count(r => r.Name == "crude-oil"), activeDeaths = zones });
             Require(!before.GetProperty("researched").GetBoolean() && !view.Bounds.Contains(deposit)
                 && memory.Resources.All(r => r.Name != "crude-oil"), "The deposit was observed or remembered, or the trigger already researched.");
-            Require(chartedBefore == !hidden, hidden ? "The hidden deposit was already charted before any radar." : "The deposit chunk was not charted by the actor's square.");
+            Require(chartedBefore == !(hidden || ring), hidden || ring ? "The hidden deposit was already charted before any search."
+                : "The deposit chunk was not charted by the actor's square.");
             Require(zones.Count == (danger ? DeathPlaces.Length : 0), "The active own death zones differ from the prepared deaths.");
 
             if (hidden)
@@ -124,7 +129,7 @@ public sealed class ChartedResourceQualification(RuntimeSession session, bool ra
                     && FactoryPower.IsFed(known, cell.Entities["machine"]) == true && after.GetProperty("radarEnergy").GetDouble() > 0,
                     "No single registered radar stands powered on a fed network.");
             }
-            else Require(facts.RadarBuilds == 0 && cells.Length == 0, "A radar was built although the deposit was charted.");
+            else Require(facts.RadarBuilds == 0 && cells.Length == 0, "A radar was built although none was available or needed.");
             Require(facts.Mines == 0, "Unexpected manual mining.");
             if (danger)
             {
@@ -139,6 +144,14 @@ public sealed class ChartedResourceQualification(RuntimeSession session, bool ra
             Require(after.GetProperty("pumpjackDistance").GetDouble() < 2 && after.GetProperty("pumpjack").GetString() == result!.MachineId,
                 "The extractor does not stand on the prepared deposit.");
             Require(facts.PumpBuilds == 1 && facts.Refusals == 0, "Unexpected extractor construction or refusal.");
+            if (ring)
+            {
+                int rings = (await File.ReadAllLinesAsync(journalPath, token)).Count(l => l.Contains("\"exploration-survey-ring\"", StringComparison.Ordinal));
+                evidence.Add(new { check = "search-ring-steps", rings });
+                Require(rings > 0, "The never-seen deposit was not sought on the search ring.");
+                passed = true;
+                return path;
+            }
             Require(facts.Searches > 0 && facts.BlindSearches == 0 && facts.FirstOrigin == ResourceSighting.Charted,
                 "The search did not follow the charted destination without blind exploration.");
             Require(facts.SurveyTickOfDeposit is { } seen && seen <= facts.FirstSearchTick,
@@ -151,7 +164,7 @@ public sealed class ChartedResourceQualification(RuntimeSession session, bool ra
         finally
         {
             await LocalJson.WriteAsync(path, new { kind = "prepared-charted-resource-qualification", passed, isAutonomousCampaign = false,
-                radar, danger, deposit, journalPath, evidence }, CancellationToken.None);
+                radar, danger, ring, deposit, journalPath, evidence }, CancellationToken.None);
         }
     }
 

@@ -66,7 +66,7 @@ try
           verify-assembly-batches --session FILE
           verify-campaign-journals --session FILE
           verify-fluid-extraction --session FILE [--reuse] [--stationary-threat] [--factory-adoption] [--expansion] [--defer-expansion]
-          verify-charted-resources --session FILE [--radar] [--danger-zone]
+          verify-charted-resources --session FILE [--radar] [--danger-zone] [--ring]
           verify-furnace-fleet --session FILE [--item steel-plate|stone-brick]
           verify-electric-extraction --session FILE [--item iron-ore|iron-plate]
           verify-smelting-fuel --session FILE
@@ -462,7 +462,7 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new ChartedResourceQualification(session, options.ContainsKey("radar"),
-                options.ContainsKey("danger-zone")).RunAsync(shutdown.Token) });
+                options.ContainsKey("danger-zone"), options.ContainsKey("ring")).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-smelting-fuel":

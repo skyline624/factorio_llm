@@ -279,7 +279,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
 
     public async Task<ExplorationWaypoint> FindExplorationWaypointAsync(ExplorationPlanner planner, ProductionCatalog catalog,
         string wanted, MapPosition? destination = null, CancellationToken token = default, bool avoidDestinationDeathZones = false,
-        IReadOnlySet<string>? deferredResourceIds = null)
+        IReadOnlySet<string>? deferredResourceIds = null, bool surveyRing = false)
     {
         for (int cleared = 0; ; cleared++)
         {
@@ -312,7 +312,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                     }, token);
             }
             MapPosition? ring = null;
-            if (destination is null && remembered is null && hint is null && memory is not null && wanted.Length > 0
+            // Fluid searches pass no solid item (an occupied deposit must not be chosen again) but ask for the rings explicitly.
+            if (destination is null && remembered is null && hint is null && memory is not null && (wanted.Length > 0 || surveyRing)
                 && deferredResourceIds is not { Count: > 0 })
             {
                 var nests = game is INestMemoryReader nestReader ? await nestReader.ReadNestMemoryAsync(map.Scope, token) : null;

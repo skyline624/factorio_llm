@@ -381,7 +381,7 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
             // Empty wanted avoids selecting an occupied local deposit again; an actual historical destination
             // guides successive local steps and is reobserved, while blind steps retain normal hazard exclusions.
             var frontier = await controller.FindExplorationWaypointAsync(exploration, catalog, "", remembered?.Position, token,
-                avoidDestinationDeathZones: true);
+                avoidDestinationDeathZones: true, surveyRing: true);
             await journal.AppendAsync("fluid-extractor-exploration", new { resource, attempt, remembered, frontier,
                 deferredObservedResources = unsuitable, limit = MaximumExtractorSearchSteps }, token);
             await controller.NavigateAsync(frontier.Position, cancellationToken: token);

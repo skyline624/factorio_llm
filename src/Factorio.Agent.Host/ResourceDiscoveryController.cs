@@ -81,7 +81,7 @@ public sealed class ResourceDiscoveryController(IGameClient game, IControllerJou
                 throw new ExplorationTooDangerousException($"No safe remembered or charted {resource} destination; {deaths.Count} recent own deaths refuse a blind exploration step.");
             await new SurvivalKitController(game, journal).BeforeTripAsync("resource-discovery", token);
             var waypoint = await controller.FindExplorationWaypointAsync(exploration, catalog, "", destination?.Position, token,
-                avoidDestinationDeathZones: true);
+                avoidDestinationDeathZones: true, surveyRing: true);
             await journal.AppendAsync("resource-discovery-search", new { resource, steps, map.Scope, map.CollectedTick, destination, waypoint }, token);
             await controller.NavigateAsync(waypoint.Position, cancellationToken: token);
         }

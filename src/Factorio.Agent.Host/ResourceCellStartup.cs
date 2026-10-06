@@ -51,7 +51,13 @@ internal sealed class ResourceCellStartup(IGameClient game, IControllerJournal j
             if (!await PresentAsync(stock, id)) return false;
             if (!Cold(stock, id)) return true;
             var entity = Entity(stock, id)!;
-            await controller.ApproachEntityAsync(id, entity.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!, catalog, token);
+            try { await controller.ApproachEntityAsync(id, entity.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!, catalog, token); }
+            catch (EntityMissingException)
+            {
+                // Destroyed between the census and the approach (seed 987654321, 2026-10-06): maintenance rebuilds the cell.
+                await journal.AppendAsync("resource-startup-entity-missing", new { cell = cell.Id, entityId = id }, token);
+                return false;
+            }
             stock = await reader.CaptureAsync([FactoryLogistics.Fuel], cancellationToken: token);
             Require(stock);
             if (!await PresentAsync(stock, id)) return false;
