@@ -115,7 +115,14 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             if (remaining.ReadyOutput > 0) continue;
             bool needsExtraction = remaining.InputToInsert > 0;
             if (expanding && needsExtraction && iteration % 20 == 0)
+            {
                 await ExpandAsync(targetStock - state.Inventory.GetValueOrDefault(item));
+                // Building and fuelling pairs moved stock: the fuel checks below observe afresh.
+                state = await production.ObserveAsync(token);
+                RequireScope(state.Scope);
+                supplied = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+                RequireScope(supplied.Scope);
+            }
             if (needsExtraction && iteration % 10 == 0
                 && await new ExtractionRecoveryController(game, journal).TryRecoverAsync(drillId, catalog, controller, token))
             {
@@ -127,13 +134,14 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             }
             if (needsExtraction && electric && iteration % 10 == 0)
                 await EnsurePowerAsync(0, reserve: false);
-            else if (needsExtraction && !electric) await FuelAsync(drillId, drill.Position, Primary());
-            await FuelAsync(receiver.Id, receiver.Position, Primary(), needsExtraction);
+            // This iteration's observation and photograph answer "still fuelled?" for every machine; only a refuel observes again.
+            else if (needsExtraction && !electric) await FuelAsync(drillId, drill.Position, Primary(), observed: state, burning: supplied);
+            await FuelAsync(receiver.Id, receiver.Position, Primary(), needsExtraction, state, supplied);
             helpers.RemoveAll(h => !state.Entities.Any(e => e.Id == h.DrillId) || !state.Entities.Any(e => e.Id == h.FurnaceId));
             foreach (var helper in helpers)
             {
-                if (needsExtraction) await FuelAsync(helper.DrillId, helper.DrillPosition, helper);
-                await FuelAsync(helper.FurnaceId, helper.FurnacePosition, helper, needsExtraction);
+                if (needsExtraction) await FuelAsync(helper.DrillId, helper.DrillPosition, helper, observed: state, burning: supplied);
+                await FuelAsync(helper.FurnaceId, helper.FurnacePosition, helper, needsExtraction, state, supplied);
             }
             await WorkAsync("wait", new { ticks = 60 });
         }
@@ -289,12 +297,13 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             return local;
         }
 
-        async Task FuelAsync(string entityId, MapPosition position, SmeltingPair pair, bool includeDrillReserve = true)
+        async Task FuelAsync(string entityId, MapPosition position, SmeltingPair pair, bool includeDrillReserve = true,
+            ProductionState? observed = null, FactorySnapshot? burning = null)
         {
-            ProductionState state = await production.ObserveAsync(token);
+            ProductionState state = observed ?? await production.ObserveAsync(token);
             RequireScope(state.Scope);
             if (state.Entities.Single(e => e.Id == entityId).InventoryTotal("fuel") > 0) return;
-            var burning = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+            burning ??= await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
             RequireScope(burning.Scope);
             if (!NativeBurnerStock.From(burning, entityId).Empty) return;
             fuelPlan = ChooseFuel(state, includeDrillReserve);
