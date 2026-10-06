@@ -20,6 +20,10 @@ Jusqu'au 6 octobre 2026, l'agent ne faisait que défendre : périmètres de tour
 4. pour chaque étape (au plus 12) : marche vers la position de pose par une route qui ignore les enveloppes de vers, en déplacements natifs de 24 cases au plus ; pose et charge les tourelles par des opérations payées ; se replie ; attend au plus une minute de combat en observant la cible et les tourelles ; ramasse les survivantes par `mine` ;
 5. s'arrête lorsque plus aucune structure n'est observée dans le nid, après 8 tourelles perdues, sur une exposition supérieure à 15 cases, ou sans placement possible.
 
+## Reconnaissance après une attaque
+
+Un nid jamais vu ne peut pas être choisi. Dans la partie normale de graine **20261106**, des biters venus d'un nid inconnu ont détruit 43 entités de la zone minière à deux heures de jeu. Après une attaque enregistrée dans l'heure de jeu précédente, au plus une fois par heure de jeu, et seulement si aucun nid connu n'est à portée, l'acteur parcourt huit points d'un cercle situé 96 cases au-delà de l'industrie (au moins 128 cases du centre), en commençant par la direction de la dernière attaque. Ses photographies ordinaires alimentent la mémoire des nids ; la ronde s'arrête dès qu'un nid à portée est connu, puis le nettoyage commence. Un tronçon impossible est journalisé et sauté.
+
 ## Preuve composant
 
 Le 6 octobre 2026, la fixture distincte **20261150** sur Factorio **2.0.77 headless** (`verify-nest-clearing`) prépare explicitement une zone dégagée, un générateur en (50,5 ; 0,5) et un petit ver en (57 ; 6), une évolution nulle, 8 tourelles, 200 magasins, une armure légère et une mitraillette. Le nid entre en mémoire par une photographie locale ordinaire. Le contrôleur détruit le générateur (exposition 0) puis le ver (exposition 1,46) en deux étapes, sans perte de tourelle ; les 8 tourelles sont ramassées et aucune ne reste posée. L'acteur survit avec 146 points de vie sur 250, entre les ticks 4 403 et 15 160. Un premier essai avait révélé que la recherche de position appliquait encore les enveloppes de vers comme obstacles (`no-placement`) ; elle ne les compte plus qu'en exposition.
