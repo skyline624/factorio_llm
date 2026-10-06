@@ -45,7 +45,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         await using var controller = new SpatialController(game, journal);
         // Upkeep first: destroyed registered entities are rebuilt and turrets rearmed before production transport.
-        var upkeep = await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token);
+        var upkeep = await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token, targetCellIds);
         var state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
         // Startup can follow cells added after the strategic reservation. A trip's nested survival kit must
         // collect finished outputs without taking back the new buffers this tour has just filled.

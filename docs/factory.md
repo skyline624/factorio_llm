@@ -1,5 +1,7 @@
 # Usine persistante
 
+L'entretien d'un démarrage sélectionné reste limité aux cellules demandées, y compris lors de la restauration d'un silo. Une tournée ordinaire reconstruit et réarme les défenses portables situées à au plus 32 cases du personnage dans sa photographie initiale ; cette sélection reste fixe pendant la tournée. Les anciennes installations portables éloignées conservent leurs identités et leurs plans, avec un report journalisé. Une sélection explicite permet toujours leur entretien distant. Les réparations industrielles et les périmètres permanents restent entretenus, la détection des attaques couvre toute l'usine connue et les réflexes de survie restent actifs pendant les déplacements.
+
 La production « à la demande » historique fait tout passer par le personnage : il fabrique, alimente et vide chaque machine avant de rendre un stock dans son sac. La campagne réelle du 30/09 (graine 20260930) a mis plus de dix minutes pour obtenir cinquante plaques de fer. Ce modèle ne peut pas atteindre l'échelle d'une fusée, qui demande des milliers de packs de cinq couleurs.
 
 La couche d'usine ajoute des **cellules persistantes** : elles continuent de produire entre les décisions du modèle, et le personnage ne sert plus que de transport entre elles.

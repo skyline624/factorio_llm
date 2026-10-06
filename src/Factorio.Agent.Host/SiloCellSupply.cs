@@ -113,7 +113,8 @@ internal sealed class SiloCellSupply(IGameClient game, IControllerJournal journa
         var builder = new FactoryCellBuilder(game, journal, directory);
         await builder.EnsureCarriedAsync(registry, catalog,
             missing.GroupBy(m => m.Item!, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal), token);
-        var upkeep = await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token);
+        var upkeep = await new FactoryMaintenance(game, journal, directory).RunAsync(controller, catalog, token,
+            targetCellIds: new HashSet<string>(StringComparer.Ordinal) { owned.Id });
         var restored = await registry.LoadAsync(catalog.Scope.WorldId, token);
         var rockets = RocketSnapshot.Parse(await game.ExecuteAsync(GameRequest.Create("rocket_state"), token));
         if (rockets.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while restoring the silo cell; reconcile partial effects.");

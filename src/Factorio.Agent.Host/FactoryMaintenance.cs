@@ -20,6 +20,8 @@ public sealed record MaintenanceResult(IReadOnlyList<string> Rebuilt, IReadOnlyL
 /// </summary>
 public sealed class FactoryMaintenance(IGameClient game, IControllerJournal journal, string directory)
 {
+    internal const double PortableMaintenanceRadius = 32;
+
     /// <summary>An explicit cell set confines this round's repairs and rearming; attack detection still covers the whole factory.</summary>
     public async Task<MaintenanceResult> RunAsync(SpatialController controller, ProductionCatalog catalog, CancellationToken token,
         IReadOnlySet<string>? targetCellIds = null)
@@ -33,13 +35,20 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
         int actions = 0;
         var snapshot = await CaptureAsync();
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-        bool Selected(FactoryCell cell) => targetCellIds is null || targetCellIds.Contains(cell.Id);
+        var selection = MaintenanceCells(state, snapshot, targetCellIds);
+        bool Selected(FactoryCell cell) => selection.Contains(cell.Id);
         // Repair and rearming trips can prepare a survival kit; protect the latest registered input buffers.
         using var reservations = ProductionReservations.EnterFactory(state);
         // Rebuilding erases the evidence of an attack inside a goal; record it first for the between-goals response.
         await new AttackMonitor(directory, journal).RecordQuietlyAsync(state, snapshot, token);
         if (targetCellIds is not null)
             await journal.AppendAsync("factory-maintenance-scope", new { cells = targetCellIds.Order(StringComparer.Ordinal), snapshot.Scope, snapshot.CollectedTick }, token);
+        else
+            foreach (var cell in state.Cells.Where(c => c.Status == "ready"
+                && c.Id.StartsWith("portable-defense-", StringComparison.Ordinal) && !Selected(c)))
+                await journal.AppendAsync("factory-portable-defense-deferred", new { cell = cell.Id,
+                    snapshot.Scope, snapshot.CollectedTick, radius = PortableMaintenanceRadius,
+                    reason = "outside-initial-local-maintenance-scope", plansRetained = true }, token);
         var recovered = RecoverPlans(state, snapshot, catalog).Where(Selected).ToArray();
         if (recovered.Length > 0)
         {
@@ -211,6 +220,24 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
             actions++;
             return moved;
         }
+    }
+
+    /// <summary>Freeze portable upkeep around the actor at the start of the round; explicit repair selections retain their scope.</summary>
+    internal static IReadOnlySet<string> MaintenanceCells(FactoryState state, FactorySnapshot snapshot,
+        IReadOnlySet<string>? targetCellIds)
+    {
+        if (targetCellIds is not null) return targetCellIds.ToHashSet(StringComparer.Ordinal);
+        var actor = snapshot.Records.FirstOrDefault(r => r.Kind == "entity"
+            && r.Data.TryGetProperty("role", out var role) && role.GetString() == "actor");
+        MapPosition? anchor = actor is not null && actor.Data.TryGetProperty("position", out var position)
+            ? position.Deserialize<MapPosition>(Protocol.Json) : null;
+        var nearby = snapshot.Records.Where(r => r.Kind == "entity" && anchor is not null
+            && r.Data.TryGetProperty("position", out var position)
+            && position.Deserialize<MapPosition>(Protocol.Json) is { } at
+            && at.DistanceTo(anchor) <= PortableMaintenanceRadius).Select(r => r.EntityId).ToHashSet(StringComparer.Ordinal);
+        return state.Cells.Where(c => !c.Id.StartsWith("portable-defense-", StringComparison.Ordinal)
+            || anchor is not null && (c.Plan?.Values.Any(p => p.Position.DistanceTo(anchor) <= PortableMaintenanceRadius) == true
+                || c.Entities.Values.Any(nearby.Contains))).Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
     }
 
     internal static async Task<long> TransferTurretAmmunitionAsync(SpatialController controller, ProductionCatalog catalog,

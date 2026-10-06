@@ -7,6 +7,70 @@ namespace Factorio.Agent.Host.Tests;
 public sealed class FactoryMaintenanceScopeTests
 {
     [Fact]
+    public async Task AnOrdinaryRoundRetainsRemotePortablePlansWithoutTravellingToTheirOldCombatSites()
+    {
+        using var world = new World();
+        var remote = Cell("portable-defense-old", "turret", "gun-turret", "gone", new(80, 56));
+        await world.Registry.SaveAsync(new(1, world.Catalog.Scope.WorldId, [], [remote]), default);
+        world.Game.Carried["gun-turret"] = 1;
+
+        var result = await world.RunAsync();
+
+        Assert.Empty(result.Rebuilt);
+        Assert.Empty(result.Shortfall);
+        Assert.DoesNotContain("spatial", world.Game.Calls);
+        Assert.Contains("factory-portable-defense-deferred", world.Journal.Types);
+        var retained = Assert.Single((await world.Registry.LoadAsync(world.Catalog.Scope.WorldId, default)).Cells);
+        Assert.Equal(remote.Entities, retained.Entities);
+        Assert.Equal(remote.Plan, retained.Plan);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NearbyPortableDefensesAndExplicitRemoteSelectionsStillReceiveNativeRepairAttempts(bool explicitRemote)
+    {
+        using var world = new World();
+        var turret = Cell("portable-defense-selected", "turret", "gun-turret", "gone",
+            explicitRemote ? new(80, 56) : new(2.5, 2.5));
+        await world.Registry.SaveAsync(new(1, world.Catalog.Scope.WorldId, [], [turret]), default);
+        world.Game.Carried["gun-turret"] = 1;
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            world.RunAsync(explicitRemote ? new HashSet<string> { turret.Id } : null));
+        Assert.Equal("Unexpected request: spatial", error.Message);
+        Assert.DoesNotContain("factory-portable-defense-deferred", world.Journal.Types);
+    }
+
+    [Fact]
+    public async Task AnOrdinaryRoundDoesNotSpendMagazinesOnDistantPortableInstallations()
+    {
+        using var world = new World();
+        var turret = Cell("portable-defense-old", "turret", "gun-turret", "remote", new(80, 56));
+        await world.Registry.SaveAsync(new(1, world.Catalog.Scope.WorldId, [], [turret]), default);
+        world.Game.Carried["firearm-magazine"] = 20;
+        world.Game.Entities.AddRange(Turret("remote", turret.Plan!["turret"].Position, 0));
+        var result = await world.RunAsync();
+        Assert.Empty(result.Supplied);
+        Assert.Empty(result.Shortfall);
+        Assert.Equal(0, result.Actions);
+        Assert.DoesNotContain("spatial", world.Game.Calls);
+    }
+
+    [Fact]
+    public async Task ASelectedLogisticsStartupCannotBecomeAWholeFactoryRepairTour()
+    {
+        using var world = new World();
+        var remote = Cell("remote-perimeter", "turret", "gun-turret", "gone", new(80, 56));
+        await world.Registry.SaveAsync(new(1, world.Catalog.Scope.WorldId, [], [remote]), default);
+        world.Game.Carried["gun-turret"] = 1;
+        var result = await world.ServiceAsync(new HashSet<string>());
+        Assert.Empty(result.Shortfall);
+        Assert.Equal(0, result.Actions);
+        Assert.DoesNotContain("spatial", world.Game.Calls);
+        Assert.Contains("factory-maintenance-scope", world.Journal.Types);
+    }
+
+    [Fact]
     public async Task ALocalRoundCannotDetourToAStockedRepairOutsideItsCellSet()
     {
         using var world = new World();
@@ -164,6 +228,8 @@ public sealed class FactoryMaintenanceScopeTests
             await using var controller = new SpatialController(Game, Journal);
             return await new FactoryMaintenance(Game, Journal, directory).RunAsync(controller, Catalog, default, targetCellIds);
         }
+        public Task<LogisticsResult> ServiceAsync(IReadOnlySet<string> targetCellIds) =>
+            new FactoryLogistics(Game, Journal, directory).ServiceAsync(targetCellIds: targetCellIds);
         public void Dispose() => Directory.Delete(directory, true);
     }
 
@@ -188,6 +254,17 @@ public sealed class FactoryMaintenanceScopeTests
         public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
         {
             Calls.Add(request.Action);
+            if (request.Action == "production_catalog")
+            {
+                var catalog = Catalogs.Early();
+                var items = new Dictionary<string, NativeItem>(catalog.Items, StringComparer.Ordinal)
+                {
+                    ["coal"] = new(4e6, 50, "chemical"),
+                    ["gun-turret"] = new(0, 50, PlaceEntity: "gun-turret", PlaceEntityType: "ammo-turret")
+                };
+                return Task.FromResult(new GameResponse(1, request.RequestId, true, 10,
+                    Protocol.ToElement(catalog with { Scope = Scope, CollectedTick = 10, Items = items })));
+            }
             if (request.Action == "spatial" && SpatialFailure is not null)
             {
                 if (ChangeScopeAfterSpatialFailure) Scope = Scope with { Incarnation = Scope.Incarnation + 1 };
