@@ -287,6 +287,12 @@ try
             Print(new { report = await new AttackResponseQualification(session).RunAsync(shutdown.Token) });
             break;
         }
+        case "verify-nest-clearing":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new NestClearingQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
         case "verify-perimeter":
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
@@ -699,6 +705,12 @@ try
                                 catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
                                 {
                                     await maintenanceJournal.AppendAsync("attack-response-error", new { error = error.GetType().FullName, error.Message }, token);
+                                }
+                                // A remembered enemy base near own industry is cleared while its worms and spawners are still weak.
+                                try { await new NestClearingController(game, maintenanceJournal, session.Directory).RunAsync(token); }
+                                catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+                                {
+                                    await maintenanceJournal.AppendAsync("nest-clearing-error", new { error = error.GetType().FullName, error.Message }, token);
                                 }
                                 var cells = await new FactoryRegistry(session.Directory).LoadAsync(session.ProposedWorldId, token);
                                 if (cells.Cells.Any(c => c.Status == "ready"))

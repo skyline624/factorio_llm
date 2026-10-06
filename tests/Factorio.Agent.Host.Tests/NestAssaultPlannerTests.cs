@@ -34,7 +34,10 @@ public sealed class NestAssaultPlannerTests
     [Fact]
     public void AFrontWormIsTheFirstTargetWithTheShallowestReachableExposure()
     {
+        // The actor stands far outside the worm's reach, as at a staging point.
         var map = Map(Worm("worm", new(22.5, .5)), Spawner("spawner", new(36.5, .5)));
+        map = map with { Actor = map.Actor with { Position = new(-30, .5) }, Entities = map.Entities.Select(e => e.Id == map.Actor.Id
+            ? e with { Position = new(-30, .5), Bounds = map.Prototypes["character"].CollisionBox.Translate(new(-30, .5)) } : e).ToArray() };
         var step = new NestAssaultPlanner().Plan(map, "gun-turret", 4);
         Assert.NotNull(step);
         Assert.Equal("worm", step.Target.Id);

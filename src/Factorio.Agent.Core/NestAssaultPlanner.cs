@@ -21,8 +21,9 @@ public sealed class NestAssaultPlanner
     public static IReadOnlyList<NestStructure> Structures(SpatialSnapshot map)
     {
         var worms = (map.StationaryThreats ?? []).ToDictionary(t => t.Id, StringComparer.Ordinal);
-        string force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
-        return map.Entities.Where(e => e.Force != force && e.Force != "neutral"
+        // Without the actor's own entity in view, only the native enemy force is hostile.
+        string? force = map.Entities.FirstOrDefault(e => e.Id == map.Actor.Id)?.Force;
+        return map.Entities.Where(e => (force is null ? e.Force == "enemy" : e.Force != force && e.Force != "neutral")
                 && (map.Prototypes[e.Name].Type == "unit-spawner" || worms.ContainsKey(e.Id)))
             .Select(e => new NestStructure(e.Id, e.Name, e.Position, worms.TryGetValue(e.Id, out var worm) ? worm.Range : null))
             .Concat(worms.Values.Where(w => map.Entities.All(e => e.Id != w.Id))
@@ -39,7 +40,9 @@ public sealed class NestAssaultPlanner
         var structures = Structures(map);
         if (structures.Count == 0) return null;
         var actor = map.Actor.Position;
-        var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() }, 0);
+        // Worm envelopes are scored as exposure below; as obstacles they would forbid every stand point near a worm target.
+        var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray(),
+            StationaryThreats = [] }, 0);
         double reach = map.Actor.BuildDistance - .5;
         double range = turret.AttackRange.Value;
         var worms = structures.Where(s => s.Range is not null).ToArray();

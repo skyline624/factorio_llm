@@ -42,7 +42,12 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
             await PersistAsync(verified, cancellationToken);
         }
         if (request.Action == "spatial" && response.Ok)
-            await new ResourceMemoryStore(session.Directory).RecordAsync(SpatialSnapshot.Parse(response), cancellationToken);
+        {
+            var map = SpatialSnapshot.Parse(response);
+            await new ResourceMemoryStore(session.Directory).RecordAsync(map, cancellationToken);
+            // Enemy bases enter memory only from the actor's own photographs, which already follow normal visibility.
+            await new NestMemoryStore(session.Directory).RecordAsync(map, cancellationToken);
+        }
         // A reading of the force's map enters the same memory, as charted destinations rather than local sightings.
         if (request.Action == "charted_resources" && response.Ok)
             await new ResourceMemoryStore(session.Directory).RecordChartedAsync(ChartedResourceSnapshot.Parse(response), cancellationToken);
