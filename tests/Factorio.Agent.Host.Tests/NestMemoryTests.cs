@@ -35,6 +35,17 @@ public sealed class NestMemoryTests
     }
 
     [Fact]
+    public void RememberedWormsGuardTheirReachAndSpawnersTheirSurroundings()
+    {
+        var memory = new NestMemory(1, "world", [new("s", "biter-spawner", new(0, 0), null, 1), new("w", "medium-worm-turret", new(100, 0), 30, 1)]);
+        Assert.True(memory.Guards(new(NestMemory.SpawnerGuardRadius - 1, 0)));
+        Assert.False(memory.Guards(new(0, NestMemory.SpawnerGuardRadius + 1)));
+        Assert.True(memory.Guards(new(100 - 30 - NestMemory.WormGuardMargin + 1, 0)));
+        Assert.False(memory.Guards(new(100, 30 + NestMemory.WormGuardMargin + 1)));
+        Assert.False(NestMemory.Empty("world").Guards(new(0, 0)));
+    }
+
+    [Fact]
     public void AnotherWorldsPhotographIsRejected()
     {
         var map = NestAssaultPlannerTests.Map();

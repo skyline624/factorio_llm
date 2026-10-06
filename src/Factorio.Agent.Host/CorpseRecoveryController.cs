@@ -28,6 +28,11 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
     public const double IndustryReach = 48;
     /// <summary>Retry a body guarded by currently visible mobile enemies after one game minute.</summary>
     public const long VisibleThreatRetryTicks = 60 * 60;
+    /// <summary>
+    /// Twenty game minutes before a body inside a remembered nest's guard is reconsidered. On seed 20261072 recovery walked
+    /// back to bodies beside nests after each death zone expired: 474 minutes of recovery goals and repeated deaths.
+    /// </summary>
+    public const long NestGuardRetryTicks = 20 * 60 * 60;
     internal const int MaximumApproachDeferrals = 3;
 
     /// <summary>Own entity types that make a place worth defending: production, power, storage and turrets, not poles or corpses.</summary>
@@ -51,6 +56,7 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
         var rememberedGuards = new HashSet<string>(StringComparer.Ordinal);
         var deferredApproaches = new HashSet<string>(StringComparer.Ordinal);
         IReadOnlyList<NativeDeathTransition> zones = [];
+        NestMemory? nests = null;
         long lastTick = death.DeathTick;
         for (int step = 0; step < 256; step++)
         {
@@ -78,6 +84,7 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
             {
                 zones = game is IDangerZoneReader reader
                     ? await reader.ReadActiveDeathsAsync(scope, death.SurfaceIndex, response.Tick, token) : [];
+                nests = game is INestMemoryReader memory ? await memory.ReadNestMemoryAsync(scope, token) : null;
                 await journal.AppendAsync("corpse-recovery-start", new
                 {
                     scope, response.Tick, death, actorMainInventory = actor.GetProperty("inventory"), corpseIds = corpses.Select(c => c.Id),
@@ -94,6 +101,8 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
                 verdicts[zone] = await InspectAsync(zone, position, scope, lastTick, token);
             var blocked = holding.Where(c => Blocking(c).Length > 0).ToArray();
             var distant = holding.Except(blocked).Where(c => !NearIndustry(industry, c.Position)).ToArray();
+            // A body that a remembered worm reaches or a remembered spawner guards waits; clearing that nest forgets it.
+            var nestGuarded = holding.Except(blocked).Except(distant).Where(c => nests?.Guards(c.Position) == true).ToArray();
             // Expiry removes a historical death warning; it does not remove enemies still observed around the body.
             var mobile = VisibleMobileThreats(response);
             var guarded = holding.Except(blocked).Except(distant)
@@ -113,7 +122,7 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
                     corpses = guarded.Except(visibleGuarded).Select(c => new { c.Id, c.Position }),
                     interpretation = "A guard was observed during this attempt; the current view does not prove the whole corpse zone clear. No current enemy position is inferred."
                 }, token);
-            var selected = corpses.Except(blocked).Except(distant).Except(guarded).Where(c => !deferredApproaches.Contains(c.Id))
+            var selected = corpses.Except(blocked).Except(distant).Except(guarded).Except(nestGuarded).Where(c => !deferredApproaches.Contains(c.Id))
                 .OrderBy(c => c.Position.DistanceTo(position)).ThenBy(c => c.Id, StringComparer.Ordinal)
                 .SelectMany(c => c.Items.Where(p => p.Value > 0 && !unavailable.Contains((c.Id, p.Key)))
                     .OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => (Corpse: c, Item: p.Key, Count: p.Value)))
@@ -125,6 +134,13 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
                 {
                     var deferred = new CorpseRecoveryResult(response.Tick, "unsafe-corpses-deferred", collected, remaining,
                         corpses.Select(c => c.Id).ToArray(), response.Tick + VisibleThreatRetryTicks);
+                    await journal.AppendAsync("corpse-recovery-result", deferred, token);
+                    return deferred;
+                }
+                if (nestGuarded.Length > 0)
+                {
+                    var deferred = new CorpseRecoveryResult(response.Tick, "nest-guarded-corpses-deferred", collected, remaining,
+                        corpses.Select(c => c.Id).ToArray(), response.Tick + NestGuardRetryTicks);
                     await journal.AppendAsync("corpse-recovery-result", deferred, token);
                     return deferred;
                 }

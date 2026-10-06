@@ -3,6 +3,12 @@ namespace Factorio.Agent.Core;
 /// <summary>An enemy spawner or worm this actor has seen itself, with the tick of its last sighting.</summary>
 public sealed record NestSighting(string Id, string Name, MapPosition Position, double? Range, long Tick);
 
+/// <summary>Reads the actor's remembered enemy structures; the session client owns the durable file.</summary>
+public interface INestMemoryReader
+{
+    Task<NestMemory> ReadNestMemoryAsync(ActorScope scope, CancellationToken token = default);
+}
+
 /// <summary>Structures within linking distance of each other: one enemy base as the actor remembers it.</summary>
 public sealed record NestCluster(MapPosition Center, IReadOnlyList<NestSighting> Structures)
 {
@@ -21,7 +27,16 @@ public sealed record NestMemory(int Version, string WorldId, IReadOnlyList<NestS
     public const int MaximumStructures = 4000;
     public const double LinkDistance = 24;
 
+    /// <summary>Spawners defend this far around themselves; a remembered one keeps a body this close unvisited.</summary>
+    public const double SpawnerGuardRadius = 48;
+    public const double WormGuardMargin = 8;
+
     public static NestMemory Empty(string worldId) => new(1, worldId, []);
+
+    /// <summary>A remembered worm reaches the position, or a remembered spawner's defenders would meet the actor there.</summary>
+    public bool Guards(MapPosition position) => Structures.Any(s => s.Range is { } range
+        ? s.Position.DistanceTo(position) <= range + WormGuardMargin
+        : s.Position.DistanceTo(position) <= SpawnerGuardRadius);
 
     public NestMemory Observe(SpatialSnapshot map)
     {
