@@ -33,9 +33,20 @@ public sealed class PlacementPlanner
         bool WithinReach(MapPosition point) => entities.All(e => point.DistanceTo(e.Position) <= reach);
     }
 
+    /// <summary>Whether the actor can place the item from where it stands: within build reach and clear of the footprint.</summary>
+    public static bool BuildableFromHere(SpatialSnapshot map, string item, PlacementCandidate placement)
+    {
+        if (!map.Items.TryGetValue(item, out var placeable) || !map.Prototypes.TryGetValue(placeable.EntityName, out var building)) return false;
+        WorldBox footprint = building.CollisionBox.Rotate(placement.Direction).Translate(placement.Position);
+        var exclusion = new WorldBox(new(footprint.Min.X - 0.4, footprint.Min.Y - 0.4), new(footprint.Max.X + 0.4, footprint.Max.Y + 0.4));
+        return map.Prototypes.TryGetValue(map.Actor.Name, out var actor)
+            && map.Actor.Position.DistanceTo(placement.Position) <= map.Actor.BuildDistance - 1
+            && !exclusion.Overlaps(actor.CollisionBox.Translate(map.Actor.Position));
+    }
+
     public MapPosition? FindApproach(SpatialCollisionField field, string item, PlacementCandidate placement,
         IReadOnlyList<MapPosition>? remainingTargets = null, SpatialSnapshot? completedSite = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, IReadOnlyList<MapPosition>? upcoming = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         EntityGeometry building = field.Map.Prototypes[field.Map.Items[item].EntityName];
@@ -63,7 +74,9 @@ public sealed class PlacementPlanner
                 if (!Eligible(point)) continue;
                 candidates.Add(point);
             }
-        return candidates.OrderBy(p => p.DistanceTo(field.Map.Actor.Position)).ThenBy(p => p.DistanceTo(placement.Position))
+        // Sequential pieces (a belt route) prefer a stand that also reaches the next ones, instead of a half-tile step per piece.
+        return candidates.OrderByDescending(p => upcoming?.Count(u => u.DistanceTo(p) <= reach) ?? 0)
+            .ThenBy(p => p.DistanceTo(field.Map.Actor.Position)).ThenBy(p => p.DistanceTo(placement.Position))
             .FirstOrDefault(p => new RoutePlanner().Find(field, p, token: cancellationToken).Status == RouteStatus.Found && PreservesAccess(p));
 
         bool Eligible(MapPosition point) => point.DistanceTo(placement.Position) <= reach

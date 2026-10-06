@@ -112,12 +112,16 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
 
     public async Task<string> BuildAtAsync(string item, PlacementCandidate candidate, ProductionCatalog catalog,
         SpatialController controller, CancellationToken token, IReadOnlyList<MapPosition>? remainingTargets = null,
-        string? stoppedInserterItem = null)
+        string? stoppedInserterItem = null, IReadOnlyList<MapPosition>? upcoming = null)
     {
         var spatial = new SpatialClient(game);
         var current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
         RequireScope(current.Scope, catalog);
-        if (current.Actor.Position.DistanceTo(candidate.Position) > 24)
+        // A piece already within reach is validated and built from where the actor stands: on 2026-10-06 (seed 20261107)
+        // every belt of a link also paid an approach search and a navigation check, about two seconds a belt. A native
+        // refusal there (a tree) is the clearance loop's first validation; the work submission still proves an exit.
+        bool direct = remainingTargets is not { Count: > 0 } && PlacementPlanner.BuildableFromHere(current, item, candidate);
+        if (!direct && current.Actor.Position.DistanceTo(candidate.Position) > 24)
         {
             await controller.TravelAsync(candidate.Position, 8, catalog, token);
             current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
@@ -125,14 +129,36 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
         }
         for (int cleared = 0; ; cleared++)
         {
-            MapPosition approach = new PlacementPlanner().FindApproach(new(current, ExplorationPlanner.ThreatMargin), item, candidate, remainingTargets,
-                cancellationToken: token)
-                ?? throw new PlacementRefusedException("No reachable approach outside the planned footprint.");
-            await controller.NavigateAsync(approach, .2, token);
+            if (!direct)
+            {
+                MapPosition approach = new PlacementPlanner().FindApproach(new(current, ExplorationPlanner.ThreatMargin), item, candidate, remainingTargets,
+                    cancellationToken: token, upcoming: upcoming)
+                    ?? throw new PlacementRefusedException("No reachable approach outside the planned footprint.");
+                await controller.NavigateAsync(approach, .2, token);
+            }
             var validation = await spatial.ValidateAsync(catalog.Scope, item, [candidate], token);
             await journal.AppendAsync("construction-placement-validation", new { validation.Scope, validation.CollectedTick, item,
-                candidate, cleared, native = validation.Candidates[0] }, token);
-            if (validation.Candidates[0].Allowed && validation.Candidates[0].InReach) break;
+                candidate, cleared, direct, native = validation.Candidates[0] }, token);
+            if (validation.Candidates[0].Allowed && validation.Candidates[0].InReach)
+            {
+                if (!direct) break;
+                try { return await BuildHereAsync(); }
+                catch (PlacementRefusedException error)
+                {
+                    // The actor drifted (a belt underfoot) or the exit check failed here: approach as before.
+                    await journal.AppendAsync("construction-direct-refused", new { item, candidate, error.Message }, token);
+                    direct = false;
+                    current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
+                    RequireScope(current.Scope, catalog);
+                    continue;
+                }
+            }
+            if (direct && !validation.Candidates[0].InReach)
+            {
+                direct = false;
+                continue;
+            }
+            direct = false;
             if (validation.Candidates[0].Allowed || !validation.Candidates[0].InReach || cleared == 16)
                 throw new PlacementRefusedException("The engine refused the calculated powered-machine placement.");
             current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
@@ -144,19 +170,24 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
             current = await spatial.CaptureAsync([item], radius: 48, cancellationToken: token);
             RequireScope(current.Scope, catalog);
         }
-        if (stoppedInserterItem is not null && (current.Prototypes[current.Items[item].EntityName].FilterSlots is not > 0
-            || !catalog.Items.ContainsKey(stoppedInserterItem))) throw new InvalidDataException("Stopped transport construction requires native filter geometry and item.");
-        bool underground = current.Prototypes[current.Items[item].EntityName].Type == "underground-belt";
-        if (underground ? candidate.UndergroundType is not ("input" or "output") : candidate.UndergroundType is not null)
-            throw new InvalidDataException("An underground endpoint requires an explicit native input/output type.");
-        var receipt = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction, candidate.UndergroundType, stoppedInserterItem }, 600, token: token);
-        string id = BuiltEntity(receipt, item);
-        if (underground && (!receipt.Effects.TryGetProperty("undergroundType", out var type)
-            || type.GetString() != candidate.UndergroundType)) throw new InvalidDataException("Native underground build type differs from its intent; reconcile before continuing.");
-        if (stoppedInserterItem is not null && (!receipt.Effects.TryGetProperty("stoppedInserterItem", out var configured)
-            || configured.GetString() != stoppedInserterItem || !receipt.Effects.TryGetProperty("disabledByScript", out var stopped)
-            || stopped.ValueKind != System.Text.Json.JsonValueKind.True)) throw new InvalidDataException("Transport build did not prove its stopped native filter.");
-        return id;
+        return await BuildHereAsync();
+
+        async Task<string> BuildHereAsync()
+        {
+            if (stoppedInserterItem is not null && (current.Prototypes[current.Items[item].EntityName].FilterSlots is not > 0
+                || !catalog.Items.ContainsKey(stoppedInserterItem))) throw new InvalidDataException("Stopped transport construction requires native filter geometry and item.");
+            bool underground = current.Prototypes[current.Items[item].EntityName].Type == "underground-belt";
+            if (underground ? candidate.UndergroundType is not ("input" or "output") : candidate.UndergroundType is not null)
+                throw new InvalidDataException("An underground endpoint requires an explicit native input/output type.");
+            var receipt = await controller.WorkAsync("build", new { item, candidate.Position, candidate.Direction, candidate.UndergroundType, stoppedInserterItem }, 600, token: token);
+            string id = BuiltEntity(receipt, item);
+            if (underground && (!receipt.Effects.TryGetProperty("undergroundType", out var type)
+                || type.GetString() != candidate.UndergroundType)) throw new InvalidDataException("Native underground build type differs from its intent; reconcile before continuing.");
+            if (stoppedInserterItem is not null && (!receipt.Effects.TryGetProperty("stoppedInserterItem", out var configured)
+                || configured.GetString() != stoppedInserterItem || !receipt.Effects.TryGetProperty("disabledByScript", out var stopped)
+                || stopped.ValueKind != System.Text.Json.JsonValueKind.True)) throw new InvalidDataException("Transport build did not prove its stopped native filter.");
+            return id;
+        }
     }
 
     /// <summary>The native id of a completed build; a native placement refusal is told apart from shortages and other failures.</summary>

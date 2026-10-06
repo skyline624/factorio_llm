@@ -472,12 +472,15 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
         await new FactoryCellBuilder(game, journal, directory).EnsureCarriedAsync(registry, catalog, missing, token);
         var ids = new Dictionary<string, string>(cell.Entities, StringComparer.Ordinal);
-        foreach (var p in cell.Plan.Values.OrderBy(p => p.Role.StartsWith("pole-", StringComparison.Ordinal) ? 0
-            : p.Role.StartsWith("target-inserter-", StringComparison.Ordinal) ? 1 : p.Role == "source-inserter" ? 3 : 2))
+        var order = cell.Plan.Values.OrderBy(p => p.Role.StartsWith("pole-", StringComparison.Ordinal) ? 0
+            : p.Role.StartsWith("target-inserter-", StringComparison.Ordinal) ? 1 : p.Role == "source-inserter" ? 3 : 2).ToArray();
+        for (int index = 0; index < order.Length; index++)
         {
+            var p = order[index];
             if (ids.ContainsKey(p.Role)) continue;
+            var upcoming = order.Skip(index + 1).Where(next => !ids.ContainsKey(next.Role)).Take(24).Select(next => next.Position).ToArray();
             string id = await new PoweredMachineController(game, journal).BuildAtAsync(p.Item, new(p.Position, p.Direction, 0, p.UndergroundType), catalog, controller, token,
-                stoppedInserterItem: catalog.Items[p.Item].PlaceEntityType == "inserter" ? bus.Item : null);
+                stoppedInserterItem: catalog.Items[p.Item].PlaceEntityType == "inserter" ? bus.Item : null, upcoming: upcoming);
             ids[p.Role] = id;
             cell = cell with { Entities = new Dictionary<string, string>(ids, StringComparer.Ordinal) };
             await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
