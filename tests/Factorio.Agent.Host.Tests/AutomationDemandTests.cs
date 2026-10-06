@@ -50,6 +50,19 @@ public sealed class AutomationDemandTests
     }
 
     [Fact]
+    public void TransportNeedsAreWeighedByTheItemsACellConsumes()
+    {
+        var catalog = Catalogs.Early();
+        var gears = Recipe(catalog, "iron-gear-wheel");
+        var cell = new FactoryCell("gears", 1, new(0, 0, true), "assembler", "assembling-machine-1", "iron-gear-wheel",
+            new Dictionary<string, string>(), "ready", 1);
+        var plates = gears.Ingredients.Single();
+        Assert.Equal(plates.Amount!.Value * AutomationPlanner.CellCraftsPerMinute(catalog, gears, "assembling-machine-1"),
+            FactoryTransportBuilder.InputVolume(catalog, cell, plates), 6);
+        Assert.Equal(0, FactoryTransportBuilder.InputVolume(catalog, cell with { MachineItem = "unknown-machine" }, plates));
+    }
+
+    [Fact]
     public void EveryMissingStageFirstGetsOneMachineInSupplyOrder()
     {
         var catalog = Catalogs.Early();

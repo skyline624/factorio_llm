@@ -54,7 +54,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                 .SelectMany(c => catalog.Recipes.FirstOrDefault(r => r.Name == c.Recipe)?.Ingredients
                     .Where(i => i.DeterministicItem && !covered.Contains((c.Entities["input-chest"], i.Name)))
                     .Select(i => (Target: c, Ingredient: i)) ?? []).ToArray();
-            foreach (var group in needs.GroupBy(n => n.Ingredient.Name))
+            // The largest hand-carried flows first: every link built between goals should remove the most actor transfers.
+            foreach (var group in needs.GroupBy(n => n.Ingredient.Name).OrderByDescending(g => g.Sum(n => InputVolume(catalog, n.Target, n.Ingredient)))
+                .ThenBy(g => g.Key, StringComparer.Ordinal))
             {
                 foreach (var source in state.Cells.Where(c => c.Status == "ready" && c.Entities.ContainsKey("output-chest")
                     && Product(catalog, c) == group.Key && !(state.Transports ?? []).Any(b => b.SourceCellId == c.Id)))
@@ -79,7 +81,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             }
         }
         foreach (var target in state.Cells.Where(c => c.Status == "ready" && c.Recipe is not null && c.Entities.ContainsKey("input-chest")
-            && (targetCellIds is null || targetCellIds.Contains(c.Id))))
+            && (targetCellIds is null || targetCellIds.Contains(c.Id)))
+            .OrderByDescending(c => catalog.Recipes.FirstOrDefault(r => r.Name == c.Recipe)?.Ingredients.Where(i => i.DeterministicItem)
+                .Sum(i => InputVolume(catalog, c, i)) ?? 0).ThenBy(c => c.Id, StringComparer.Ordinal).ToArray())
         {
             if (pausedCells.Contains(target.Id)) continue;
             var recipe = catalog.Recipes.FirstOrDefault(r => r.Name == target.Recipe);
@@ -383,6 +387,16 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             [new(firstCellId, "target-inserter-0", firstMaximum), new(secondCellId, "target-inserter-1", secondMaximum)], Graph: graph);
         return (cell, bus);
         void Add(string role, string equipment, PlacementCandidate p) => entities[role] = new(role, equipment, p.Position, p.Direction);
+    }
+
+    /// <summary>Items per minute of one ingredient a cell consumes at its native rate with its own arm; zero when unknown.</summary>
+    internal static double InputVolume(ProductionCatalog catalog, FactoryCell cell, NativeMaterial ingredient)
+    {
+        var recipe = catalog.Recipes.FirstOrDefault(r => r.Name == cell.Recipe);
+        bool known = catalog.Assemblers?.ContainsKey(cell.MachineItem) == true || catalog.Machines.ContainsKey(cell.MachineItem)
+            || catalog.Silos?.ContainsKey(cell.MachineItem) == true;
+        if (recipe is null || !known || ingredient.Amount is not { } amount) return 0;
+        return amount * AutomationPlanner.CellCraftsPerMinute(catalog, recipe, cell.MachineItem, cell.Plan?.GetValueOrDefault("input-inserter")?.Item);
     }
 
     public async Task RepairControlsAsync(FactoryState state, FactorySnapshot snapshot, ProductionCatalog catalog,
