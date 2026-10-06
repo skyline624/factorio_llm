@@ -20,6 +20,8 @@ Jusqu'au 6 octobre 2026, l'agent ne faisait que défendre : périmètres de tour
 4. pour chaque étape (au plus 12) : marche vers la position de pose par une route qui ignore les enveloppes de vers, en déplacements natifs de 24 cases au plus ; pose et charge les tourelles par des opérations payées ; se replie ; attend au plus une minute de combat en observant la cible et les tourelles ; ramasse les survivantes par `mine` ;
 5. s'arrête lorsque plus aucune structure n'est observée dans le nid, après 8 tourelles perdues, sur une exposition supérieure à 15 cases, ou sans placement possible.
 
+Une position de pose située hors de la photographie de 48 cases est rejointe par le point le plus avancé de la ligne droite encore visible (40 cases au plus), puis par une nouvelle photographie. Le 6 octobre 2026, dans la partie normale de graine **20261106**, le premier nettoyage réel a détruit un générateur de crachats sans perte de tourelle, mais chaque approche du ver suivant échouait en `GoalOutsideSnapshot`.
+
 ## Reconnaissance après une attaque
 
 Un nid jamais vu ne peut pas être choisi. Dans la partie normale de graine **20261106**, des biters venus d'un nid inconnu ont détruit 43 entités de la zone minière à deux heures de jeu. Après une attaque enregistrée dans l'heure de jeu précédente, au plus une fois par heure de jeu, et seulement si aucun nid connu n'est à portée, l'acteur parcourt huit points d'un cercle situé 96 cases au-delà de l'industrie (au moins 128 cases du centre), en commençant par la direction de la dernière attaque. Ses photographies ordinaires alimentent la mémoire des nids ; la ronde s'arrête dès qu'un nid à portée est connu, puis le nettoyage commence. Un tronçon impossible est journalisé et sauté.

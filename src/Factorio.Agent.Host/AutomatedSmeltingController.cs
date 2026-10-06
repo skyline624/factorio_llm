@@ -3,6 +3,8 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
+internal sealed record SmeltingPair(string DrillId, string FurnaceId, MapPosition DrillPosition, MapPosition FurnacePosition);
+
 public sealed record AutomatedSmeltingResult(string Item, int TargetStock, long InitialStock, long FinalStock,
     string DrillId, string FurnaceId, long StartTick, long EndTick);
 
@@ -69,10 +71,15 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             receiver.Bounds,
             status = "geometry-verified-awaiting-production"
         }, token);
+        var helpers = new List<SmeltingPair>();
         var fuelPlan = ChooseFuel(initial, includeDrillReserve: true);
         await journal.AppendAsync("smelting-fuel-plan", new { fuelPlan, map.CollectedTick,
             interpretation = "Conservative work estimate and stack-bounded reserve; completion still requires native output." }, token);
         bool electric = map.Prototypes[drill.Name].IsElectric;
+        // Further burner pairs are crafted from the bag while the actor would otherwise only wait beside this one.
+        string furnaceItem = catalog.Machines.First(m => m.Value.EntityName == receiver.Name).Key;
+        double pairRate = electric ? 0 : SmeltingExpansionPlanner.PairRate(plan, map, catalog, catalog.Machines[furnaceItem]);
+        bool expanding = !electric;
         if (electric)
         {
             var supplied = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
@@ -107,6 +114,8 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
                 receiverId = receiver.Id, batches, remaining }, token);
             if (remaining.ReadyOutput > 0) continue;
             bool needsExtraction = remaining.InputToInsert > 0;
+            if (expanding && needsExtraction && iteration % 20 == 0)
+                await ExpandAsync(targetStock - state.Inventory.GetValueOrDefault(item));
             if (needsExtraction && iteration % 10 == 0
                 && await new ExtractionRecoveryController(game, journal).TryRecoverAsync(drillId, catalog, controller, token))
             {
@@ -118,8 +127,14 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             }
             if (needsExtraction && electric && iteration % 10 == 0)
                 await EnsurePowerAsync(0, reserve: false);
-            else if (needsExtraction && !electric) await FuelAsync(drillId, drill.Position);
-            await FuelAsync(receiver.Id, receiver.Position, needsExtraction);
+            else if (needsExtraction && !electric) await FuelAsync(drillId, drill.Position, Primary());
+            await FuelAsync(receiver.Id, receiver.Position, Primary(), needsExtraction);
+            helpers.RemoveAll(h => !state.Entities.Any(e => e.Id == h.DrillId) || !state.Entities.Any(e => e.Id == h.FurnaceId));
+            foreach (var helper in helpers)
+            {
+                if (needsExtraction) await FuelAsync(helper.DrillId, helper.DrillPosition, helper);
+                await FuelAsync(helper.FurnaceId, helper.FurnacePosition, helper, needsExtraction);
+            }
             await WorkAsync("wait", new { ticks = 60 });
         }
         throw new TimeoutException("Automated smelting exhausted its observation budget; inspect the installed machines.");
@@ -155,12 +170,113 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             foreach (string fuel in catalog.Items.Where(p => p.Value.FuelValue > 0).Select(p => p.Key))
                 available[fuel] = checked(available.GetValueOrDefault(fuel) + state.Entities
                     .Where(e => !ProductionReservations.Current.Contains(e.Id)).Sum(e => e.Count("output", fuel)));
+            // Each pair is fuelled for its share of the wait, or helpers would multiply the coal the early game lacks.
+            long share = (long)Math.Ceiling(Math.Max(1, targetStock - state.Inventory.GetValueOrDefault(item)) / (double)(1 + helpers.Count));
             return new SmeltingFuelPlanner().Choose(plan, map, catalog,
-                checked((int)Math.Max(1, targetStock - state.Inventory.GetValueOrDefault(item))), state.Inventory, available,
+                checked((int)share), state.Inventory, available,
                 SmeltingPreparationController.IsPreparing || StoredResourceExtractionController.IsPreparing, includeDrillReserve);
         }
 
-        async Task FuelAsync(string entityId, MapPosition position, bool includeDrillReserve = true)
+        SmeltingPair Primary() => new(drillId, receiver.Id, drill.Position, receiver.Position);
+
+        async Task ExpandAsync(long missing)
+        {
+            int wanted = SmeltingExpansionPlanner.AdditionalPairs(missing, pairRate, 1 + helpers.Count);
+            if (wanted == 0) return;
+            string ore = recipe.Ingredients[0].Name;
+            try
+            {
+                await controller.TravelAsync(drill.Position, 8, catalog, token);
+                var local = await LocalMapAsync();
+                var state = await production.ObserveAsync(token);
+                RequireScope(state.Scope);
+                var owned = state.Entities.Where(e => !ProductionReservations.Current.Contains(e.Id))
+                    .ToDictionary(e => e.Id, e => e.AsMachine(), StringComparer.Ordinal);
+                var idle = local.Entities.Where(e => e.Name == receiver.Name && e.Id != receiver.Id && helpers.All(h => h.FurnaceId != e.Id)
+                    && owned.TryGetValue(e.Id, out var machine) && machine.CanProcess(recipe)).ToArray();
+                // Pairs installed by earlier waits are fuelled again before any new one is crafted.
+                foreach (var installed in new ExtractionPlanner().FindInstalled(local, plan.DrillItem, ore, catalog, idle,
+                    owned.Keys.ToHashSet(StringComparer.Ordinal)).Where(i => i.DrillId != drillId && helpers.All(h => h.DrillId != i.DrillId)).Take(wanted))
+                {
+                    var adopted = new SmeltingPair(installed.DrillId, installed.Connection.ReceiverId,
+                        local.Entities.Single(e => e.Id == installed.DrillId).Position,
+                        local.Entities.Single(e => e.Id == installed.Connection.ReceiverId).Position);
+                    helpers.Add(adopted);
+                    wanted--;
+                    await journal.AppendAsync("smelting-pair-adopted", new { item, adopted, local.CollectedTick }, token);
+                }
+                for (; wanted > 0; wanted--)
+                {
+                    state = await production.ObserveAsync(token);
+                    RequireScope(state.Scope);
+                    var retained = CarriedStock.RetainedStock;
+                    var bag = state.Inventory.ToDictionary(p => p.Key, p => Math.Max(0, p.Value - retained.GetValueOrDefault(p.Key)), StringComparer.Ordinal);
+                    var kit = new Dictionary<string, long>(StringComparer.Ordinal) { [plan.DrillItem] = 1, [furnaceItem] = 1 };
+                    var (_, shortfall) = SurvivalKitPlanner.Requirement(catalog, kit, bag);
+                    if (shortfall.Count > 0)
+                    {
+                        await journal.AppendAsync("smelting-pair-deferred", new { item, missing, pairs = 1 + helpers.Count, shortfall, state.Tick }, token);
+                        return;
+                    }
+                    var site = await ControllerPlanning.TryRunAsync(t => new ExtractionPlanner().FindNewSite(local, plan.DrillItem, furnaceItem, ore, catalog, t),
+                        controller, TimeSpan.FromSeconds(30), token);
+                    if (site is null)
+                    {
+                        await journal.AppendAsync("smelting-pair-no-site", new { item, local.CollectedTick }, token);
+                        expanding = false;
+                        return;
+                    }
+                    var protectedStock = retained.ToDictionary(p => p.Key, p => (long)p.Value, StringComparer.Ordinal);
+                    // The drill recipe consumes a furnace, so the drill is crafted before the pair's own furnace.
+                    foreach (string part in new[] { plan.DrillItem, furnaceItem })
+                    {
+                        var before = await production.ObserveAsync(token);
+                        RequireScope(before.Scope);
+                        await production.HandcraftFromCarriedAsync(part, checked((int)(before.Inventory.GetValueOrDefault(part) + 1)), token,
+                            catalog.Scope, protectedStock);
+                    }
+                    await controller.TravelAsync(site.Receiver.Position, 8, catalog, token);
+                    local = await LocalMapAsync();
+                    site = await ControllerPlanning.TryRunAsync(t => new ExtractionPlanner().FindNewSite(local, plan.DrillItem, furnaceItem, ore, catalog, t),
+                        controller, TimeSpan.FromSeconds(30), token)
+                        ?? throw new InvalidOperationException("The helper smelting site changed before construction.");
+                    string furnaceId = await new PoweredMachineController(game, journal).BuildAtAsync(furnaceItem, site.Receiver, catalog,
+                        controller, token, [site.Connection.Drill.Position]);
+                    local = await LocalMapAsync();
+                    var furnace = local.Entities.Single(e => e.Id == furnaceId);
+                    var field = new SpatialCollisionField(local with { Entities = local.Entities.Where(e => e.Id != local.Actor.Id).ToArray() });
+                    var connection = new ExtractionPlanner().Find(field, plan.DrillItem, ore, catalog, [furnace]).FirstOrDefault()
+                        ?? throw new InvalidOperationException("The helper furnace has no confirmed extraction connection; preserve the partial installation.");
+                    string helperDrillId = await new PoweredMachineController(game, journal).BuildAtAsync(plan.DrillItem, connection.Drill, catalog,
+                        controller, token, [furnace.Position]);
+                    local = await LocalMapAsync();
+                    var helperDrill = local.Entities.Single(e => e.Id == helperDrillId);
+                    if (helperDrill.DropPosition is null || !ExtractionPlanner.DropTile(helperDrill.DropPosition).Overlaps(furnace.Bounds)
+                        || (helperDrill.DropTargetId is not null && helperDrill.DropTargetId != furnaceId))
+                        throw new InvalidDataException("Native helper drill output does not match the computed connection.");
+                    var built = new SmeltingPair(helperDrillId, furnaceId, helperDrill.Position, furnace.Position);
+                    helpers.Add(built);
+                    await journal.AppendAsync("smelting-pair-built", new { item, built, missing, pairRate, pairs = 1 + helpers.Count, local.CollectedTick }, token);
+                    await FuelAsync(built.DrillId, built.DrillPosition, built);
+                    await FuelAsync(built.FurnaceId, built.FurnacePosition, built);
+                }
+            }
+            catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+            {
+                // Extra pairs only shorten the wait; the observed primary pair still completes the stock goal.
+                expanding = false;
+                await journal.AppendAsync("smelting-pair-error", new { item, error = error.GetType().Name, error.Message }, token);
+            }
+        }
+
+        async Task<SpatialSnapshot> LocalMapAsync()
+        {
+            var local = await spatial.CaptureAsync([plan.DrillItem, furnaceItem], radius: 48, cancellationToken: token);
+            RequireScope(local.Scope);
+            return local;
+        }
+
+        async Task FuelAsync(string entityId, MapPosition position, SmeltingPair pair, bool includeDrillReserve = true)
         {
             ProductionState state = await production.ObserveAsync(token);
             RequireScope(state.Scope);
@@ -169,15 +285,17 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
             RequireScope(burning.Scope);
             if (!NativeBurnerStock.From(burning, entityId).Empty) return;
             fuelPlan = ChooseFuel(state, includeDrillReserve);
-            int reserve = entityId == drillId ? fuelPlan.DrillReserve : fuelPlan.FurnaceReserve;
+            bool refuellingDrill = entityId == pair.DrillId;
+            int reserve = refuellingDrill ? fuelPlan.DrillReserve : fuelPlan.FurnaceReserve;
             await journal.AppendAsync("smelting-fuel-reassessment", new { entityId, state.Tick, fuelPlan, includeDrillReserve }, token);
             string fuel = fuelPlan.Fuel;
-            int procurement = fuelPlan.ProcurementTarget(entityId == drillId, state.Inventory.GetValueOrDefault(fuel),
-                state.Entities.Single(e => e.Id == drillId).Count("fuel", fuel),
-                state.Entities.Single(e => e.Id == receiver.Id).Count("fuel", fuel), includeDrillReserve);
+            int procurement = fuelPlan.ProcurementTarget(refuellingDrill, state.Inventory.GetValueOrDefault(fuel),
+                state.Entities.Single(e => e.Id == pair.DrillId).Count("fuel", fuel),
+                state.Entities.Single(e => e.Id == pair.FurnaceId).Count("fuel", fuel), includeDrillReserve);
             if (procurement > 0)
             {
                 var reserved = new HashSet<string>(StringComparer.Ordinal) { drillId, receiver.Id };
+                foreach (var helper in helpers) reserved.UnionWith([helper.DrillId, helper.FurnaceId]);
                 if (fuelPlan.CanProduce) await production.ProduceAsync(fuel, procurement, token, reserved);
                 else await production.CollectAvailableAsync(fuel, procurement, token, reserved);
             }

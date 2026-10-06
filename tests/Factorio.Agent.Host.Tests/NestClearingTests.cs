@@ -75,6 +75,16 @@ public sealed class NestClearingTests
     }
 
     [Fact]
+    public void AStandBeyondThePhotographIsApproachedAlongItsLineInsideTheView()
+    {
+        var map = SpatialPlannerTests.Map([]);
+        Assert.Equal(new MapPosition(8, 0), NestClearingController.Toward(map, new(100, 0)));
+        Assert.Equal(new MapPosition(0, -8), NestClearingController.Toward(map, new(0, -100)));
+        Assert.Throws<NavigationPlanningException>(() => NestClearingController.Toward(map with
+            { Actor = map.Actor with { Position = new(9, 0) } }, new(100, 0)));
+    }
+
+    [Fact]
     public void StagingStandsTowardTheActorBeyondWormRangeAndTheTravelMargin()
     {
         var nest = Memory().Clusters().Single(c => c.Structures.Count == 2);

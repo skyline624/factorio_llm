@@ -301,10 +301,18 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             var map = await new SpatialClient(game).CaptureAsync(radius: 48, cancellationToken: token);
             if (map.Actor.Position.DistanceTo(destination) <= .6) return;
             var field = new SpatialCollisionField(map with { StationaryThreats = [] }, 0);
+            // On 2026-10-06 (seed 20261106) a worm's stand lay beyond the 48-tile photograph after the spawner step and every
+            // leg failed with GoalOutsideSnapshot; such a stand is approached through the line's farthest point still in view.
+            bool beyond = !Inner(map.Bounds).Contains(destination);
+            var goal = beyond ? Toward(map, destination) : destination;
             // A turret built by defense can now occupy the exact point; any point within reach of it serves the step.
-            var route = new RoutePlanner().Find(field, destination, .4, token: token);
-            if (route.Status != RouteStatus.Found) route = new RoutePlanner().Find(field, destination, 2, token: token);
-            if (route.Status == RouteStatus.Found && route.Waypoints.Count == 0) return;
+            var route = new RoutePlanner().Find(field, goal, beyond ? 2 : .4, token: token);
+            if (route.Status != RouteStatus.Found) route = new RoutePlanner().Find(field, goal, beyond ? 6 : 2, token: token);
+            if (route.Status == RouteStatus.Found && route.Waypoints.Count == 0)
+            {
+                if (beyond) continue;
+                return;
+            }
             if (route.Status != RouteStatus.Found || route.Waypoints.Count == 0)
                 throw new NavigationPlanningException(route.Status, $"{route.Status}: no direct nest approach route.");
             var path = new List<MapPosition>();
@@ -325,6 +333,22 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
                 throw new InvalidOperationException($"Direct nest approach ended with {receipt.Status}: {receipt.Error?.Code}.");
         }
         throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "The direct nest approach exhausted its legs.");
+    }
+
+    private static WorldBox Inner(WorldBox bounds) => new(new(bounds.Min.X + 4, bounds.Min.Y + 4), new(bounds.Max.X - 4, bounds.Max.Y - 4));
+
+    /// <summary>The farthest point toward the destination, at most 40 tiles away, that this photograph still shows with margin.</summary>
+    internal static MapPosition Toward(SpatialSnapshot map, MapPosition destination)
+    {
+        var from = map.Actor.Position;
+        double distance = from.DistanceTo(destination);
+        var inner = Inner(map.Bounds);
+        for (double reach = Math.Min(distance, 40); reach > 4; reach -= 2)
+        {
+            var point = new MapPosition(from.X + (destination.X - from.X) * reach / distance, from.Y + (destination.Y - from.Y) * reach / distance);
+            if (inner.Contains(point)) return point;
+        }
+        throw new NavigationPlanningException(RouteStatus.GoalOutsideSnapshot, "The photograph shows no step toward the nest approach.");
     }
 
     private async Task<bool> CarryAsync(string turret, int turrets, string ammunition, CancellationToken token)

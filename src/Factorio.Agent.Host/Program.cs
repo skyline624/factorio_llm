@@ -61,6 +61,7 @@ try
           verify-silo-cell --session FILE
           verify-furnace-fuel --session FILE
           verify-smelting-collection --session FILE
+          verify-smelting-pairs --session FILE
           verify-assembly-batches --session FILE
           verify-campaign-journals --session FILE
           verify-fluid-extraction --session FILE [--reuse] [--stationary-threat] [--factory-adoption] [--expansion] [--defer-expansion]
@@ -503,6 +504,12 @@ try
         {
             var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             Print(new { report = await new ArmedCraftingQualification(session).RunAsync(shutdown.Token) });
+            break;
+        }
+        case "verify-smelting-pairs":
+        {
+            var session = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(new { report = await new SmeltingPairsQualification(session).RunAsync(shutdown.Token) });
             break;
         }
         case "verify-smelting-collection":

@@ -129,7 +129,7 @@ public sealed class SmeltingFuelPlannerTests
         Assert.Equal(3, fuel.FurnaceReserve);
     }
 
-    private static (SpatialSnapshot, ProductionCatalog, SmeltingPlan) Setup()
+    internal static (SpatialSnapshot, ProductionCatalog, SmeltingPlan) Setup()
     {
         var (map, catalog) = SmeltingPlannerTests.Setup(installed: true);
         map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes)
