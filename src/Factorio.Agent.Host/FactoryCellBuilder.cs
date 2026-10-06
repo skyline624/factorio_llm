@@ -13,6 +13,14 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
 {
     public const int ZoneSlots = 8;
 
+    /// <summary>The centroid of ready smelter cells' output chests, or null before any plate is smelted by a cell.</summary>
+    internal static MapPosition? SmelterAnchor(FactoryState state)
+    {
+        var outputs = state.Cells.Where(c => c.Kind == "smelter" && c.Status == "ready")
+            .Select(c => c.Plan?.GetValueOrDefault("output-chest")?.Position).OfType<MapPosition>().ToArray();
+        return outputs.Length == 0 ? null : new(outputs.Average(p => p.X), outputs.Average(p => p.Y));
+    }
+
     public async Task<FactoryCell> BuildAsync(string kind, string machineItem, string? recipe, CancellationToken token = default)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -121,31 +129,60 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
 
         async Task<FactoryZone> CreateZoneAsync(EntityGeometry machine, bool transportAccess)
         {
-            var map = await spatial.CaptureAsync(items, 48, token);
-            RequireScope(map.Scope, catalog);
-            var known = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
-            RequireScope(known.Scope, catalog);
-            var powered = map.Entities.Where(e => map.Prototypes[e.Name].Type == "electric-pole" && e.Power?.NetworkId is not null
-                    && FactoryPower.IsFed(known, e.Id) == true)
-                .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).FirstOrDefault()
-                ?? throw new InvalidOperationException("A factory zone needs a local pole on a known generator network; build or repair power first.");
             var current = await registry.LoadAsync(catalog.Scope.WorldId, token);
-            // Empty slots still belong to their old zone. A new geometry must not allocate a second band over them.
-            var ground = map;
-            foreach (var existing in current.Zones) ground = ReserveZone(ground, existing, equipment.Pole);
-            var site = new FactoryZonePlanner().FindLargest(KeepSteamGrowth(ground, current.Zones), machine, powered.Position, Slots(kind), token, transportAccess);
-            if (site is null && steam is not null)
+            var origin = (await spatial.CaptureAsync(items, 48, token)).Actor.Position;
+            // Plates are most of what a band consumes. On 2026-10-06 (seed 987654321) the first band stood beside the steam
+            // engine, 100 tiles from both smelters, and its first plate link took 133 belts; a band beside the smelter
+            // centroid keeps those links short. Without a site there, the band is placed where the actor stood.
+            if (SmelterAnchor(current) is { } anchor && anchor.DistanceTo(origin) > 24)
             {
-                // A band that blocks steam growth is still better than no factory; the journal keeps the trade-off visible.
-                await journal.AppendAsync("factory-zone-steam-growth-blocked", new { map.CollectedTick }, token);
-                site = new FactoryZonePlanner().FindLargest(ground, machine, powered.Position, Slots(kind), token, transportAccess);
+                try
+                {
+                    await controller.TravelAsync(anchor, 8, catalog, token);
+                    if (await TrySiteAsync(anchor) is { } near) return near;
+                }
+                catch (NavigationPlanningException error)
+                {
+                    await journal.AppendAsync("factory-zone-anchor-unreachable", new { anchor, error.Message }, token);
+                }
+                await controller.TravelAsync(origin, 8, catalog, token);
             }
-            if (site is null) throw new InvalidOperationException("No dry, deposit-free rectangle for a factory band near the power network.");
-            var created = new FactoryZone(current.Zones.Count == 0 ? 1 : current.Zones.Max(z => z.Id) + 1, site.Origin, site.Slots,
-                FactoryBandPlanner.Pitch(machine, transportAccess), FactoryBandPlanner.BandHeight(machine, transportAccess), transportAccess);
-            await registry.SaveAsync(current with { Zones = [.. current.Zones, created] }, token);
-            await journal.AppendAsync("factory-zone", new { created, site.Clearance.Count, sourcePole = powered.Id, map.CollectedTick }, token);
-            return created;
+            return await TrySiteAsync(null)
+                ?? throw new InvalidOperationException("No dry, deposit-free rectangle for a factory band near the power network.");
+
+            async Task<FactoryZone?> TrySiteAsync(MapPosition? preferred)
+            {
+                var map = await spatial.CaptureAsync(items, 48, token);
+                RequireScope(map.Scope, catalog);
+                var known = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
+                RequireScope(known.Scope, catalog);
+                var powered = map.Entities.Where(e => map.Prototypes[e.Name].Type == "electric-pole" && e.Power?.NetworkId is not null
+                        && FactoryPower.IsFed(known, e.Id) == true)
+                    .OrderBy(e => e.Position.DistanceTo(preferred ?? map.Actor.Position)).FirstOrDefault();
+                if (powered is null)
+                {
+                    if (preferred is not null) return null;
+                    throw new InvalidOperationException("A factory zone needs a local pole on a known generator network; build or repair power first.");
+                }
+                current = await registry.LoadAsync(catalog.Scope.WorldId, token);
+                // Empty slots still belong to their old zone. A new geometry must not allocate a second band over them.
+                var ground = map;
+                foreach (var existing in current.Zones) ground = ReserveZone(ground, existing, equipment.Pole);
+                var target = preferred ?? powered.Position;
+                var site = new FactoryZonePlanner().FindLargest(KeepSteamGrowth(ground, current.Zones), machine, target, Slots(kind), token, transportAccess);
+                if (site is null && steam is not null)
+                {
+                    // A band that blocks steam growth is still better than no factory; the journal keeps the trade-off visible.
+                    await journal.AppendAsync("factory-zone-steam-growth-blocked", new { map.CollectedTick }, token);
+                    site = new FactoryZonePlanner().FindLargest(ground, machine, target, Slots(kind), token, transportAccess);
+                }
+                if (site is null) return null;
+                var created = new FactoryZone(current.Zones.Count == 0 ? 1 : current.Zones.Max(z => z.Id) + 1, site.Origin, site.Slots,
+                    FactoryBandPlanner.Pitch(machine, transportAccess), FactoryBandPlanner.BandHeight(machine, transportAccess), transportAccess);
+                await registry.SaveAsync(current with { Zones = [.. current.Zones, created] }, token);
+                await journal.AppendAsync("factory-zone", new { created, site.Clearance.Count, sourcePole = powered.Id, preferred, map.CollectedTick }, token);
+                return created;
+            }
         }
 
         async Task ClearAsync(CellLayout plan)
