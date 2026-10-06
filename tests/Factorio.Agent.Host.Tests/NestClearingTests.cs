@@ -21,6 +21,14 @@ public sealed class NestClearingTests
     }
 
     [Fact]
+    public void APlannedCellBringsADistantGuardingNestWithinReach()
+    {
+        Assert.DoesNotContain(NestClearingController.Choose(Memory(), Industry, new(1, "world", []), 1000)!.Structures, s => s.Id == "far-spawner");
+        var chosen = NestClearingController.Choose(Memory(), [], new(1, "world", []), 1000, [new(480, 10)]);
+        Assert.Equal(["far-spawner"], chosen!.Structures.Select(s => s.Id));
+    }
+
+    [Fact]
     public void AFailedBaseWaitsForItsRetryDelayWhileAClearedOneDoesNotBlock()
     {
         var center = Memory().Clusters().Single(c => c.Structures.Count == 2).Center;

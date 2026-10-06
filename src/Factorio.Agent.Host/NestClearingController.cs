@@ -48,7 +48,9 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         var industry = IndustryClusters.Read(registry, snapshot);
         var memory = await new NestMemoryStore(directory).LoadAsync(catalog.Scope.WorldId, token);
         var state = await LoadStateAsync(catalog.Scope.WorldId, token);
-        var nest = Choose(memory, industry, state, safety.Tick);
+        // Unfinished cells mark where the factory is going: worms guarding a planned oil field block it before it stands.
+        var planned = registry.Cells.Where(c => c.Status != "ready").SelectMany(c => c.Plan?.Values.Select(p => p.Position) ?? []).ToArray();
+        var nest = Choose(memory, industry, state, safety.Tick, planned);
         if (nest is null) return await DoneAsync(new("no-nest-in-reach", null, 0, 0, 0, 0, [], safety.Tick), token);
         var result = await ExecuteAsync(catalog, registry, nest, safety.Tick, token);
         await SaveStateAsync(state with { Attempts = state.Attempts.Where(a => a.Center.DistanceTo(nest.Center) > NestMemory.LinkDistance)
@@ -80,14 +82,20 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         }
     }
 
-    /// <summary>The remembered base closest to own industry, within reach and not inside a retry delay after a failure.</summary>
-    internal static NestCluster? Choose(NestMemory memory, IReadOnlyList<IndustryCluster> industry, NestClearingState state, long tick)
+    /// <summary>
+    /// The remembered base closest to own industry or to an unfinished cell's planned entity, within reach and not inside a
+    /// retry delay after a failure.
+    /// </summary>
+    internal static NestCluster? Choose(NestMemory memory, IReadOnlyList<IndustryCluster> industry, NestClearingState state, long tick,
+        IReadOnlyList<MapPosition>? planned = null)
     {
-        if (industry.Count == 0) return null;
+        planned ??= [];
+        if (industry.Count == 0 && planned.Count == 0) return null;
         return memory.Clusters()
             .Where(c => c.Spawners + c.Worms > 0 && !state.Attempts.Any(a => a.Outcome != "cleared"
                 && a.Center.DistanceTo(c.Center) <= NestMemory.LinkDistance && tick - a.Tick < RetryTicks))
-            .Select(c => (Cluster: c, Distance: industry.Min(i => IndustryClusterPlanner.Distance(i.Box, c.Center))))
+            .Select(c => (Cluster: c, Distance: industry.Select(i => IndustryClusterPlanner.Distance(i.Box, c.Center))
+                .Concat(planned.Select(p => p.DistanceTo(c.Center))).Min()))
             .Where(p => p.Distance <= ReachFromIndustry)
             .OrderBy(p => p.Distance).ThenBy(p => p.Cluster.Center.X).ThenBy(p => p.Cluster.Center.Y)
             .Select(p => p.Cluster).FirstOrDefault();
