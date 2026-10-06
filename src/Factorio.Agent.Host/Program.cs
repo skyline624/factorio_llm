@@ -62,6 +62,7 @@ try
           verify-furnace-fuel --session FILE
           verify-smelting-collection --session FILE
           verify-smelting-pairs --session FILE
+          recover-host-loss --session FILE --save SAVE --reason TEXT [--root DIR]
           verify-assembly-batches --session FILE
           verify-campaign-journals --session FILE
           verify-fluid-extraction --session FILE [--reuse] [--stationary-threat] [--factory-adoption] [--expansion] [--defer-expansion]
@@ -362,6 +363,13 @@ try
             var prior = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
             var session = await FactorioRuntime.ResumeAsync(prior, Option("root") ?? Environment.CurrentDirectory, shutdown.Token);
             Print(new { session.ManifestPath, session.ServerProcessId, session.GamePort, session.RconPort, session.Seed, session.IsFixture });
+            break;
+        }
+        case "recover-host-loss":
+        {
+            var prior = await RuntimeSession.ReadAsync(Required("session"), shutdown.Token);
+            Print(await HostLossRecovery.RunAsync(prior, Required("save"), Required("reason"), Option("root") ?? Environment.CurrentDirectory,
+                shutdown.Token));
             break;
         }
         case "connect":

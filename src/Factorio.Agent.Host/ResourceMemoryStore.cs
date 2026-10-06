@@ -26,6 +26,21 @@ internal sealed class ResourceMemoryStore(string directory)
         memory.ValidateFor(worldId, surfaceIndex, tick);
         return memory;
     }
+    /// <summary>Every surface's memory, returned to an approved host-loss restoration tick.</summary>
+    public async Task<int> RestoreToAsync(long tick, CancellationToken token)
+    {
+        int dropped = 0;
+        foreach (string path in Directory.EnumerateFiles(directory, "resource-memory-*.json"))
+        {
+            var memory = JsonSerializer.Deserialize<ResourceMemorySnapshot>(await File.ReadAllTextAsync(path, token), Protocol.Json)
+                ?? throw new InvalidDataException("Empty resource memory file.");
+            var restored = memory.RestoredTo(tick);
+            dropped += memory.Resources.Count - restored.Resources.Count;
+            await LocalJson.WriteAsync(path, restored, token);
+        }
+        return dropped;
+    }
+
     public async Task<ResourceMemorySnapshot> ImportAsync(SpatialSnapshot map, IReadOnlyList<ResourceSighting> history, CancellationToken token)
     {
         var prior = await ReadAsync(map, token);

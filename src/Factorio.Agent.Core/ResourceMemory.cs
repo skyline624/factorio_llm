@@ -45,6 +45,10 @@ public sealed record ResourceMemorySnapshot(string WorldId, int SurfaceIndex, lo
             throw new InvalidDataException("Resource history has incompatible identity, time or contents.");
     }
 
+    /// <summary>After an approved host-loss restoration: sightings from the lost history are dropped, the rest kept.</summary>
+    public ResourceMemorySnapshot RestoredTo(long tick) => tick < 0 ? throw new ArgumentOutOfRangeException(nameof(tick))
+        : this with { LastTick = Math.Min(LastTick, tick), Resources = Resources.Where(r => r.ObservedTick <= tick).ToArray() };
+
     public ResourceMemorySnapshot Merge(SpatialSnapshot map)
     {
         ValidateFor(map);

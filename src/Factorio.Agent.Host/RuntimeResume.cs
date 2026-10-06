@@ -9,7 +9,8 @@ namespace Factorio.Agent.Host;
 
 public static partial class FactorioRuntime
 {
-    public static async Task<RuntimeSession> ResumeAsync(RuntimeSession prior, string root, CancellationToken token = default)
+    public static async Task<RuntimeSession> ResumeAsync(RuntimeSession prior, string root, CancellationToken token = default,
+        bool hostLossRecovery = false)
     {
         using var lease = ActorControlLease.Acquire(prior.Directory);
         await RequireCurrentManifestAsync(prior, token);
@@ -38,7 +39,7 @@ public static partial class FactorioRuntime
             SessionId = Guid.NewGuid().ToString("N")
         };
         string evidence = Path.Combine(run, "resume.json");
-        await LocalJson.WriteAsync(evidence, new { phase = "prepared", sourceHash = copiedHash, sealedCheckpoint = seal is not null }, token);
+        await LocalJson.WriteAsync(evidence, new { phase = "prepared", sourceHash = copiedHash, sealedCheckpoint = seal is not null, hostLossRecovery }, token);
         ProcessStartInfo start = CreateStart(session.Executable, ["--config", session.Configuration, "--mod-directory", session.ModsDirectory,
             "--start-server", save, "--bind", $"127.0.0.1:{session.GamePort}", "--rcon-bind", $"127.0.0.1:{session.RconPort}",
             "--rcon-password", session.RconPassword, "--server-settings", Path.Combine(session.Directory, "server-settings.json")]);
@@ -52,7 +53,8 @@ public static partial class FactorioRuntime
         deadline.CancelAfter(TimeSpan.FromSeconds(90));
         await using var raw = new FactorioGameClient(session.CreateRcon(keepConnectionOpen: true));
         GameResponse before = await ObserveLoadedAsync(session, process, raw, deadline.Token);
-        CheckpointStore.VerifyLoaded(before, prior, seal, watermark);
+        // After a host loss an autosave may hold the lost timeline's active work: the fresh session's hello cancels it.
+        CheckpointStore.VerifyLoaded(before, prior, seal, watermark, allowActiveWork: hostLossRecovery && seal is null);
         await LocalJson.WriteAsync(Path.Combine(run, "loaded-observation.json"), before, deadline.Token);
         await LocalJson.WriteAsync(evidence, new { phase = "hello-pending", sourceHash = copiedHash, sealedCheckpoint = seal is not null }, deadline.Token);
         // No retry: on an ambiguous response the manifest identifies the live process for inspection.

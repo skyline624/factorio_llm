@@ -27,6 +27,19 @@ public sealed class ResourceMemoryTests : IDisposable
     }
 
     [Fact]
+    public void AHostLossRestorationDropsOnlySightingsFromTheLostHistory()
+    {
+        var map = Map();
+        var memory = ResourceMemorySnapshot.Empty(map).Merge(map);
+        var later = memory.Merge(map with { CollectedTick = 500, Bounds = new(new(80, 80), new(105, 105)), Entities = [] });
+        var restored = later.RestoredTo(map.CollectedTick);
+        Assert.Equal(map.CollectedTick, restored.LastTick);
+        Assert.All(restored.Resources, r => Assert.True(r.ObservedTick <= map.CollectedTick));
+        restored.ValidateFor(map.Scope.WorldId, map.SurfaceIndex, map.CollectedTick);
+        Assert.Empty(later.RestoredTo(map.CollectedTick - 1).Resources);
+    }
+
+    [Fact]
     public void ALightPhotographWithoutOreForgetsNothing()
     {
         var map = Map();

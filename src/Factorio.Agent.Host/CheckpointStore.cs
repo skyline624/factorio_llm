@@ -66,7 +66,7 @@ public static class CheckpointStore
     }
 
     public static ActorScope VerifyLoaded(GameResponse observation, RuntimeSession prior, CheckpointSeal? seal,
-        SessionGameClient.Watermark? watermark)
+        SessionGameClient.Watermark? watermark, bool allowActiveWork = false)
     {
         if (!observation.Ok) throw new GameRpcException(observation.Error!);
         ActorScope scope = observation.Data.GetProperty("scope").Deserialize<ActorScope>(Protocol.Json)!;
@@ -80,7 +80,7 @@ public static class CheckpointStore
             || !agent.GetProperty("awaitingController").GetBoolean()
             || agent.GetProperty("checkpointId").GetString() != seal.CheckpointId))
             throw new SessionDivergenceException("The loaded engine does not match the prepared checkpoint.");
-        if (observation.Data.TryGetProperty("operation", out JsonElement operation) && operation.ValueKind == JsonValueKind.Object
+        if (!allowActiveWork && observation.Data.TryGetProperty("operation", out JsonElement operation) && operation.ValueKind == JsonValueKind.Object
             && operation.TryGetProperty("operationId", out var id) && !OperationReceipt.Parse(operation, id.GetString()!).IsTerminal)
             throw new SessionDivergenceException("A legacy checkpoint contains active work; automatic replay is refused.");
         return scope;
