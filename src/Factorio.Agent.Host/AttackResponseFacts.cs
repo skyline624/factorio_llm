@@ -18,13 +18,28 @@ internal static class AttackResponseFacts
         JsonElement agent, CancellationToken token)
     {
         IReadOnlyList<AttackRecord> records = [];
+        NestMemory? memory = null;
+        string? lastClearing = null;
         if (directory is not null)
+        {
             try { records = (await new AttackLog(directory).LoadAsync(factory.Scope.WorldId, token)).Records; }
             catch (Exception error) when (error is InvalidDataException or JsonException) { }
-        return Build(records, state, factory, defenses, agent);
+            try { memory = await new NestMemoryStore(directory).LoadAsync(factory.Scope.WorldId, token); }
+            catch (Exception error) when (error is InvalidDataException or JsonException) { }
+            string clearing = Path.Combine(directory, "nest-clearing.json");
+            if (File.Exists(clearing))
+                try
+                {
+                    lastClearing = JsonSerializer.Deserialize<NestClearingState>(await File.ReadAllTextAsync(clearing, token), Protocol.Json)?
+                        .Attempts.OrderByDescending(a => a.Tick).FirstOrDefault()?.Outcome;
+                }
+                catch (JsonException) { }
+        }
+        return Build(records, state, factory, defenses, agent, memory, lastClearing);
     }
 
-    public static object Build(IReadOnlyList<AttackRecord> records, FactoryState? state, FactorySnapshot factory, DefenseFactoryState? defenses, JsonElement agent)
+    public static object Build(IReadOnlyList<AttackRecord> records, FactoryState? state, FactorySnapshot factory, DefenseFactoryState? defenses, JsonElement agent,
+        NestMemory? memory = null, string? lastClearing = null)
     {
         var clusters = state is null ? [] : IndustryClusters.Read(state, factory);
         var positions = factory.Records.Where(r => r.Kind == "entity")
@@ -51,6 +66,8 @@ internal static class AttackResponseFacts
                 };
             }).ToArray(),
             clustersTruncated = clusters.Count > MaximumClusters,
+            // Counts and distances only: remembered positions stay in the private memory.
+            enemyBases = EnemyBases(memory, clusters, lastClearing),
             actor = new
             {
                 armor = Text(loadout, "armor"), weapon = Text(weapon, "name"), ammunition = Text(weapon, "ammunition"),
@@ -59,6 +76,24 @@ internal static class AttackResponseFacts
                     ? carried.EnumerateArray().Where(c => c.GetProperty("kind").GetString() == "ammo").Sum(c => c.GetProperty("count").GetInt32()) : 0
             },
             interpretation = "Attacks come from destroyed registered entities, damaged own entities, visible enemy units near industry and defense reflex fights. Between goals C# answers each attacked cluster with at most 4 turret nests made from stock, walls only when stocked, and equips the best obtainable armor, bullet gun and ammunition. Coverage counts industry within range of active loaded turrets; nests are registered turret cells beside the cluster."
+        };
+    }
+
+    private static object? EnemyBases(NestMemory? memory, IReadOnlyList<IndustryCluster> clusters, string? lastClearing)
+    {
+        if (memory is null || clusters.Count == 0) return null;
+        var bases = memory.Clusters().Select(c => (Base: c, Distance: clusters.Min(i => IndustryClusterPlanner.Distance(i.Box, c.Center))))
+            .OrderBy(p => p.Distance).ToArray();
+        var near = bases.Where(p => p.Distance <= NestClearingController.ReachFromIndustry).ToArray();
+        return new
+        {
+            remembered = bases.Length,
+            withinClearingReach = near.Length,
+            nearestDistance = bases.Length == 0 ? (double?)null : Math.Round(bases[0].Distance),
+            spawnersWithinReach = near.Sum(p => p.Base.Spawners),
+            wormsWithinReach = near.Sum(p => p.Base.Worms),
+            lastClearing,
+            interpretation = $"Between goals C# clears the closest remembered enemy base within {NestClearingController.ReachFromIndustry} tiles of industry by turret creep: it needs {NestClearingController.TurretsPerStep} gun turrets and magazines in stock, and stronger rounds once medium worms appear. After an attack it scouts around industry for an unseen base."
         };
     }
 

@@ -72,6 +72,24 @@ public sealed class AttackResponseTests
     }
 
     [Fact]
+    public void PlannerFactsCountRememberedEnemyBasesWithoutTheirPositions()
+    {
+        var state = new FactoryState(1, "world", [], [Cell("smelter-1", "smelter", ("furnace", "10", 5, 5))]);
+        var snapshot = IndustryClusterTests.Snapshot(IndustryClusterTests.Entity("10", "furnace", 5, 5));
+        var memory = new NestMemory(1, "world", [new("s1", "biter-spawner", new(123.25, 4.75), null, 1),
+            new("w1", "small-worm-turret", new(130.75, 9.25), 25, 1), new("s2", "biter-spawner", new(900.5, 4.5), null, 1)]);
+        string json = System.Text.Json.JsonSerializer.Serialize(AttackResponseFacts.Build([], state, snapshot, null, Protocol.ToElement(new { }),
+            memory, "no-turret"), Protocol.Json);
+        var bases = System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("enemyBases");
+        Assert.Equal(2, bases.GetProperty("remembered").GetInt32());
+        Assert.Equal(1, bases.GetProperty("withinClearingReach").GetInt32());
+        Assert.Equal((1, 1), (bases.GetProperty("spawnersWithinReach").GetInt32(), bases.GetProperty("wormsWithinReach").GetInt32()));
+        Assert.Equal("no-turret", bases.GetProperty("lastClearing").GetString());
+        Assert.DoesNotContain("123.25", json);
+        Assert.DoesNotContain("900.5", json);
+    }
+
+    [Fact]
     public void PlannerFactsSummarizeAttacksCoverageAndEquipmentWithoutCoordinates()
     {
         var state = new FactoryState(1, "world", [], [
