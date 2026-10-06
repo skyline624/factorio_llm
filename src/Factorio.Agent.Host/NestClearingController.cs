@@ -189,9 +189,13 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         await using var controller = new SpatialController(game, journal);
         var start = await new SpatialClient(game).CaptureAsync(radius: 16, cancellationToken: token);
         var staging = Staging(nest, start.Actor.Position);
+        // Carry the first step's turrets and magazines before leaving: on seed 20261106 the actor reached the staging point,
+        // then walked 150 tiles back to the base for turrets and returned.
+        if (!await CarryAsync(turret, TurretsPerStep, ammunition, token))
+            return new("no-stock", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], (await SafetyAsync(token)).Tick);
         await controller.TravelAsync(staging, 6, catalog, token);
         var steps = new List<NestClearingStep>();
-        int destroyed = 0, lost = 0;
+        int destroyed = 0, lost = 0, failedApproaches = 0;
         string status = "step-budget";
         for (int step = 0; step < MaximumSteps; step++)
         {
@@ -214,7 +218,17 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             if (plan is null) { status = "no-placement"; break; }
             if (plan.Exposure > MaximumExposure) { status = "too-exposed"; break; }
             await journal.AppendAsync("nest-clearing-step", new { step, plan, remaining = remaining.Count, map.CollectedTick }, token);
-            var outcome = await StepAsync(controller, catalog, plan, staging, remaining, turret, ammunition, token);
+            NestClearingStep outcome;
+            try { outcome = await StepAsync(controller, catalog, plan, staging, remaining, turret, ammunition, token); }
+            catch (Exception error) when (error is NavigationPlanningException || error is InvalidOperationException && error is not ObjectDisposedException)
+            {
+                // Defense can build its own turrets on the planned stand point while a pack attacks: replan from a new photograph.
+                await journal.AppendAsync("nest-clearing-approach-failed", new { step, error = error.GetType().Name, error.Message }, token);
+                if (++failedApproaches >= 3) { status = "approach-failed"; break; }
+                await MoveDirectAsync(controller, staging, token);
+                continue;
+            }
+            failedApproaches = 0;
             steps.Add(outcome);
             destroyed += outcome.Destroyed;
             lost += outcome.Lost;
@@ -287,7 +301,10 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             var map = await new SpatialClient(game).CaptureAsync(radius: 48, cancellationToken: token);
             if (map.Actor.Position.DistanceTo(destination) <= .6) return;
             var field = new SpatialCollisionField(map with { StationaryThreats = [] }, 0);
+            // A turret built by defense can now occupy the exact point; any point within reach of it serves the step.
             var route = new RoutePlanner().Find(field, destination, .4, token: token);
+            if (route.Status != RouteStatus.Found) route = new RoutePlanner().Find(field, destination, 2, token: token);
+            if (route.Status == RouteStatus.Found && route.Waypoints.Count == 0) return;
             if (route.Status != RouteStatus.Found || route.Waypoints.Count == 0)
                 throw new NavigationPlanningException(route.Status, $"{route.Status}: no direct nest approach route.");
             var path = new List<MapPosition>();
@@ -304,7 +321,7 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             if (path.Count == 0) throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "The direct nest approach has no first step.");
             var receipt = await controller.WorkAsync("move", new { position = path[^1], tolerance = .3, waypoints = path.Count > 1 ? path : null },
                 900, new { position = map.Actor.Position, positionTolerance = .5 }, token);
-            if (receipt.Status != "completed" && receipt.Error?.Code is not ("path_blocked" or "position_precondition" or "cancelled"))
+            if (receipt.Status != "completed" && receipt.Error?.Code is not ("path_blocked" or "position_precondition" or "cancelled" or "deadline_exceeded"))
                 throw new InvalidOperationException($"Direct nest approach ended with {receipt.Status}: {receipt.Error?.Code}.");
         }
         throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "The direct nest approach exhausted its legs.");
