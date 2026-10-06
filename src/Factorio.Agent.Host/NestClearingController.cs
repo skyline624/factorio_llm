@@ -64,13 +64,13 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         string? turret = catalog.Turrets?.Keys.Where(k => stock.GetValueOrDefault(k) > 0 || FactoryDirector.Enabled(catalog, k))
             .OrderByDescending(k => stock.GetValueOrDefault(k)).ThenBy(k => k, StringComparer.Ordinal).FirstOrDefault();
         if (turret is null) return new("no-turret", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick);
-        string ammunition;
-        try { ammunition = DefenseDeploymentPlanner.ChooseAmmunition(catalog.Turrets![turret], catalog, stock); }
-        catch (InvalidOperationException) { return new("no-ammunition", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick); }
+        var choices = StrongestAmmunition(catalog.Turrets![turret], catalog, stock);
+        if (choices.Count == 0) return new("no-ammunition", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick);
         // The actor's own reserve stays loaded: the step's magazines come on top of the survival kit.
         long magazines = (long)TurretsPerStep * MagazinesPerTurret + SurvivalKitPlanner.MagazineReserve;
-        if (AttackResponseController.Affordable(catalog, turret, ammunition, (int)(magazines / TurretsPerStep) + 1, stock, TurretsPerStep) < TurretsPerStep)
-            return new("no-stock", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick);
+        string? ammunition = choices.FirstOrDefault(a => AttackResponseController.Affordable(catalog, turret, a,
+            (int)(magazines / TurretsPerStep) + 1, stock, TurretsPerStep) == TurretsPerStep);
+        if (ammunition is null) return new("no-stock", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick);
 
         await journal.AppendAsync("nest-clearing-plan", new { nest.Center, nest.Spawners, nest.Worms, radius = nest.Radius, turret, ammunition }, token);
         using (ProductionReservations.EnterFactory(registry))
@@ -92,6 +92,18 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             .OrderBy(p => p.Distance).ThenBy(p => p.Cluster.Center.X).ThenBy(p => p.Cluster.Center.Y)
             .Select(p => p.Cluster).FirstOrDefault();
     }
+
+    /// <summary>
+    /// Compatible stocked or producible magazines, highest native round damage first: medium worms shrug off the cheapest
+    /// rounds, which the defensive choice prefers.
+    /// </summary>
+    internal static IReadOnlyList<string> StrongestAmmunition(NativeTurret turret, ProductionCatalog catalog, IReadOnlyDictionary<string, long> stock) =>
+        catalog.Items.Where(p => p.Value.AmmoCategory is { } category && turret.AmmoCategories.Contains(category)
+                && p.Value.MagazineSize is > 0
+                && (stock.GetValueOrDefault(p.Key) > 0 || catalog.Recipes.Any(r => r.Enabled && r.Ingredients.All(i => i.DeterministicItem)
+                    && r.Products.Any(m => m.Name == p.Key && m.DeterministicItem))))
+            .OrderByDescending(p => p.Value.RoundDamage ?? 0).ThenByDescending(p => stock.GetValueOrDefault(p.Key) > 0)
+            .ThenBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key).ToArray();
 
     /// <summary>A staging point toward the actor, beyond every remembered worm range plus the travel margin.</summary>
     internal static MapPosition Staging(NestCluster nest, MapPosition actor)

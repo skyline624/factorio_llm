@@ -32,6 +32,17 @@ public sealed class NestClearingTests
     }
 
     [Fact]
+    public void TheStrongestCompatibleStockedOrProducibleRoundsComeFirst()
+    {
+        var (_, catalog, _, _) = PortableDefenseTests.Fixture();
+        var turret = catalog.Turrets!["native-turret"];
+        Assert.Equal(["strong-rounds", "basic-rounds"], NestClearingController.StrongestAmmunition(turret, catalog,
+            new Dictionary<string, long> { ["basic-rounds"] = 60, ["strong-rounds"] = 5, ["incompatible-rounds"] = 9 }));
+        Assert.Equal(["basic-rounds"], NestClearingController.StrongestAmmunition(turret, catalog,
+            new Dictionary<string, long> { ["basic-rounds"] = 60 }));
+    }
+
+    [Fact]
     public void StagingStandsTowardTheActorBeyondWormRangeAndTheTravelMargin()
     {
         var nest = Memory().Clusters().Single(c => c.Structures.Count == 2);
