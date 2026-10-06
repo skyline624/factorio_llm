@@ -78,7 +78,9 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         await EnsureCarriedAsync(registry, catalog, CarriedStock.Unplaced(layout, cell.Entities), token);
 
         var walkway = new MapPosition((layout.Walkway.Min.X + layout.Walkway.Max.X) / 2, (layout.Walkway.Min.Y + layout.Walkway.Max.Y) / 2);
-        await controller.TravelAsync(walkway, 1, catalog, token);
+        // Transport links may run along a band's walkway; a belt is no stopping point, and on 2026-10-06 (seed 987654321)
+        // two belts under the walkway centre left no stable arrival within one tile. Each placement approaches on its own.
+        await controller.TravelAsync(walkway, 4, catalog, token);
         await ClearAsync(layout);
 
         var ids = new Dictionary<string, string>(cell.Entities, StringComparer.Ordinal);
