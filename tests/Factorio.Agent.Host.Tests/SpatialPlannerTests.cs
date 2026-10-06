@@ -205,13 +205,26 @@ public sealed class SpatialPlannerTests
         Assert.Equal(RouteStatus.Found, new RoutePlanner().Find(new(map), approach).Status);
     }
 
+    [Theory]
+    [InlineData(.2421875, .2421875)]
+    [InlineData(-.2421875, .234375)]
+    public void ConstructionKeepsSafeOffGridActorPosition(double x, double y)
+    {
+        var map = Map([]);
+        map = map with { Actor = map.Actor with { Position = new(x, y) } };
+        var placement = new PlacementCandidate(new(3.5, .5), 0, 0);
+        var approach = new PlacementPlanner().FindApproach(new(map), "chest", placement, [new(12, .5)]);
+        Assert.Equal(map.Actor.Position, approach);
+    }
+
     [Fact]
     public void ClosingAnOpeningKeepsTheActorOnTheSideOfRemainingConstruction()
     {
         SpatialSnapshot map = Map([
             new("upper", "wall", new(2.5, -6), new(new(2.2, -12), new(2.8, 0)), 0, "agent"),
             new("lower", "wall", new(2.5, 6), new(new(2.2, 1), new(2.8, 13)), 0, "agent")]);
-        map = map with { Actor = map.Actor with { Position = new(0, .5) } };
+        // An in-reach off-grid start must still cross before this chest closes the only opening.
+        map = map with { Actor = map.Actor with { Position = new(.03125, .45703125) } };
         var approach = new PlacementPlanner().FindApproach(new(map), "chest", new(new(2.5, .5), 0, 0), [new(12, .5)]);
         Assert.NotNull(approach);
         Assert.True(approach.X > 3, "Move through the opening before the new building closes it.");

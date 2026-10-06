@@ -48,19 +48,26 @@ public sealed class PlacementPlanner
             : footprint;
         var futureEntities = field.Map.Entities.Append(new SpatialEntity("planned-construction", building.Name,
             placement.Position, futureBounds, placement.Direction, "planned")).ToArray();
-        var candidates = new List<MapPosition>();
         double reach = field.Map.Actor.BuildDistance - 1;
+        MapPosition start = field.Map.Actor.Position;
+        // The real actor position is not generally on the half-tile search grid. Keep it when the
+        // same footprint, threat, exit and remaining-construction checks already prove it safe.
+        if (Eligible(start) && new RoutePlanner().Find(field, start, token: cancellationToken).Status == RouteStatus.Found
+            && PreservesAccess(start)) return start;
+        var candidates = new List<MapPosition>();
         for (double x = Math.Ceiling((placement.Position.X - reach) * 2) / 2; x <= placement.Position.X + reach; x += 0.5)
             for (double y = Math.Ceiling((placement.Position.Y - reach) * 2) / 2; y <= placement.Position.Y + reach; y += 0.5)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var point = new MapPosition(x, y);
-                if (point.DistanceTo(placement.Position) > reach || exclusion.Overlaps(field.Character.CollisionBox.Translate(point))
-                    || !CanStop(field, point)) continue;
+                if (!Eligible(point)) continue;
                 candidates.Add(point);
             }
         return candidates.OrderBy(p => p.DistanceTo(field.Map.Actor.Position)).ThenBy(p => p.DistanceTo(placement.Position))
             .FirstOrDefault(p => new RoutePlanner().Find(field, p, token: cancellationToken).Status == RouteStatus.Found && PreservesAccess(p));
+
+        bool Eligible(MapPosition point) => point.DistanceTo(placement.Position) <= reach
+            && !exclusion.Overlaps(field.Character.CollisionBox.Translate(point)) && CanStop(field, point);
 
         bool PreservesAccess(MapPosition approach)
         {
