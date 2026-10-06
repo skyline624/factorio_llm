@@ -145,12 +145,13 @@ public sealed class PowerFuelTests
     }
 
     [Fact]
-    public void SixWorkingSourcesDoNotCoverFiveBoilersWhenTwoAreOutsideTheNativeFrame()
+    public void SixWorkingSourcesRetainOneSurveyableSupplierOutsideTheJointNativeFrame()
     {
         var (state, snapshot, catalog, power) = SourceFrame();
         var need = PowerFuelTransport.SourceNeed(state, snapshot, catalog, power);
-        Assert.Equal(new PowerFuelSourceNeed(5, 4, 27), need);
-        Assert.Equal(1, need.Missing);
+        Assert.Equal(new PowerFuelSourceNeed(5, 4, 27, SurveyableSources: 1), need);
+        Assert.Equal(0, need.Missing);
+        Assert.Empty(FactoryTransportCoverage.Connected(state, snapshot, catalog, null, power));
         Assert.DoesNotContain(PowerFuelTransport.LocalSources(state, snapshot, state.Cells.Where(c => c.Kind == "power").ToArray()),
             c => c.Id is "source-0" or "source-1");
     }
@@ -160,8 +161,68 @@ public sealed class PowerFuelTests
     {
         var (state, snapshot, catalog, power) = SourceFrame(extra: true);
         var need = PowerFuelTransport.SourceNeed(state, snapshot, catalog, power);
-        Assert.Equal(new PowerFuelSourceNeed(5, 5, 27), need);
+        Assert.Equal(new PowerFuelSourceNeed(5, 5, 27, SurveyableSources: 1), need);
         Assert.Equal(0, need.Missing);
+    }
+
+    [Fact]
+    public void AWorkingDistantSupplierIsSurveyedBeforeSeedingAnotherMinerWithoutClaimingDelivery()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        snapshot = MoveEntities(snapshot, "source-0-", new(240.5, -10.5));
+        var need = PowerFuelTransport.SourceNeed(state, snapshot, catalog, power);
+        Assert.Equal(new PowerFuelSourceNeed(5, 4, 27, SurveyableSources: 1), need);
+        Assert.Equal(0, need.Missing);
+        Assert.Empty(FactoryTransportCoverage.Connected(state, snapshot, catalog, null, power));
+        Assert.DoesNotContain(PowerFuelTransport.LocalSources(state, snapshot, state.Cells.Where(c => c.Kind == "power").ToArray()),
+            c => c.Id == "source-0");
+    }
+
+    [Theory]
+    [InlineData("no_power", 30)]
+    [InlineData("no_minable_resources", 30)]
+    [InlineData("working", 26)]
+    public void ADistantSupplierStillRequiresNativeActivityAndEnoughCapacity(string status, double rate)
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        snapshot = MoveEntities(snapshot, "source-0-", new(240.5, -10.5));
+        snapshot = snapshot with { Records = snapshot.Records.Select(r => r.Kind == "work" && r.EntityId == "source-0-drill"
+            ? r with { Data = Protocol.ToElement(new { statusName = status }) } : r).ToArray() };
+        state = state with { Rows = state.Rows!.Select(r => r.Id == 0 ? r with { CellPerMinute = rate } : r).ToArray() };
+        var need = PowerFuelTransport.SourceNeed(state, snapshot, catalog, power);
+        Assert.Equal(0, need.SurveyableSources);
+        Assert.Equal(1, need.Missing);
+    }
+
+    [Fact]
+    public void AReservedDistantSupplierCannotBePromisedToMoreBoilers()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        snapshot = MoveEntities(snapshot, "source-0-", new(240.5, -10.5));
+        state = state.With(new FactoryCell("line", 0, new(0, 0, true), "transport", "transport-belt", null,
+            new Dictionary<string, string>(), "ready", 1)).With(new FactoryTransportBus("bus", "source-0", "coal", "line", []));
+        var need = PowerFuelTransport.SourceNeed(state, snapshot, catalog, power);
+        Assert.Equal(0, need.SurveyableSources);
+        Assert.Equal(1, need.Missing);
+    }
+
+    [Fact]
+    public void ADistantSupplierOutsideTheFuelRouteBudgetCannotSuppressConstruction()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        snapshot = MoveEntities(snapshot, "source-0-", new(600.5, -10.5));
+        var need = PowerFuelTransport.SourceNeed(state, snapshot, catalog, power);
+        Assert.Equal(0, need.SurveyableSources);
+        Assert.Equal(1, need.Missing);
+    }
+
+    [Fact]
+    public void ASurveyableSupplierMustBeCompatibleWithEveryUnservedBoiler()
+    {
+        var (state, snapshot, catalog, power) = SourceFrame();
+        snapshot = MoveEntities(snapshot, "source-0-", new(240.5, -10.5));
+        snapshot = MoveEntities(snapshot, "target-4-", new(1000.5, -10.5));
+        Assert.Equal(0, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).SurveyableSources);
     }
 
     [Fact]
@@ -169,10 +230,10 @@ public sealed class PowerFuelTests
     {
         var (state, snapshot, catalog, power) = SourceFrame();
         state = state with { Rows = state.Rows!.Select(r => r.Id == 5 ? r with { CellPerMinute = 26 } : r).ToArray() };
-        Assert.Equal(2, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).Missing);
+        Assert.Equal(1, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).Missing);
         snapshot = snapshot with { Records = snapshot.Records.Select(r => r.EntityId == "source-4-drill" && r.Kind == "work"
             ? r with { Data = Protocol.ToElement(new { statusName = "no_minable_resources" }) } : r).ToArray() };
-        Assert.Equal(3, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).Missing);
+        Assert.Equal(2, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).Missing);
     }
 
     [Fact]
@@ -191,7 +252,10 @@ public sealed class PowerFuelTests
         var (state, snapshot, catalog, power) = SourceFrame();
         state = state.With(new FactoryCell("line", 0, new(0, 0, true), "transport", "transport-belt", null,
             new Dictionary<string, string>(), "ready", 1)).With(new FactoryTransportBus("bus", "source-5", "coal", "line", []));
-        Assert.Equal(2, PowerFuelTransport.SourceNeed(state, snapshot, catalog, power).Missing);
+        var need = PowerFuelTransport.SourceNeed(state, snapshot, catalog, power);
+        Assert.Equal(3, need.Sources);
+        Assert.Equal(1, need.SurveyableSources);
+        Assert.Equal(1, need.Missing);
     }
 
     [Fact]
@@ -221,6 +285,12 @@ public sealed class PowerFuelTests
         Assert.Null(FactoryTransportBuilder.PlanningCenter(snapshot, endpoints, 1));
         Assert.NotNull(FactoryTransportBuilder.PlanningCenter(snapshot, endpoints, 1, FactoryTransportBuilder.FuelPlanningRadius));
     }
+
+    private static FactorySnapshot MoveEntities(FactorySnapshot snapshot, string prefix, MapPosition position) => snapshot with
+    {
+        Records = snapshot.Records.Select(r => r.Kind == "entity" && r.EntityId.StartsWith(prefix, StringComparison.Ordinal)
+            ? r with { Data = Protocol.ToElement(new { role = "factory", position }) } : r).ToArray()
+    };
 
     private static (FactoryState State, FactorySnapshot Snapshot, ProductionCatalog Catalog, PowerState Power) SourceFrame(
         bool extra = false, bool normalGeometry = false, int targetCount = 5)

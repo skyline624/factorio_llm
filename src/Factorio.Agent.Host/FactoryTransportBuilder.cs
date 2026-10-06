@@ -241,15 +241,16 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         int approachTiles = target.Kind == "power" ? 1 : 4;
         var frameCenter = PlanningCenter(snapshot, frameEntities, approachTiles, target.Kind == "power" ? FuelPlanningRadius : 48);
         bool surveyed = frameCenter is null;
-        if (surveyed && (target.Kind == "power" || !TransportCorridorSurvey.CanSurvey(snapshot, frameEntities))) return false;
+        if (surveyed && !TransportCorridorSurvey.CanSurvey(snapshot, frameEntities)) return false;
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
         var equipment = target.Kind == "power" ? PowerFuelTransport.SelectEquipment(catalog) : Equipment;
         string? alternativeInserter = target.Kind == "power" ? PowerFuelTransport.SelectAlternativeInserter(catalog) : null;
         SpatialSnapshot? map;
-        if (target.Kind == "power") map = await CaptureFuelFrameAsync(state, snapshot, frameEntities, steam, catalog, controller, token,
+        if (surveyed)
+            map = await new TransportCorridorSurvey(game, journal).CaptureAsync(snapshot, frameEntities,
+                GeometryItems(state, steam, equipment.UndergroundBelt, alternativeInserter), catalog, controller, token);
+        else if (target.Kind == "power") map = await CaptureFuelFrameAsync(state, snapshot, frameEntities, steam, catalog, controller, token,
             equipment.UndergroundBelt, alternativeInserter);
-        else if (surveyed)
-            map = await new TransportCorridorSurvey(game, journal).CaptureAsync(snapshot, frameEntities, GeometryItems(state, steam), catalog, controller, token);
         else
         {
             await controller.TravelAsync(frameCenter!, approachTiles, catalog, token);

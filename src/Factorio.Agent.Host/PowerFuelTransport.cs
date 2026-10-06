@@ -3,14 +3,15 @@ using Factorio.Agent.Infrastructure;
 
 namespace Factorio.Agent.Host;
 
-internal sealed record PowerFuelSourceNeed(int Targets, int Sources, double PerMinute)
+internal sealed record PowerFuelSourceNeed(int Targets, int Sources, double PerMinute, int SurveyableSources = 0)
 {
-    public int Missing => Math.Max(0, Targets - Sources);
+    public int Missing => Math.Max(0, Targets - Sources - SurveyableSources);
 }
 
 /// <summary>Connects observed coal producers to registered native boiler feeders within the existing belt planner's bounds.</summary>
 internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal journal, string directory)
 {
+    internal const int MaximumBelts = 512;
     public async Task<int> ConnectAsync(ProductionCatalog catalog, CancellationToken token, int maximumLinks = 2)
     {
         if (maximumLinks is < 1 or > 8) throw new ArgumentOutOfRangeException(nameof(maximumLinks));
@@ -28,7 +29,7 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         }
         if (connected > 0) return connected;
         var batch = await PlanBatchAsync(catalog, controller, maximumLinks, token);
-        if (batch.Handled) return batch.Connected;
+        if (batch.Connected > 0) return batch.Connected;
         foreach (string id in state.Cells.Where(c => c.Kind == "power" && c.Status == "ready").Select(c => c.Id))
         {
             state = await registry.LoadAsync(catalog.Scope.WorldId, token);
@@ -51,6 +52,9 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
             foreach (var source in sources)
             {
                 if ((state.Transports ?? []).Any(b => b.SourceCellId == source.Cell.Id && b.Consumers.Any(c => c.TargetCellId == id))) continue;
+                // A handled batch has already spent its local search budget. Only a distinct distant supplier may
+                // now use the existing actor survey; never retry those same local routes under another deadline.
+                if (batch.Handled && !CanSurveySource(snapshot, source.Cell, target)) continue;
                 double available = Available(state, snapshot, catalog, shares, power, source.Cell, demand.Value);
                 if (available <= 0) continue;
                 if (++attempted > 8) return connected;
@@ -94,7 +98,14 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         double demand = targets.Max(c => PowerFuelPolicy.Demand(catalog, c, FactoryLogistics.Fuel, power)!.Value);
         int sources = LocalSources(state, snapshot, targets).Count(c =>
             FactoryTransportCoverage.Capacity(state, catalog, shares, c, FactoryLogistics.Fuel, snapshot) + 1e-9 >= demand);
-        return new(targets.Length, sources, demand);
+        // This is a construction need, not delivery coverage: retained native suppliers can be surveyed before
+        // spending another drill. Boiler coverage still requires a completed, healthy native transport.
+        int surveyable = state.Cells.Count(c => c.IsResource && c.Recipe == FactoryLogistics.Fuel && c.Status == "ready"
+            && c.Entities.ContainsKey("output-chest") && FactoryLogistics.Missing(snapshot, c).Length == 0
+            && PowerFuelPolicy.ProducerActive(c, snapshot) && !(state.Transports ?? []).Any(b => b.SourceCellId == c.Id)
+            && FactoryTransportCoverage.Capacity(state, catalog, shares, c, FactoryLogistics.Fuel, snapshot) + 1e-9 >= demand
+            && targets.All(target => CanSurveySource(snapshot, c, target)));
+        return new(targets.Length, sources, demand, Math.Min(8, surveyable));
     }
 
     private static FactoryCell[] BatchTargets(FactoryState state, FactorySnapshot snapshot, ProductionCatalog catalog,
@@ -122,6 +133,17 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
             && FactoryTransportBuilder.PlanningCenter(snapshot, [.. targetIds, c.Entities["output-chest"]], 1,
                 FactoryTransportBuilder.FuelPlanningRadius) is not null)
             .OrderBy(c => FactoryTransportBuilder.Position(snapshot, c.Entities["output-chest"])!.DistanceTo(anchor)).Take(8).ToArray();
+    }
+
+    internal static bool CanSurveySource(FactorySnapshot snapshot, FactoryCell source, FactoryCell target)
+    {
+        if (!source.Entities.TryGetValue("output-chest", out string? fromId)
+            || !target.Entities.TryGetValue("input-chest", out string? toId)
+            || FactoryTransportBuilder.Position(snapshot, fromId) is not { } from
+            || FactoryTransportBuilder.Position(snapshot, toId) is not { } to) return false;
+        return Math.Abs(from.X - to.X) + Math.Abs(from.Y - to.Y) <= MaximumBelts
+            && FactoryTransportBuilder.PlanningCenter(snapshot, [fromId, toId], 1, FactoryTransportBuilder.FuelPlanningRadius) is null
+            && TransportCorridorSurvey.CanSurvey(snapshot, [fromId, toId]);
     }
 
     private async Task<(int Connected, bool Handled)> PlanBatchAsync(ProductionCatalog catalog, SpatialController controller,
@@ -233,7 +255,7 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         {
             return new BeltTransportBatchPlanner().Find(planning, equipment,
                 requests, maximumSearches: 64, token: planningToken, stopAfterComplete: true,
-                maximumBelts: 512, nodeBudget: 24000, stopAfterMaximumAssignments: true, maximumLinks: maximumLinks);
+                maximumBelts: MaximumBelts, nodeBudget: 24000, stopAfterMaximumAssignments: true, maximumLinks: maximumLinks);
         }
         catch (OperationCanceledException error) when (planningToken.IsCancellationRequested
             && !callerToken.IsCancellationRequested && error.CancellationToken == planningToken)
