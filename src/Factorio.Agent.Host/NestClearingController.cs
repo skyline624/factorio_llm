@@ -28,6 +28,7 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
     /// <summary>Thirty game minutes before a base whose clearing failed is attempted again.</summary>
     public const long RetryTicks = 108000;
     private const long FightTicks = 3600;
+    private const int MaximumFightRounds = 4 * (int)(FightTicks / 120);
     /// <summary>A scouting ring follows an attack seen within the last game hour, at most once per game hour.</summary>
     public const long ScoutWindowTicks = 216000;
     public const int ScoutPoints = 8;
@@ -276,17 +277,23 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         await MoveDirectAsync(controller, staging, token);
         var standing = placed.ToHashSet(StringComparer.Ordinal);
         string outcome = placed.Count == 0 ? "not-placed" : "stalled";
-        for (long waited = 0; placed.Count > 0 && waited < FightTicks; waited += 120)
+        // Packs answering the block's fire cancel the wait while the reflex fights them. On 2026-10-06 (seed 20261107) each
+        // such cancellation ended the step at once and the turrets were picked up still firing: four assaults on one nest
+        // destroyed nothing. The fight now lasts FightTicks of game time, whatever interrupts the waits.
+        long? begin = null;
+        for (int round = 0; placed.Count > 0 && round < MaximumFightRounds; round++)
         {
             var wait = await controller.WorkAsync("wait", new { ticks = 120 }, 300, token: token);
-            if (wait.Status != "completed") break;
+            if (wait.Status is not ("completed" or "cancelled")) break;
             var view = await new SpatialClient(game).CaptureAsync([turret], 64, token);
+            begin ??= wait.AcceptedTick ?? view.CollectedTick;
             standing = placed.Where(id => view.Entities.Any(e => e.Id == id)).ToHashSet(StringComparer.Ordinal);
             if (standing.Count == 0) { outcome = "turrets-destroyed"; break; }
             var turretPositions = view.Entities.Where(e => standing.Contains(e.Id)).Select(e => e.Position).ToArray();
             bool targetStands = view.Entities.Any(e => e.Id == plan.Target.Id) || (view.StationaryThreats ?? []).Any(t => t.Id == plan.Target.Id);
             bool inRange = NestAssaultPlanner.Structures(view).Any(s => turretPositions.Any(p => p.DistanceTo(s.Position) <= Range(view, turret)));
             if (!targetStands && !inRange) { outcome = "target-destroyed"; break; }
+            if (view.CollectedTick - begin >= FightTicks) break;
         }
         var after = await new SpatialClient(game).CaptureAsync([turret], 64, token);
         var gone = NestAssaultPlanner.Structures(after).Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
@@ -295,10 +302,13 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         var survivors = placed.Where(id => after.Entities.Any(e => e.Id == id)).ToArray();
         if (survivors.Length > 0) await MoveDirectAsync(controller, plan.Stand, token);
         foreach (string id in survivors)
-        {
-            var mined = await controller.WorkAsync("mine", new { entityId = id, count = 1 }, 900, token: token);
-            if (mined.Status == "completed") recovered++;
-        }
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                // A defense interruption cancels the pickup; the same turret is tried again rather than left by the nest.
+                var mined = await controller.WorkAsync("mine", new { entityId = id, count = 1 }, 900, token: token);
+                if (mined.Status == "completed") recovered++;
+                if (mined.Status != "cancelled") break;
+            }
         if (survivors.Length > 0) await MoveDirectAsync(controller, staging, token);
         var result = new NestClearingStep(plan.Target.Id, plan.Target.Name, placed, plan.Exposure, destroyed,
             placed.Count - survivors.Length, recovered, outcome);
