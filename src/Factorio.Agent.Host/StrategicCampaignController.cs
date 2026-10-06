@@ -94,6 +94,8 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                     memory = await new StrategicRecoveryController(game, memoryPath, activeJournalPath, recovery).ResumeAsync(token);
                     observation = await ObserveAsync(token);
                 }
+                // A maintenance round can last half an hour (nest clearing); a request made meanwhile stops before the next goal.
+                if (TakeRestartRequest()) return new(false, index, observation.Tick, "restart-requested");
             }
             // Corpses left in recent death zones are collected once those zones expire, before the next decision. A death during
             // this retry is a death during recovery: it defers again without a further automatic retry.

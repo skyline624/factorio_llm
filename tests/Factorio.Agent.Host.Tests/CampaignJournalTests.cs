@@ -52,6 +52,22 @@ public sealed class CampaignJournalTests : IDisposable
     }
 
     [Fact]
+    public async Task ARestartRequestedDuringMaintenanceStopsBeforeTheNextGoal()
+    {
+        using var journal = new CampaignJournal(Index);
+        var runner = new Runner(journal, Memory);
+        string request = Path.Combine(directory, StrategicCampaignController.RestartRequestFile);
+        int rounds = 0;
+        var result = await new StrategicCampaignController(new Game(), runner, Memory, Index, campaignJournal: journal,
+            maintenance: async t => { rounds++; await File.WriteAllTextAsync(request, "", t); }).RunAsync(3);
+        Assert.Equal("restart-requested", result.StopReason);
+        Assert.Equal(1, result.GoalsExecuted);
+        Assert.Equal(1, rounds);
+        Assert.Single(runner.PendingPaths);
+        Assert.False(File.Exists(request));
+    }
+
+    [Fact]
     public async Task CancellationKeepsOnlyTheInterruptedSegmentLinkedForReconciliation()
     {
         using var cancellation = new CancellationTokenSource();

@@ -138,7 +138,7 @@ La lecture indépendante au tick 9284730 confirme `oil-gathering`, la recette du
 
 ## Redémarrage demandé entre deux objectifs
 
-Remplacer les binaires d'une campagne en cours arrêtait jusqu'ici son contrôleur de force. Le 6 octobre 2026, un tel arrêt a interrompu un nettoyage de nid pendant le réapprovisionnement de ses tourelles. Un fichier `restart-requested` placé à côté de `strategic-memory.json` est désormais lu en tête de boucle, après le résultat vérifié de l'objectif précédent et avant toute maintenance : la campagne s'arrête avec `stopReason = "restart-requested"` et supprime le fichier. Le premier objectif d'une exécution démarre toujours. Le budget `--minutes` reste une annulation immédiate ; les campagnes longues utilisent donc 1 440 minutes et ce redémarrage coopératif.
+Remplacer les binaires d'une campagne en cours arrêtait jusqu'ici son contrôleur de force. Le 6 octobre 2026, un tel arrêt a interrompu un nettoyage de nid pendant le réapprovisionnement de ses tourelles. Un fichier `restart-requested` placé à côté de `strategic-memory.json` est désormais lu en tête de boucle, après le résultat vérifié de l'objectif précédent et avant toute maintenance : la campagne s'arrête avec `stopReason = "restart-requested"` et supprime le fichier. Il est relu à la fin de la maintenance, avant l'objectif suivant : le soir du 6 octobre, une demande déposée pendant une demi-heure de maintenance avait laissé démarrer un nouvel objectif. Le premier objectif d'une exécution démarre toujours. Le budget `--minutes` reste une annulation immédiate ; les campagnes longues utilisent donc 1 440 minutes et ce redémarrage coopératif.
 
 ## Facteur d'évolution
 
