@@ -216,7 +216,15 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
 
         async Task<long> RearmAsync(InstalledTurret turret, string ammunition, long count)
         {
-            long moved = await TransferTurretAmmunitionAsync(controller, catalog, turret, ammunition, checked((int)count), journal, token);
+            long moved;
+            // A turret destroyed after the round's photograph is rebuilt by the next round. On 2026-10-06 (seed 20261106)
+            // such a turret, gone before the actor reached it, failed a whole research goal.
+            try { moved = await TransferTurretAmmunitionAsync(controller, catalog, turret, ammunition, checked((int)count), journal, token); }
+            catch (EntityMissingException)
+            {
+                await journal.AppendAsync("factory-turret-rearm-missing", new { turret.Id, turret.Position, ammunition, count }, token);
+                return 0;
+            }
             actions++;
             return moved;
         }
