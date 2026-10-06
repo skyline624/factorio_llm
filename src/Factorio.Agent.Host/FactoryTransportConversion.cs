@@ -63,7 +63,7 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
         var poles = cell.Entities.Where(p => p.Key.StartsWith("pole-", StringComparison.Ordinal)).Select(p => p.Value).ToArray();
         var obsolete = belts.Skip(last + 1).Append(cell.Entities[bus.Consumers[1].InserterRole]).ToHashSet(StringComparer.Ordinal);
         map = FactoryTransportBuilder.ProtectBands(map, state, steam);
-        var plan = await ControllerPlanning.RunAsync(t => new BalancedBeltPlanner().FindExisting(map, Equipment, "splitter",
+        var plan = await ControllerPlanning.TryRunAsync(t => new BalancedBeltPlanner().FindExisting(map, Equipment, "splitter",
             source.Entities["output-chest"], targets[0].Entities["input-chest"], targets[1].Entities["input-chest"],
             cell.Entities["source-inserter"], arm, prefix, poles, obsolete, t), controller, TimeSpan.FromSeconds(45), token);
         await journal.AppendAsync("factory-transport-conversion-search", new { bus.Id, map.Scope, map.CollectedTick, found = plan is not null }, token);

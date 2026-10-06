@@ -547,6 +547,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         SpatialSnapshot initial = await spatial.CaptureAsync(cancellationToken: token);
         RequireAi(initial);
         ActorScope scope = initial.Scope;
+        int stale = 0;
         while (true)
         {
             if (inspectDestination is not null) await inspectDestination(token);
@@ -571,10 +572,17 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 if (!new PlacementPlanner().PreservesExit(new(map), item, new(position, direction, 0), token))
                     throw new PlacementRefusedException("Construction refused: no observed exit after placement.");
             }
-            return await ExecuteAsync(OperationSubmission.Create(map.Scope, kind, arguments,
+            var receipt = await ExecuteAsync(OperationSubmission.Create(map.Scope, kind, arguments,
                 map.CollectedTick + durationTicks, preconditions), token);
+            // The engine rejects a deadline already behind its tick before acting, so the outcome is known and empty. On
+            // 2026-10-06 (seed 20261107) an 11-second host stall between photograph and submission failed a 43-minute goal.
+            if (StaleDeadline(receipt) && ++stale <= 3) continue;
+            return receipt;
         }
     }
+
+    internal static bool StaleDeadline(OperationReceipt receipt) => receipt.Status == "rejected"
+        && receipt.Error is { Code: "invalid_arguments", Message: "deadlineTick is out of bounds" };
 
     public ValueTask DisposeAsync() => StopOwnedActionsAsync();
 

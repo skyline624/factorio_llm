@@ -343,7 +343,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         if (endpoints.Any(id => !map.Entities.Any(e => e.Id == id))
             || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0) return false;
         map = ProtectBands(map, state, steam);
-        var plan = await ControllerPlanning.RunAsync(t => new BalancedBeltPlanner().Find(map, Equipment, "splitter",
+        var plan = await ControllerPlanning.TryRunAsync(t => new BalancedBeltPlanner().Find(map, Equipment, "splitter",
             endpoints[0], endpoints[1], endpoints[2], t), controller, TimeSpan.FromSeconds(45), token);
         await journal.AppendAsync("factory-balanced-transport-search", new { map.Scope, map.CollectedTick, sourceCellId,
             firstCellId, secondCellId, found = plan is not null }, token);
