@@ -26,6 +26,7 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
     public const int ReservedUnits = 8;
     /// <summary>Tiles from the anchor boiler within which a new shore unit stays observable and linkable to the network.</summary>
     public const double SiteReach = 32;
+    private const int MaximumAnchors = 3;
     private const string Fuel = "coal";
 
     public async Task<PowerState> ObserveAsync(CancellationToken token) =>
@@ -102,16 +103,29 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
     private async Task<PowerExpansionStep?> StepAsync(PowerState state, ElectricNetworkState network, ProductionCatalog catalog,
         SpatialController controller, CancellationToken token)
     {
-        var anchor = Boilers(state, network).OrderBy(b => b.Id, StringComparer.Ordinal).First();
         var items = Items(catalog, state, network);
-        await controller.TravelAsync(anchor.Position, 6, catalog, token);
-        var map = await CaptureAsync(items, catalog, token);
-        string force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
         var planner = new PowerExpansionPlanner();
-        var planning = await PlanningAsync(map, items, catalog, token);
-        // A chain without room to grow in place continues on its own shore nearby.
-        var plan = planner.Next(planning, items.Boiler, items.Engine, force)
-            ?? (items.Pump is { } pump ? planner.Site(planning, pump, items.Boiler, items.Engine, SiteReach) : null);
+        // Each installation is tried from its oldest boiler. On 2026-10-07 (seed 20261106) the first installation's shore was
+        // full and a second one 43 tiles away, beyond the site reach of the first boiler, was never extended.
+        var anchors = new List<ObservedBoiler>();
+        foreach (var boiler in Boilers(state, network).OrderBy(b => b.Id, StringComparer.Ordinal))
+            if (anchors.All(a => a.Position.DistanceTo(boiler.Position) > SiteReach) && anchors.Count < MaximumAnchors) anchors.Add(boiler);
+        ObservedBoiler anchor = anchors[0];
+        SpatialSnapshot map = null!;
+        SteamExpansionPlan? plan = null;
+        string force = "";
+        foreach (var candidate in anchors)
+        {
+            anchor = candidate;
+            await controller.TravelAsync(anchor.Position, 6, catalog, token);
+            map = await CaptureAsync(items, catalog, token);
+            force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
+            var planning = await PlanningAsync(map, items, catalog, token);
+            // A chain without room to grow in place continues on its own shore nearby.
+            plan = planner.Next(planning, items.Boiler, items.Engine, force)
+                ?? (items.Pump is { } pump ? planner.Site(planning, pump, items.Boiler, items.Engine, SiteReach) : null);
+            if (plan is not null) break;
+        }
         if (plan is null) return null;
         await journal.AppendAsync("power-expansion-plan", new { plan, map.CollectedTick }, token);
         foreach (var group in plan.Machines.GroupBy(m => m.Item)) await EnsureItemsAsync(group.Key, group.Count(), token);

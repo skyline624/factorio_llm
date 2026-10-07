@@ -74,8 +74,9 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 // A destination at the edge of the photograph can exhaust even the deepened search when obstacles extend
                 // past that edge (seed 20261106, 2026-10-06: 67 tiles, a failed research goal). Such a far destination then
                 // takes one waypoint segment toward it and is planned again from there; a refusal well inside the view stands.
+                // A detour can also carry the actor until the edge destination leaves the view (seed 20261106, 2026-10-07).
                 catch (NavigationPlanningException error) when (distance > 24 && NearEdge(map.Bounds, destination) && localFailures++ < 3
-                    && error.Status is RouteStatus.BudgetExceeded or RouteStatus.NoRouteOnKnownGrid)
+                    && error.Status is RouteStatus.BudgetExceeded or RouteStatus.NoRouteOnKnownGrid or RouteStatus.GoalOutsideSnapshot)
                 {
                     await journal.AppendAsync("travel-local-fallback", new { map.Scope, map.CollectedTick, destination,
                         error.Status, localFailures }, token);
