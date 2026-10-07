@@ -24,6 +24,9 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
     /// </summary>
     public static readonly TimeSpan PreparationBudget = TimeSpan.FromMinutes(75);
 
+    /// <summary>The service loop's own end, before the research goal's two-hour cancellation.</summary>
+    public static readonly TimeSpan LoopBudget = TimeSpan.FromMinutes(105);
+
     public async Task<FactoryResearchResult> RunAsync(string technologyName, CancellationToken token = default)
     {
         long began = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -91,6 +94,14 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         {
             state = await ReadStateAsync();
             if (state.Researched) return await FinishAsync(state.CollectedTick, round - 1);
+            // The research goal is cancelled at two hours, possibly mid-operation (seed 20261106, 2026-10-07: twice). The loop
+            // ends first at a round boundary; the caller reports the unfinished research without an interrupted mutation.
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(began) > LoopBudget)
+            {
+                await journal.AppendAsync("factory-research-budget-spent", new { technologyName, rounds = round - 1, state.CollectedTick,
+                    budgetMinutes = LoopBudget.TotalMinutes }, token);
+                return await FinishAsync(state.CollectedTick, round - 1);
+            }
             if (state.Selected != technologyName) await SelectAsync(controller, journal, state.Selected, technologyName, token);
             var service = await logistics.ServiceAsync(40, token, usePlannedBuffers: true);
             // Labs keep researching while the actor makes the tour. Its remaining shortfall is no longer this goal's
