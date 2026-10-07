@@ -8,6 +8,13 @@ namespace Factorio.Agent.Host;
 public sealed record ExplorationWaypoint(MapPosition Position, long CollectedTick, ResourceSighting? RememberedResource = null,
     MapPosition? Origin = null);
 
+/// <summary>The observed entity has no reachable interaction position, for instance a chest enclosed by machines and belts.</summary>
+public sealed class EntityUnreachableException(string entityId)
+    : InvalidOperationException($"No reachable interaction position for the observed entity {entityId}.")
+{
+    public string EntityId { get; } = entityId;
+}
+
 /// <summary>A known own entity is absent from a complete local view at its known position, for instance destroyed by enemies.</summary>
 public sealed class EntityMissingException(string entityId, MapPosition knownPosition)
     : InvalidOperationException($"Entity {entityId} is not observed at its known position {knownPosition}.")
@@ -39,7 +46,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         }
         var entity = map.Entities.SingleOrDefault(e => e.Id == entityId) ?? throw new EntityMissingException(entityId, knownPosition);
         MapPosition approach = new PlacementPlanner().FindInteractionApproach(new(map, ExplorationPlanner.ThreatMargin), entity, token)
-            ?? throw new InvalidOperationException("No reachable interaction position for the observed entity.");
+            ?? throw new EntityUnreachableException(entityId);
         // Navigation starts with a smaller local view and can expand it when a detour is clipped.
         await TravelAsync(approach, .2, catalog, token);
     }
@@ -87,7 +94,17 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 }
             }
             ExplorationWaypoint next = await FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
-            if (!await NavigateExplorationAsync(next, map, catalog, token, inspectDestination) && ++invalidatedWaypoints > 4)
+            bool reached;
+            try { reached = await NavigateExplorationAsync(next, map, catalog, token, inspectDestination); }
+            // A detour can also lose an exploration point from view (seed 20261107, 2026-10-07: a failed chemical science goal);
+            // with no operation left running, it counts as one more invalidated point and a new one is chosen.
+            catch (NavigationPlanningException error) when (error.Status is RouteStatus.GoalOutsideSnapshot or RouteStatus.BudgetExceeded
+                && ownedOperation is null && !ownedStopRequested)
+            {
+                await journal.AppendAsync("travel-exploration-point-lost", new { next.Position, destination, error.Status }, token);
+                reached = false;
+            }
+            if (!reached && ++invalidatedWaypoints > 4)
                 throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its newly observed threat invalidation budget.");
         }
         throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its local segment budget.");

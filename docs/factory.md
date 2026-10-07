@@ -234,3 +234,7 @@ Le minage manuel d'amorçage prépare également la place dans le sac avant de r
 ## Bras rapides
 
 Une cellule n'a qu'un bras de chaque côté. Avec le bras de base (0,8 objet par seconde observé), une cellule de câbles, d'engrenages ou de circuits plafonne vers le tiers de sa machine : le plan de 30 packs chimiques par minute de la graine **20261072** demandait 17 assembleuses de câbles et 14 de circuits. Les nouvelles cellules utilisent désormais le bras rapide dès que sa recette est débloquée (`AutomationPlanner.InserterPreference`). Le mod exporte la vitesse de rotation native de chaque bras ; le débit d'un bras est le débit observé du bras de base multiplié par le rapport des vitesses de rotation. Chaque cellule prête compte avec son propre bras, les anciennes restant au débit de base. Le planificateur voit le bras courant et la recherche qui débloquerait un bras plus rapide (`fasterArmResearch`). Les cellules fluides restent comptées au débit de base par leur directeur. Aucun essai en jeu ne mesure encore ce gain.
+
+## Transfert vers une entité inaccessible
+
+Pendant une tournée logistique, une entité sans position d'interaction accessible (un coffre enfermé par de nouvelles cellules) ou dont la route est refusée est sautée (`factory-transfer-target-unreachable`) ; la tournée et l'objectif continuent. Le 7 octobre 2026, dans la partie normale de graine **987654321**, un tel coffre avait arrêté un objectif de recherche.

@@ -380,6 +380,14 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 await journal.AppendAsync("factory-transfer-target-missing", new { kind, entityId, item, count }, token);
                 return 0;
             }
+            catch (Exception error) when (error is EntityUnreachableException or NavigationPlanningException)
+            {
+                // An enclosed chest or a refused route skips this transfer; the tour and the goal go on. On 2026-10-07 (seed
+                // 987654321) one chest walled in by new cells ended a research goal during its logistics tour.
+                await journal.AppendAsync("factory-transfer-target-unreachable", new { kind, entityId, item, count, error = error.GetType().Name,
+                    error.Message }, token);
+                return 0;
+            }
             var receipt = await controller.WorkAsync(kind, new { entityId, inventory, item, count = checked((int)Math.Min(count, 100000)) }, 600, token: token);
             actions++;
             if (receipt.Status is not ("completed" or "partial"))
