@@ -48,6 +48,33 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
         }
     }
 
+    /// <summary>
+    /// Produces the strongest obtainable armor once, smelting what its recipe needs, and lets the kit wear it. The kit itself only
+    /// crafts from finished stock: on 2026-10-07 (seed 20261107) heavy armor's fifty steel plates were never made and the actor
+    /// still wore light armor two hours after that research, having died once to a pack.
+    /// </summary>
+    public async Task UpgradeArmorAsync(string directory, CancellationToken token)
+    {
+        var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
+        if ((await ObserveAsync(token))?.Loadout is not { } loadout) return;
+        if (SurvivalKitPlanner.Armor(catalog, Carried(loadout), loadout.Armor) is not { } armor) return;
+        if (Carried(loadout).GetValueOrDefault(armor) == 0)
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            deadline.CancelAfter(ArmorBudget);
+            await journal.AppendAsync("armor-upgrade-start", new { armor, worn = loadout.Armor }, token);
+            var registry = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
+            StockGoalResult result;
+            using (ProductionReservations.EnterFactory(registry))
+                result = await new ProductionGoalExecutor(game, journal).RunAsync(armor, 1, deadline.Token);
+            await journal.AppendAsync("armor-upgrade-result", new { armor, result.FinalStock }, token);
+            if (result.FinalStock < 1) return;
+        }
+        await EnsureAsync("armor-upgrade", token);
+    }
+
+    private static readonly TimeSpan ArmorBudget = TimeSpan.FromMinutes(12);
+
     public async Task<SurvivalKitResult> EnsureAsync(string reason, CancellationToken token)
     {
         Running.Value = true; // Flows into the kit's own production and travel, never back to the caller.

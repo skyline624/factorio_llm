@@ -727,6 +727,12 @@ try
                                 {
                                     await maintenanceJournal.AppendAsync("attack-response-error", new { error = error.GetType().FullName, error.Message }, token);
                                 }
+                                // Researched armor is worn before the actor walks into a nest or a pack.
+                                try { await new SurvivalKitController(game, maintenanceJournal).UpgradeArmorAsync(session.Directory, token); }
+                                catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+                                {
+                                    await maintenanceJournal.AppendAsync("armor-upgrade-error", new { error = error.GetType().FullName, error.Message }, token);
+                                }
                                 // A remembered enemy base near own industry is cleared while its worms and spawners are still weak.
                                 try { await new NestClearingController(game, maintenanceJournal, session.Directory).RunAsync(token); }
                                 catch (Exception error) when (FactoryResearchController.Recoverable(error, token))

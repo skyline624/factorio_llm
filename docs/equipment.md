@@ -28,3 +28,7 @@ Il s'agit de combats courts et préparés, sans inférence cloud. La qualificati
 Depuis le 1er octobre 2026, l'action `equip` accepte aussi le compartiment `armor`, et l'[équipement de survie](attack-response.md#équipement-de-survie) porte la meilleure armure obtenable, monte la mitraillette lorsqu'elle surclasse le pistolet et garde une réserve de chargeurs, fabriqués depuis le stock des coffres avant les explorations et longs trajets. Le réflexe recharge en priorité l'arme de plus longue portée avec les cartouches les plus fortes.
 
 Un [repli C# vers une tourelle propre observée et chargée](retreat.md) complète maintenant le réflexe de tir et de réarmement. Il est qualifié dans des scénarios préparés ; la fuite générale et la survie durable restent à compléter.
+
+## Amélioration d'armure entre deux objectifs
+
+Le kit de survie ne fabrique qu'à partir du stock fini des coffres collectables ; il ne fond pas d'acier. Le 7 octobre 2026, dans la partie normale de graine **20261107**, l'armure lourde était recherchée depuis deux heures mais ses cinquante plaques d'acier n'existaient pas, et l'acteur, mort une fois face à une meute, portait encore l'armure légère. La maintenance entre objectifs produit donc une fois l'armure la plus protectrice disponible (`SurvivalKitController.UpgradeArmorAsync`, 12 minutes au plus, production habituelle avec fours et réservations de l'usine), puis le kit la porte. Le résultat est journalisé (`armor-upgrade-start`, `armor-upgrade-result`) ; une erreur reste une erreur de maintenance.
