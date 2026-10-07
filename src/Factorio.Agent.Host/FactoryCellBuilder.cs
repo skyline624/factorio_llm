@@ -239,11 +239,12 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         await using var controller = new SpatialController(game, journal);
         foreach (var cell in state.Cells.Where(c => c.Entities.ContainsKey("pole") && (c.Zone > 0 || c.Kind == "lab")))
         {
-            if (FactoryPower.IsFed(snapshot, cell.Entities["pole"]) != false) continue;
+            // A pole that no longer stands is a damaged cell for recovery, not an unlinked network.
+            var pole = snapshot.Records.FirstOrDefault(r => r.Kind == "entity" && r.EntityId == cell.Entities["pole"]);
+            if (pole is null || FactoryPower.IsFed(snapshot, cell.Entities["pole"]) != false) continue;
             var equipment = Equipment(catalog, cell.MachineItem);
             equipment = equipment with { Pole = cell.Plan?.GetValueOrDefault("pole")?.Item ?? equipment.Pole };
-            var position = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == cell.Entities["pole"])
-                .Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
+            var position = pole.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
             await controller.TravelAsync(position, 6, catalog, token);
             var context = new BuildContext(catalog, equipment, state.Zones.SingleOrDefault(z => z.Id == cell.Zone), controller, registry,
                 [cell.MachineItem, equipment.Inserter, equipment.Chest, equipment.Pole, .. steam?.Machines ?? []],
