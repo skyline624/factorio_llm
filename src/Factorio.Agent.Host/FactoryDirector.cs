@@ -75,7 +75,10 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         foreach (var stage in first)
         {
             if (await DeferAsync()) return plan;
-            if (stage.Kind == FluidCellBuilder.MachineKind) await fluids.EnsureStageAsync(stage, catalog, token);
+            if (stage.Kind == FluidCellBuilder.MachineKind)
+            {
+                if (!await EnsureFluidStageAsync(stage)) continue;
+            }
             else
             {
                 await new PowerExpansionController(game, journal, directory).EnsureCapacityForCellsAsync(stage.MachineItem, 1, true, token);
@@ -93,8 +96,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                 .Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
             if (stage.Kind == FluidCellBuilder.MachineKind)
             {
-                await fluids.EnsureStageAsync(stage, catalog, token);
-                await StartStageAsync(stage, catalog, existing, token, isObjectiveComplete);
+                if (await EnsureFluidStageAsync(stage)) await StartStageAsync(stage, catalog, existing, token, isObjectiveComplete);
                 continue;
             }
             var readyCells = before.Cells.Where(c => c.Kind == stage.Kind && c.Recipe == stage.Recipe && c.Status == "ready").ToArray();
@@ -127,6 +129,23 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             if (isObjectiveComplete is null || !await isObjectiveComplete(token)) return false;
             await journal.AppendAsync("factory-preparation-deferred", new { item, perMinute, reason = "caller-objective-completed" }, token);
             return true; // Targets and completed cells stay registered; a later goal can continue their construction.
+        }
+
+        // A fluid cell without any routable site waits for its suppliers rather than ending the goal. On 2026-10-07 (seed
+        // 987654321) the only refinery's gas port fed the plastic plant directly, every sulfur site was unroutable, and each
+        // goal failed in the bootstrap pass before the main pass could add the second refinery that would supply it.
+        async Task<bool> EnsureFluidStageAsync(AutomationStage stage)
+        {
+            try
+            {
+                await fluids.EnsureStageAsync(stage, catalog, token);
+                return true;
+            }
+            catch (FluidSiteUnavailableException error)
+            {
+                await journal.AppendAsync("fluid-stage-deferred", new { stage.Recipe, stage.MachineItem, error.Message }, token);
+                return false;
+            }
         }
 
     }

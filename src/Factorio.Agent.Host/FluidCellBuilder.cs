@@ -148,7 +148,7 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
                     await journal.AppendAsync("fluid-cell-site-diagnosis", new { recipeName, anchor, radius = WideSiteRadius, sitePlanner.Diagnosis }, token);
             }
             if (site is null)
-                throw new InvalidOperationException($"No clear site near the {string.Join(", ", fluids)} supply routes every port assignment of {recipeName}.");
+                throw new FluidSiteUnavailableException($"No clear site near the {string.Join(", ", fluids)} supply routes every port assignment of {recipeName}.");
             await RequireFedPoleAsync(site.Layout, catalog, token);
             cell = new($"fluid-{Guid.NewGuid():N}", 0, new(0, 0, true), MachineKind, machineItem, recipeName, new Dictionary<string, string>(),
                 "building", map.CollectedTick, Attempts: 1, Plan: Roles(site.Layout, "machine"));
@@ -754,3 +754,6 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         return snapshot;
     }
 }
+
+/// <summary>No observed site routes every fluid of the cell; nothing was built, so the stage can wait for its suppliers.</summary>
+public sealed class FluidSiteUnavailableException(string message) : InvalidOperationException(message);
