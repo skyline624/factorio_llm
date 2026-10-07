@@ -37,7 +37,14 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
             plan = new PipeRoutePlanner().Find(routed, pipeItem, sourceId, targetId, fluid, cancellationToken: token, undergroundItem: tunnelItem);
         await journal.AppendAsync("pipe-route-plan", new { initial.Scope, initial.CollectedTick, sourceId, targetId, fluid, pipeItem, plan }, token);
         if (plan.Status != PipeRouteStatus.Found || plan.Source is null || plan.Target is null)
+        {
+            // The ports and what they already join tell an occupied endpoint from blocked ground.
+            object Ports(string id) => (routed.Entities.SingleOrDefault(e => e.Id == id)?.FluidConnections ?? []).Select(p => new
+                { p.BoxIndex, p.PortIndex, p.Position, p.TargetPosition, p.TargetEntityId, p.Type, p.FlowDirection, p.Filter }).ToArray();
+            await journal.AppendAsync("pipe-route-ports", new { sourceId, targetId, fluid, plan.Status, tunnelItem,
+                source = Ports(sourceId), target = Ports(targetId) }, token);
             throw new FluidSiteUnavailableException($"Fluid routing ended with {plan.Status}; no route is executed.");
+        }
         var pieces = FluidRelayController.Pieces(plan, pipeItem, tunnelItem);
         if (pieces.Count > 200) throw new InvalidOperationException("The planned pipe route exceeds the current construction budget.");
         FactorySnapshot stock = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
