@@ -46,7 +46,7 @@ public sealed class ResourceResearchController(IGameClient game, IControllerJour
         string fluidName = products[0].Name;
         string[] items = catalog.Items.Where(p => p.Value.PlaceEntityType is "mining-drill" or "electric-pole")
             .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
-        if (items.Length > 16) throw new InvalidOperationException("Extraction prototype catalog exceeds its observation budget.");
+        if (items.Length > SpatialSnapshot.MaximumItems) throw new InvalidOperationException("Extraction prototype catalog exceeds its observation budget.");
         var spatial = new SpatialClient(game);
         var production = new ProductionController(game, journal);
         var executor = new ProductionGoalExecutor(game, journal);

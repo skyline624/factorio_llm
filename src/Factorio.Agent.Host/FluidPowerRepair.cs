@@ -56,7 +56,7 @@ public sealed class FluidPowerRepair(IGameClient game, IControllerJournal journa
             var builder = new FactoryCellBuilder(game, journal, directory);
             // The surviving anchor can be a large pole while only small replacement poles are obtainable.
             string[] items = [.. ground.Items.Append(poleItem).Append(plan.Item).Distinct(StringComparer.Ordinal)];
-            if (items.Length > 16) throw new InvalidOperationException("Too many reserved-ground items for one fluid power observation.");
+            if (items.Length > SpatialSnapshot.MaximumItems) throw new InvalidOperationException("Too many reserved-ground items for one fluid power observation.");
             int links = 0;
             long before = snapshot.CollectedTick;
             await new CellPowerLinker(game, journal).ConnectAsync(pole.EntityId, position, poleItem, items, catalog, controller,

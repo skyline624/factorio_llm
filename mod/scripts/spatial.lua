@@ -117,7 +117,7 @@ function M.observe(args)
   end
   U.check(args.items == nil or type(args.items) == "table", "invalid_arguments", "items must be an array")
   for index, name in pairs(args.items or {}) do
-    U.number(index, "item index", 1, 16, nil, true)
+    U.number(index, "item index", 1, 64, nil, true)
     U.string(name, "item")
     local item = prototypes.item[name]
     U.check(item and item.place_result, "not_buildable", "Requested item does not place an entity")

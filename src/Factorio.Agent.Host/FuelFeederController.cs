@@ -28,7 +28,7 @@ public sealed class FuelFeederController(IGameClient game, IControllerJournal jo
         string? poleItem = catalog.Items.Where(p => p.Value.PlaceEntityType == "electric-pole" && Available(p))
             .OrderByDescending(p => owned.Inventory.GetValueOrDefault(p.Key) > 0).ThenBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key).FirstOrDefault();
         string[] items = containers.Concat(arms).Concat(poleItem is null ? [] : new[] { poleItem }).ToArray();
-        if (items.Length is 0 or > 16) throw new InvalidOperationException("Fuel-feeder equipment exceeds the local geometry budget.");
+        if (items.Length is 0 or > SpatialSnapshot.MaximumItems) throw new InvalidOperationException("Fuel-feeder equipment exceeds the local geometry budget.");
         await using var controller = new SpatialController(game, journal);
         await controller.ApproachEntityAsync(boilerId, target.Position, catalog, token);
         var spatial = new SpatialClient(game);

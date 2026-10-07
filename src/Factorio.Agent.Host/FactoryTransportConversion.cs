@@ -48,7 +48,7 @@ internal sealed class FactoryTransportConversion(IGameClient game, IControllerJo
         await controller.TravelAsync(center, 4, catalog, token);
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
         string[] items = [.. FactoryTransportBuilder.GeometryItems(state, steam).Append("splitter").Distinct(StringComparer.Ordinal)];
-        if (items.Length > 16) return false;
+        if (items.Length > SpatialSnapshot.MaximumItems) return false;
         var map = await new SpatialClient(game).CaptureAsync(items, 48, token);
         RequireScope(map.Scope, catalog);
         if (required.Any(id => !map.Entities.Any(e => e.Id == id && map.Bounds.Contains(e.Bounds)))) return false;

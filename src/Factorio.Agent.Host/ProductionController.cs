@@ -65,7 +65,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                     Machines = new Dictionary<string, NativeFurnace>(), Mining = new Dictionary<string, NativeMaterial[]>() };
             string[] drillItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "mining-drill")
                 .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
-            if (drillItems.Length > 16) throw new InvalidOperationException("Mining drill geometry exceeds the snapshot budget.");
+            if (drillItems.Length > SpatialSnapshot.MaximumItems) throw new InvalidOperationException("Mining drill geometry exceeds the snapshot budget.");
             SpatialSnapshot map = await spatial.CaptureAsync(drillItems, radius: 48, cancellationToken: deadline.Token);
             if (catalog.Scope != state.Scope || map.Scope != state.Scope) throw new InvalidDataException("Production observations span different actor scopes.");
             if (ready is not null)

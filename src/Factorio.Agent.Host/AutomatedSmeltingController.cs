@@ -351,7 +351,7 @@ public sealed class AutomatedSmeltingController(IGameClient game, IControllerJou
         if (catalog.Scope != state.Scope) throw new InvalidDataException("Production observations span different actor scopes.");
         string[] drillItems = catalog.Items.Where(p => p.Value.PlaceEntityType == "mining-drill")
             .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
-        if (drillItems.Length > 16) throw new InvalidOperationException("Mining drill geometry exceeds the snapshot budget.");
+        if (drillItems.Length > SpatialSnapshot.MaximumItems) throw new InvalidOperationException("Mining drill geometry exceeds the snapshot budget.");
         SpatialSnapshot map = await new SpatialClient(game).CaptureAsync(drillItems, radius: 48, cancellationToken: token);
         if (map.Scope != state.Scope) throw new InvalidDataException("Production observations span different actor scopes.");
         SmeltingPlan? plan = new SmeltingPlanner().Find(item, catalog, map, state.Inventory,

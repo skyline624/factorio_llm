@@ -30,7 +30,7 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         var registry = new FactoryRegistry(directory);
         string pipeItem = PipeItem(catalog);
         string[] drills = catalog.Items.Where(p => p.Value.PlaceEntityType == "mining-drill").Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
-        if (drills.Length is 0 or > 16) throw new InvalidOperationException("No bounded native drill catalog is available.");
+        if (drills.Length is 0 or > SpatialSnapshot.MaximumItems) throw new InvalidOperationException("No bounded native drill catalog is available.");
         // Only the pole of this equipment matters until the site chooses the drill.
         var template = FactoryCellBuilder.Equipment(catalog, drills[0]);
         var ground = await GroundAsync(registry, catalog, token);
@@ -725,8 +725,8 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
     private async Task<SpatialSnapshot> CaptureAsync(IReadOnlyList<string> items, ProductionCatalog catalog, CancellationToken token)
     {
         string[] requested = items.Distinct(StringComparer.Ordinal).ToArray();
-        // One native observation carries the geometry of at most sixteen items.
-        if (requested.Length > 16) throw new InvalidOperationException("Too many cell and reserved-ground items for one native observation.");
+        // One native observation carries the geometry of a bounded number of items.
+        if (requested.Length > SpatialSnapshot.MaximumItems) throw new InvalidOperationException("Too many cell and reserved-ground items for one native observation.");
         var map = await new SpatialClient(game).CaptureAsync(requested, 48, token);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor identity changed while building a fluid cell; reconcile partial construction.");
         return map;

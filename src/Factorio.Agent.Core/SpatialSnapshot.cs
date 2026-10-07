@@ -113,6 +113,10 @@ public sealed record SpatialSnapshot(ActorScope Scope, long CollectedTick, int S
     // Radius 64 remains inside the normal five-chunk character square for every position within its occupied chunk.
     public const int MaximumRadius = 64;
 
+    /// <summary>Placeable items whose geometry one photograph may carry. On 2026-10-07 (seed 987654321) the reserved ground of a
+    /// factory with oil, chemistry and steam passed the former sixteen and the mod refused the fuel-belt photograph.</summary>
+    public const int MaximumItems = 64;
+
     public static SpatialSnapshot Parse(GameResponse response)
     {
         if (!response.Ok) throw new GameRpcException(response.Error ?? new("invalid_response", "Spatial observation failed."));

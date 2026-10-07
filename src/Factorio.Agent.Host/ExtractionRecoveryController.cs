@@ -10,7 +10,7 @@ internal sealed class ExtractionRecoveryController(IGameClient game, IController
         SpatialController controller, CancellationToken token)
     {
         string[] items = drillItems.Distinct(StringComparer.Ordinal).ToArray();
-        if (items.Length is 0 or > 16) return false;
+        if (items.Length is 0 or > SpatialSnapshot.MaximumItems) return false;
         var state = await new ProductionController(game, journal).ObserveAsync(token);
         if (state.Scope != catalog.Scope || state.ControlMode != "ai") throw new InvalidDataException("Extraction recovery actor changed.");
         if (items.Any(item => state.Inventory.GetValueOrDefault(item) > 0)) return false;
