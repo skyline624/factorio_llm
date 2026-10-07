@@ -125,6 +125,25 @@ public sealed class PipeRoutePlannerTests
     }
 
     [Fact]
+    public void AnUndergroundEntranceNeverReusesATileOfItsOwnRoute()
+    {
+        // On seed 987654321 a relay placed a pipe, stepped aside and came back to the same tile for a tunnel entrance whose
+        // open side had to face the aside step; the engine refused the second piece on the occupied tile.
+        var map = Tunnels(Map());
+        map = map with { Entities =
+        [
+            new("source", "wall", new(.5, -.5), new(new(0, -1), new(1, 0)), 0, "agent",
+                FluidConnections: [new(1, 1, new(.5, -.5), new(.5, .5), Type: "normal", FlowDirection: "output", Filter: "oil")]),
+            new("target", "wall", new(-6.5, .5), new(new(-7, 0), new(-6, 1)), 0, "agent",
+                FluidConnections: [new(1, 1, new(-6.5, .5), new(-5.5, .5), Type: "normal", FlowDirection: "input", Filter: "oil")]),
+            .. Enumerable.Range(-12, 25).Select(y => new SpatialEntity($"wall-{y}", "wall", new(-.5, y + .5), new(new(-1, y), new(0, y + 1)), 0, "agent"))
+        ] };
+        var plan = new PipeRoutePlanner().Find(map, "pipe", "source", "target", "oil", undergroundItem: "pipe-to-ground");
+        Assert.Equal(PipeRouteStatus.Found, plan.Status);
+        Assert.Equal(plan.Pieces!.Count, plan.Pieces.Select(p => p.Position).Distinct().Count());
+    }
+
+    [Fact]
     public void UndergroundHopNeverPassesAForeignTunnelOnItsAxis()
     {
         var map = Tunnels(Map());

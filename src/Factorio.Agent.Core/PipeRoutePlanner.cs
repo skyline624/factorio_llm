@@ -217,12 +217,18 @@ internal sealed class UndergroundPipeRouter(SpatialSnapshot map, EntityGeometry 
                     expanded, path.AsReadOnly());
             }
             int g0 = cost[current];
+            // States are (tile, facing), so a path could step aside and return to one of its own tiles for an entrance whose
+            // open side faces that step; the engine then refuses the second piece on the occupied tile (seed 987654321).
+            var used = new HashSet<MapPosition>();
+            for (Node? node = current; node is { } n; node = previous[n].Parent)
+                foreach (var piece in previous[n].Pieces) used.Add(piece.Position);
             foreach (int direction in current.Facing < 0 ? Directions : [current.Facing])
             {
                 var next = Step(current.Tile, direction);
+                if (used.Contains(next)) continue;
                 if (SafePipe(next, from, to, target)) Push(new(next, -1), current, g0 + EntityCost + 1, [new(next, 0, false)]);
                 foreach (var (exit, pieces, g) in Hops(next, direction, from, to))
-                    Push(exit, current, g0 + g, pieces);
+                    if (!used.Contains(exit.Tile)) Push(exit, current, g0 + g, pieces);
             }
         }
         return null;

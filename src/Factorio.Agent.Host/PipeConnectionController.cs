@@ -24,7 +24,7 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
         string pipeItem = catalog.Items.Where(p => p.Value.PlaceEntityType == "pipe").OrderBy(p => p.Key, StringComparer.Ordinal)
             .Select(p => p.Key).FirstOrDefault() ?? throw new InvalidOperationException("No ordinary pipe item is available.");
         string[] geometry = new[] { pipeItem }.Concat(geometryItems ?? []).Distinct(StringComparer.Ordinal).ToArray();
-        if (geometry.Length > 16) throw new InvalidOperationException("Pipe routing exceeds the native item geometry observation budget.");
+        if (geometry.Length > SpatialSnapshot.MaximumItems) throw new InvalidOperationException("Pipe routing exceeds the native item geometry observation budget.");
         var spatial = new SpatialClient(game);
         SpatialSnapshot initial = await MapAsync();
         var plan = new PipeRoutePlanner().Find(ground?.Invoke(initial) ?? initial, pipeItem, sourceId, targetId, fluid, cancellationToken: token);
@@ -42,6 +42,10 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
         var built = new HashSet<string>(StringComparer.Ordinal);
         if (plan.Pipes.Count > 0) await new ProductionGoalExecutor(game, journal).RunAsync(pipeItem, plan.Pipes.Count, token);
         await using var controller = new SpatialController(game, journal);
+        // Procurement may fetch plates from the base. On 2026-10-07 (seed 20261106) the actor returned from a refinery 360 tiles
+        // away with the pipes but rephotographed the route from the base; the planning view is rejoined before building.
+        if ((await spatial.CaptureAsync(radius: 16, cancellationToken: token, light: true)).Actor.Position.DistanceTo(initial.Actor.Position) > 8)
+            await controller.TravelAsync(initial.Actor.Position, 4, catalog, token);
         var construction = new PoweredMachineController(game, journal);
         for (int index = 0; index < plan.Pipes.Count; index++)
         {
