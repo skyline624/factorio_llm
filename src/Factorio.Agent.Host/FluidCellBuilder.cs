@@ -132,16 +132,20 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
                         .FirstOrDefault(p => p is not null) is { } offshore ? new("planned:offshore-supply", offshore.Route) : null;
                 return new FluidSupplyPlanner().Find(current, stock, pipeItem, FluidCellPlanner.PlannedId, fluid, routeToken);
             }
-            var site = await ControllerPlanning.RunAsync(t => new FluidCellPlanner().Find(planning, force, equipment, pipeItem, anchor, input, output,
+            var sitePlanner = new FluidCellPlanner();
+            var site = await ControllerPlanning.RunAsync(t => sitePlanner.Find(planning, force, equipment, pipeItem, anchor, input, output,
                     fluids, (current, fluid) => Route(current, fluid, t), cancellationToken: t), controller, TimeSpan.FromMinutes(5), token);
             if (site is null)
             {
+                await journal.AppendAsync("fluid-cell-site-diagnosis", new { recipeName, anchor, radius = 12, sitePlanner.Diagnosis }, token);
                 // Beside an oil field the near ground is crowded by pumpjacks, refineries and their pipes. On 2026-10-07 (seed
                 // 987654321) no sulfur site within 12 tiles of the gas routed every port assignment; wider ground is tried once.
                 await journal.AppendAsync("fluid-cell-site-widened", new { recipeName, anchor, radius = WideSiteRadius, map.CollectedTick }, token);
-                site = await ControllerPlanning.RunAsync(t => new FluidCellPlanner().Find(planning, force, equipment, pipeItem, anchor, input, output,
+                site = await ControllerPlanning.RunAsync(t => sitePlanner.Find(planning, force, equipment, pipeItem, anchor, input, output,
                         fluids, (current, fluid) => Route(current, fluid, t), radius: WideSiteRadius, maximumRouted: 96, cancellationToken: t),
                     controller, TimeSpan.FromMinutes(5), token);
+                if (site is null)
+                    await journal.AppendAsync("fluid-cell-site-diagnosis", new { recipeName, anchor, radius = WideSiteRadius, sitePlanner.Diagnosis }, token);
             }
             if (site is null)
                 throw new InvalidOperationException($"No clear site near the {string.Join(", ", fluids)} supply routes every port assignment of {recipeName}.");

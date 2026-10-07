@@ -90,6 +90,20 @@ public sealed class FluidCellPlanner
     /// assignment routes each fluid through the given supply search. Of the keep nearest such sites, the one needing the
     /// fewest pipes wins; at most maximumRouted sites are routed.
     /// </summary>
+    /// <summary>Why the candidates of the last search were rejected, for journals when no site is found.</summary>
+    public sealed class SiteDiagnosis
+    {
+        public int Placements { get; set; }
+        public int MachineBlocked { get; set; }
+        public int OnDeposit { get; set; }
+        public int PartsBlocked { get; set; }
+        public int Unrouted { get; set; }
+        public int NoApproach { get; set; }
+        public int ChestUnreachable { get; set; }
+    }
+
+    public SiteDiagnosis Diagnosis { get; private set; } = new();
+
     public FluidCellSite? Find(SpatialSnapshot map, string force, CellEquipment equipment, string pipeItem, MapPosition anchor,
         bool input, bool output, IReadOnlyList<string> fluids, Func<SpatialSnapshot, string, FluidSupplyRoute?> route,
         int radius = 12, int maximumRouted = 48, int keep = 6, CancellationToken cancellationToken = default)
@@ -103,29 +117,33 @@ public sealed class FluidCellPlanner
         var deposits = map.Entities.Where(e => map.Prototypes[e.Name].Type == "resource").Select(e => e.Bounds).ToArray();
         int routed = 0;
         var found = new List<FluidCellSite>();
+        Diagnosis = new();
         foreach (var placement in Candidates(machine, anchor, radius))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!field.PlacementClear(machine, placement.Position, placement.Direction)) continue;
+            Diagnosis.Placements++;
+            if (!field.PlacementClear(machine, placement.Position, placement.Direction)) { Diagnosis.MachineBlocked++; continue; }
             foreach (var layout in Layouts(map, equipment, placement, input, output))
             {
                 // Building over a deposit wastes future extraction.
-                if (layout.Entities.Any(e => deposits.Any(d => d.Overlaps(Box(map, e))))) continue;
-                if (!layout.Entities.All(e => e.Role == "machine" || field.PlacementClear(Geometry(map, e.Item), e.Position, e.Direction))) continue;
+                if (layout.Entities.Any(e => deposits.Any(d => d.Overlaps(Box(map, e))))) { Diagnosis.OnDeposit++; continue; }
+                if (!layout.Entities.All(e => e.Role == "machine" || field.PlacementClear(Geometry(map, e.Item), e.Position, e.Direction)))
+                { Diagnosis.PartsBlocked++; continue; }
                 if (++routed > maximumRouted || found.Count >= keep) return Shortest(found);
                 var projected = Project(vacant, force, layout, equipment);
                 var supplies = RouteEveryAssignment(projected, pipeItem, fluids, route, cancellationToken);
-                if (supplies is null) continue;
+                if (supplies is null) { Diagnosis.Unrouted++; continue; }
                 var piped = new SpatialCollisionField(WithPipes(projected, pipeItem, supplies.SelectMany(s => s.Supply.Route.Pipes).ToArray(), force, "chest",
                     reserveTiles: true));
                 // The actor may currently stand where this cell will be built. Prove a reachable staging point
                 // outside the completed cell instead of rejecting every nearby site because it covers that old position.
                 var approach = new PlacementPlanner().FindApproach(field, equipment.Machine, placement, completedSite: piped.Map,
                     cancellationToken: cancellationToken);
-                if (approach is null) continue;
+                if (approach is null) { Diagnosis.NoApproach++; continue; }
                 piped = new(piped.Map with { Actor = piped.Map.Actor with { Position = approach } });
                 if (projected.Entities.Where(e => e.Id.EndsWith("-chest", StringComparison.Ordinal))
                     .All(chest => new PlacementPlanner().FindInteractionApproach(piped, chest, cancellationToken) is not null)) found.Add(new(layout, supplies));
+                else Diagnosis.ChestUnreachable++;
             }
         }
         return Shortest(found);
