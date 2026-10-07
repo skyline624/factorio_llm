@@ -543,7 +543,7 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         map = Keep(await CaptureAsync([pipeItem], catalog, token));
         stock = await SnapshotAsync(catalog, token);
         var routes = new MultiFluidSupplyPlanner().Find(map, stock, pipeItem, machineId, pending, token)
-            ?? throw new InvalidOperationException($"The fluid machine has no joint route for {string.Join(", ", pending)}.");
+            ?? throw new FluidSiteUnavailableException($"The fluid machine has no joint route for {string.Join(", ", pending)}.");
         await journal.AppendAsync("fluid-cell-routes", new { cell.Id, machineId, routes, stock.CollectedTick }, token);
         foreach (var route in routes)
             cell = await RecordPipesAsync(cell, await new PipeConnectionController(game, journal).RunAsync(route.Supply.SourceId, machineId, route.Fluid,
@@ -755,5 +755,9 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
     }
 }
 
-/// <summary>No observed site routes every fluid of the cell; nothing was built, so the stage can wait for its suppliers.</summary>
+/// <summary>
+/// No observed site or supply route serves every fluid of the cell, so the stage waits for its suppliers. A machine already
+/// placed stays registered as building and is connected when a later pass finds a route; on 2026-10-07 (seed 987654321) a
+/// sulfur plant found no gas source once the plastic plant drained the only refinery.
+/// </summary>
 public sealed class FluidSiteUnavailableException(string message) : InvalidOperationException(message);
