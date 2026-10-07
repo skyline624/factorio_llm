@@ -65,7 +65,10 @@ public sealed class RetreatPlanner
     private static bool InCombatRange(SafetyObservation state, MapPosition position, VisibleThreat enemy) =>
         !state.Weapon.Ready || position.DistanceTo(enemy.Position) <= state.Weapon.Range;
 
-    public RetreatPlan Find(SafetyObservation state, SpatialSnapshot map, CancellationToken token = default)
+    public RetreatPlan Find(SafetyObservation state, SpatialSnapshot map, CancellationToken token = default) =>
+        Find(state, map, TimeSpan.FromMilliseconds(200), token);
+
+    public RetreatPlan Find(SafetyObservation state, SpatialSnapshot map, TimeSpan searchBudget, CancellationToken token = default)
     {
         bool needed = Needed(state);
         if (!needed && !SeeksCover(state) && !RepositionsInCover(state)) return new("not-needed");
@@ -117,7 +120,7 @@ public sealed class RetreatPlanner
             .Concat(escapes.OrderBy(c => c.Cost).ThenBy(c => c.Destination.X).ThenBy(c => c.Destination.Y));
         foreach (var candidate in ordered)
         {
-            if (++attempted > 12 || Stopwatch.GetElapsedTime(began) > TimeSpan.FromMilliseconds(200)) return new("search-budget");
+            if (++attempted > 12 || Stopwatch.GetElapsedTime(began) > searchBudget) { limited = true; break; }
             var route = new RoutePlanner().Find(field, candidate.Destination, maximumNodes: 5000,
                 timeBudget: TimeSpan.FromMilliseconds(20), token: token, minimumFirstMoveDistance: MoveTolerance);
             if (route.Status == RouteStatus.BudgetExceeded) limited = true;
@@ -138,6 +141,18 @@ public sealed class RetreatPlanner
             double clearance = route.UsesTightStartConnector ? 0 : .18;
             if (distance <= MoveTolerance || !field.SteeringRegionClear(start, next, clearance)) continue;
             return new(candidate.RefugeId is null ? "separation" : "found", candidate.RefugeId, candidate.Destination, next, route);
+        }
+        // Under CPU load every bounded search can run out: on 2026-10-07 (seed 20261107) a hurt actor found no refuge twice and
+        // died fighting. A straight step on clear observed ground that keeps away from every enemy still gains separation.
+        foreach (var escape in escapes.OrderBy(c => c.Cost).ThenBy(c => c.Destination.X).ThenBy(c => c.Destination.Y).Take(16))
+        {
+            if (!field.SegmentClear(start, escape.Destination)
+                || state.Enemies.Any(e => SegmentDistance(e.Position, start, escape.Destination) < Math.Max(0, initialSeparation - .5))) continue;
+            double length = start.DistanceTo(escape.Destination);
+            var step = length <= 2 ? escape.Destination
+                : new MapPosition(start.X + (escape.Destination.X - start.X) * 2 / length, start.Y + (escape.Destination.Y - start.Y) * 2 / length);
+            if (!field.SteeringRegionClear(start, step)) continue;
+            return new("separation", null, escape.Destination, step, new RoutePlan(RouteStatus.Found, [escape.Destination], 0, length));
         }
         return new(limited ? "search-budget" : "no-safe-candidate");
     }

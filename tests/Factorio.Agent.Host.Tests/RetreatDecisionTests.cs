@@ -128,6 +128,21 @@ public sealed class RetreatDecisionTests
         else Assert.Equal("observation-changed", new RetreatPlanner().Find(state, map).Status);
     }
 
+    [Fact]
+    public void AHurtActorWhoseSearchesRunOutStillStepsAwayOnClearGround()
+    {
+        // On 2026-10-07 (seed 20261107) every bounded refuge search ran out under CPU load and the actor died fighting.
+        var (map, _, state, _) = PortableDefenseTests.Fixture();
+        state = state with { Health = 60 };
+        Assert.True(RetreatPlanner.Needed(state));
+        var plan = new RetreatPlanner().Find(state, map, TimeSpan.Zero);
+        Assert.Equal("separation", plan.Status);
+        Assert.Null(plan.RefugeId);
+        double Separation(MapPosition point) => state.Enemies.Min(e => point.DistanceTo(e.Position));
+        Assert.True(Separation(plan.Destination!) >= Separation(state.Position!) + 2);
+        Assert.InRange(plan.Next!.DistanceTo(state.Position!), RetreatPlanner.MoveTolerance, 2.01);
+    }
+
     private static (SpatialSnapshot Map, SafetyObservation State) Covered()
     {
         var (map, _, state, _) = PortableDefenseTests.Fixture();
