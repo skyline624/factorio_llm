@@ -23,15 +23,23 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
             throw new InvalidDataException("Fluid endpoints are not in the same known own factory scope.");
         string pipeItem = catalog.Items.Where(p => p.Value.PlaceEntityType == "pipe").OrderBy(p => p.Key, StringComparer.Ordinal)
             .Select(p => p.Key).FirstOrDefault() ?? throw new InvalidOperationException("No ordinary pipe item is available.");
-        string[] geometry = new[] { pipeItem }.Concat(geometryItems ?? []).Distinct(StringComparer.Ordinal).ToArray();
+        string? tunnelItem = FluidRelayController.UndergroundItem(catalog);
+        string[] geometry = new[] { pipeItem }.Concat(tunnelItem is null ? [] : new[] { tunnelItem }).Concat(geometryItems ?? [])
+            .Distinct(StringComparer.Ordinal).ToArray();
         if (geometry.Length > SpatialSnapshot.MaximumItems) throw new InvalidOperationException("Pipe routing exceeds the native item geometry observation budget.");
         var spatial = new SpatialClient(game);
         SpatialSnapshot initial = await MapAsync();
-        var plan = new PipeRoutePlanner().Find(ground?.Invoke(initial) ?? initial, pipeItem, sourceId, targetId, fluid, cancellationToken: token);
+        var routed = ground?.Invoke(initial) ?? initial;
+        var plan = new PipeRoutePlanner().Find(routed, pipeItem, sourceId, targetId, fluid, cancellationToken: token);
+        // Ordinary pipes cannot cross belts, pipes or machines. On 2026-10-07 (seed 987654321) a refinery planned a day earlier
+        // had no surface route left to its pumpjack; tunnels pass under what the ground now holds.
+        if (plan.Status != PipeRouteStatus.Found && tunnelItem is not null)
+            plan = new PipeRoutePlanner().Find(routed, pipeItem, sourceId, targetId, fluid, cancellationToken: token, undergroundItem: tunnelItem);
         await journal.AppendAsync("pipe-route-plan", new { initial.Scope, initial.CollectedTick, sourceId, targetId, fluid, pipeItem, plan }, token);
         if (plan.Status != PipeRouteStatus.Found || plan.Source is null || plan.Target is null)
-            throw new InvalidOperationException($"Fluid routing ended with {plan.Status}; no route is executed.");
-        if (plan.Pipes.Count > 200) throw new InvalidOperationException("The planned pipe route exceeds the current construction budget.");
+            throw new FluidSiteUnavailableException($"Fluid routing ended with {plan.Status}; no route is executed.");
+        var pieces = FluidRelayController.Pieces(plan, pipeItem, tunnelItem);
+        if (pieces.Count > 200) throw new InvalidOperationException("The planned pipe route exceeds the current construction budget.");
         FactorySnapshot stock = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (stock.Scope != catalog.Scope) throw new InvalidDataException("Fluid inventory scope changed before construction.");
         if (stock.FluidStockAt(sourceId, fluid, plan.Source.BoxIndex) <= 0 && !OffshoreSupplyPlanner.CanExtract(initial, sourceId, fluid))
@@ -40,21 +48,25 @@ public sealed class PipeConnectionController(IGameClient game, IControllerJourna
                 .Any(p => p.Name != fluid && p.Value.GetDouble() > 0)))
             throw new InvalidOperationException("The selected target already contains another fluid.");
         var built = new HashSet<string>(StringComparer.Ordinal);
-        if (plan.Pipes.Count > 0) await new ProductionGoalExecutor(game, journal).RunAsync(pipeItem, plan.Pipes.Count, token);
+        // One kit: tunnels are crafted from pipes and must not consume the ones carried for this route.
+        if (pieces.Count > 0)
+            await CarriedStock.EnsureAsync(game, journal, catalog, pieces.GroupBy(p => p.Item, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal), token);
         await using var controller = new SpatialController(game, journal);
         // Procurement may fetch plates from the base. On 2026-10-07 (seed 20261106) the actor returned from a refinery 360 tiles
         // away with the pipes but rephotographed the route from the base; the planning view is rejoined before building.
         if ((await spatial.CaptureAsync(radius: 16, cancellationToken: token, light: true)).Actor.Position.DistanceTo(initial.Actor.Position) > 8)
             await controller.TravelAsync(initial.Actor.Position, 4, catalog, token);
         var construction = new PoweredMachineController(game, journal);
-        for (int index = 0; index < plan.Pipes.Count; index++)
+        for (int index = 0; index < pieces.Count; index++)
         {
-            var position = plan.Pipes[index];
+            var piece = pieces[index];
+            var position = piece.Position;
             var current = await MapAsync();
             if (!PipeRoutePlanner.ConnectionsSafe(current, position, plan.Source, plan.Target, built))
                 throw new InvalidDataException("The next pipe would join an unplanned fluid port. Reconcile the partial route.");
-            var remaining = plan.Pipes.Skip(index + 1).Append(plan.Source.Position).Append(plan.Target.Position).ToArray();
-            string id = await construction.BuildAtAsync(pipeItem, new(position, 0, 0), catalog, controller, token, remaining);
+            var remaining = pieces.Skip(index + 1).Select(p => p.Position).Append(plan.Source.Position).Append(plan.Target.Position).ToArray();
+            string id = await construction.BuildAtAsync(piece.Item, new(position, piece.Direction, 0), catalog, controller, token, remaining);
             built.Add(id);
             await journal.AppendAsync("pipe-built", new { id, position, sourceId, targetId, fluid }, token);
         }

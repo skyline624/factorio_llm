@@ -143,6 +143,22 @@ public sealed class FluidCellBuilderTests
             new(id, "entity", id, "pipe", Protocol.ToElement(new { role = "factory", type = "pipe", position }));
     }
 
+    [Fact]
+    public void BuiltTunnelsKeepTheirItemAndNativeDirectionForRebuilds()
+    {
+        var cell = new FactoryCell("cell", 0, new(0, 0, true), FluidCellBuilder.MachineKind, "oil-refinery", "basic-oil-processing",
+            new Dictionary<string, string> { ["machine"] = "refinery" }, "building", 1, Attempts: 1, Plan: new Dictionary<string, PlannedEntity>());
+        var snapshot = new FactorySnapshot("snapshot", new ActorScope("world", "session", "actor", 1, 1), 100, 200, Protocol.ToElement(new { }),
+        [
+            new("a", "entity", "a", "pipe", Protocol.ToElement(new { role = "factory", type = "pipe", position = new MapPosition(.5, .5), direction = 0 })),
+            new("b", "entity", "b", "pipe-to-ground", Protocol.ToElement(new { role = "factory", type = "pipe-to-ground",
+                position = new MapPosition(1.5, .5), direction = 12 }))
+        ]);
+        var piped = FluidCellBuilder.WithPipes(cell, snapshot, ["a", "b"], "pipe", "pipe-to-ground");
+        Assert.Equal(("pipe", 0), (piped.Plan!["pipe-0"].Item, piped.Plan["pipe-0"].Direction));
+        Assert.Equal(("pipe-to-ground", 12), (piped.Plan["pipe-1"].Item, piped.Plan["pipe-1"].Direction));
+    }
+
     private static FactoryCell Extractor(string drill) => new("cell", 0, new(0, 0, true), FluidCellBuilder.ExtractorKind, "pumpjack", "crude-oil",
         new Dictionary<string, string> { ["drill"] = drill }, "ready", 1);
 }

@@ -240,7 +240,8 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
                                 forecast = FluidReservoirPlanner.Project(forecast, tankItem, pipeItem, other);
                             return forecast with { Actor = current.Actor };
                         }, geometryItems: [tankItem, .. ground.Items]);
-                    cell = WithPipes(cell, await SnapshotAsync(catalog, token), result.BuiltPipeIds, pipeItem);
+                    cell = WithPipes(cell, await SnapshotAsync(catalog, token), result.BuiltPipeIds, pipeItem,
+                        FluidRelayController.UndergroundItem(catalog));
                 }
                 await SaveAsync(registry, catalog, cell, token);
             }
@@ -555,7 +556,7 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         ProductionCatalog catalog, string pipeItem, CancellationToken token)
     {
         if (result.BuiltPipeIds.Count == 0) return cell;
-        cell = WithPipes(cell, await SnapshotAsync(catalog, token), result.BuiltPipeIds, pipeItem);
+        cell = WithPipes(cell, await SnapshotAsync(catalog, token), result.BuiltPipeIds, pipeItem, FluidRelayController.UndergroundItem(catalog));
         await SaveAsync(registry, catalog, cell, token);
         await journal.AppendAsync("fluid-cell-pipes", new { cell.Id, result.SourceId, result.TargetId, result.Fluid, result.BuiltPipeIds }, token);
         return cell;
@@ -689,7 +690,9 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
     /// The cell with a route's built pipes as its next pipe-n roles, placed from the whole-factory photograph, so a route
     /// reaching beyond one capture around the actor is registered whole.
     /// </summary>
-    internal static FactoryCell WithPipes(FactoryCell cell, FactorySnapshot snapshot, IReadOnlyCollection<string> built, string pipeItem)
+    /// <summary>Registers built route pieces; a pipe-to-ground keeps its item and native direction so maintenance rebuilds it.</summary>
+    internal static FactoryCell WithPipes(FactoryCell cell, FactorySnapshot snapshot, IReadOnlyCollection<string> built, string pipeItem,
+        string? tunnelItem = null)
     {
         if (!built.All(FactoryMaintenance.Present(snapshot).Contains))
             throw new InvalidDataException("A built pipe is not known to the factory; reconcile the route before registering the cell.");
@@ -697,7 +700,10 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         foreach (string id in built.Order(StringComparer.Ordinal))
         {
             while (cell.Entities.ContainsKey($"pipe-{index}")) index++;
-            cell = WithRole(cell, $"pipe-{index}", id, new($"pipe-{index}", pipeItem, Position(snapshot, id), 0));
+            var data = snapshot.Records.First(r => r.Kind == "entity" && r.EntityId == id).Data;
+            bool tunnel = tunnelItem is not null && data.TryGetProperty("type", out var type) && type.GetString() == "pipe-to-ground";
+            int direction = tunnel && data.TryGetProperty("direction", out var facing) ? facing.GetInt32() : 0;
+            cell = WithRole(cell, $"pipe-{index}", id, new($"pipe-{index}", tunnel ? tunnelItem! : pipeItem, Position(snapshot, id), direction));
         }
         return cell;
     }
