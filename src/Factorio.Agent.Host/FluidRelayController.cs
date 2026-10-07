@@ -25,6 +25,9 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
             new PlannedEntity($"pipe-{i}", piece.Underground ? undergroundItem ?? throw new InvalidDataException(
                 "A tunnel section requires a native pipe-to-ground item.") : pipeItem, piece.Position, piece.Direction)).ToArray();
 
+    /// <summary>Whether two planned pieces of a section stand on the same tile.</summary>
+    internal static bool SharesATile(FactoryCell cell) => cell.Plan is { } plan && plan.Values.GroupBy(p => p.Position).Any(g => g.Count() > 1);
+
     public async Task ExtendAsync(string fluid, MapPosition destination, ProductionCatalog catalog, SpatialController controller,
         FactoryGround ground, CancellationToken token)
     {
@@ -40,6 +43,20 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
         {
             var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
             var cell = state.Cells.FirstOrDefault(c => c.Kind == Kind && c.Recipe == fluid && c.Status == "building" && c.FluidRoute is not null);
+            if (cell is not null && SharesATile(cell))
+            {
+                // A section planned before the router kept off its own tiles can lay one piece over another; on 2026-10-07 (seed
+                // 987654321) every resumption hit the same refusal. Its built pieces are picked up and a new section is planned.
+                foreach (var (role, id) in cell.Entities)
+                {
+                    try { await controller.ApproachEntityAsync(id, cell.Plan![role].Position, catalog, token); }
+                    catch (EntityMissingException) { continue; }
+                    await controller.WorkAsync("mine", new { entityId = id, count = 1 }, 900, token: token);
+                }
+                await registry.SaveAsync(state.With(cell with { Status = ResourceCellBuilder.Abandoned }), token);
+                await journal.AppendAsync("fluid-relay-plan-discarded", new { cell.Id, fluid, built = cell.Entities.Count }, token);
+                cell = null;
+            }
             var stock = await StockAsync();
             if (cell is null)
             {

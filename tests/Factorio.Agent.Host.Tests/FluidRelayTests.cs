@@ -124,6 +124,17 @@ public sealed class FluidRelayTests
     }
 
     [Fact]
+    public void ASectionWithTwoPiecesOnOneTileIsRecognised()
+    {
+        PlannedEntity Piece(string role, string item, double x) => new(role, item, new(x, .5), 0);
+        FactoryCell Cell(params PlannedEntity[] pieces) => new("relay", 0, new(0, 0, true), "fluid-link", "pipe", "water",
+            new Dictionary<string, string>(), "building", 1, Plan: pieces.ToDictionary(p => p.Role, p => p));
+        Assert.False(FluidRelayController.SharesATile(Cell(Piece("outlet", "pipe", 9.5), Piece("pipe-0", "pipe", .5), Piece("pipe-1", "pipe", 1.5))));
+        Assert.True(FluidRelayController.SharesATile(Cell(Piece("outlet", "pipe", 9.5), Piece("pipe-0", "pipe", .5),
+            Piece("pipe-1", "pipe", 1.5), Piece("pipe-2", "pipe-to-ground", .5))));
+    }
+
+    [Fact]
     public void ARelayAvoidsOccupiedSitesAndAnUnrelatedFluidNetwork()
     {
         var map = Map();
