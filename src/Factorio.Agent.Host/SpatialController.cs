@@ -400,6 +400,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     }
 
     /// <summary>Groups validated corners into a bounded native move, preferring a stable handoff.</summary>
+    private const double PathStartMargin = 1;
+
     public static IReadOnlyList<MapPosition> SelectMovePath(SpatialCollisionField field, RoutePlan route, int maximumMoveDistance = 24)
     {
         if (maximumMoveDistance is < 1 or > 24) throw new ArgumentOutOfRangeException(nameof(maximumMoveDistance));
@@ -411,11 +413,14 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         double length = 0;
         int stablePathCount = 0;
         var remaining = route;
+        // The engine measures the path from where the actor stands at acceptance, which the move precondition lets differ
+        // from the photograph. On 2026-10-07 (seed 987654321) a path of 23.99 photographed tiles was refused as too far.
+        double bound = maximumMoveDistance - PathStartMargin;
         while (remaining.Waypoints.Count > 0 && path.Count < 64)
         {
-            MapPosition next = SelectWaypoint(field, remaining, from, maximumMoveDistance - length);
+            MapPosition next = SelectWaypoint(field, remaining, from, bound - length);
             double distance = from.DistanceTo(next);
-            if (length + distance > maximumMoveDistance + 1e-9)
+            if (length + distance > bound + 1e-9)
             {
                 if (path.Count > 0) break;
                 throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "The first movement waypoint exceeds its distance bound.");
