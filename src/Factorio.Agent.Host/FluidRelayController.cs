@@ -153,8 +153,10 @@ internal sealed class FluidRelayController(IGameClient game, IControllerJournal 
             await SaveAsync();
             string[] roles = new[] { "outlet" }.Concat(Enumerable.Range(0, cell.Plan!.Keys.Count(k => k.StartsWith("pipe-", StringComparison.Ordinal)))
                 .Select(i => $"pipe-{i}")).ToArray();
-            foreach (var need in roles.Where(r => !cell.Entities.ContainsKey(r)).GroupBy(r => cell.Plan![r].Item, StringComparer.Ordinal))
-                await builder.EnsureCarriedAsync(registry, catalog, need.Key, need.Count(), token);
+            // One kit: underground pipes are crafted from pipes. On 2026-10-07 (seed 20261106) the section's 3 pipes were carried
+            // first, then consumed by its 12 underground pipes, and the first pipe build failed without its item.
+            await builder.EnsureCarriedAsync(registry, catalog, roles.Where(r => !cell.Entities.ContainsKey(r))
+                .GroupBy(r => cell.Plan![r].Item, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal), token);
             await controller.TravelAsync(cell.Plan!["outlet"].Position, 6, catalog, token);
             for (int index = 0; index < roles.Length; index++)
             {

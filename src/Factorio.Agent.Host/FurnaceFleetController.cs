@@ -59,7 +59,7 @@ internal sealed class FurnaceFleetController(IGameClient game, IControllerJourna
                 var map = await MapAsync();
                 var state = await ObserveAsync();
                 var access = fleet.Select(id => state.Entities.Single(e => e.Id == id).Position).ToList();
-                var site = await ControllerPlanning.RunAsync(planningToken =>
+                var site = await ControllerPlanning.TryRunAsync(planningToken =>
                 {
                     var field = new SpatialCollisionField(map);
                     var placement = new PlacementPlanner();
@@ -69,12 +69,19 @@ internal sealed class FurnaceFleetController(IGameClient game, IControllerJourna
                     {
                         planningToken.ThrowIfCancellationRequested();
                         if (placement.FindApproach(field, furnaceItem, candidate, targets, cancellationToken: planningToken) is not null)
-                            return (Candidate: candidate, Escape: exit);
+                            return Tuple.Create(candidate, exit);
                     }
-                    throw new InvalidOperationException("No native furnace placement preserves service and escape access.");
+                    return null;
                 }, controller, TimeSpan.FromMinutes(2), cancellation);
-                var candidate = site.Candidate;
-                MapPosition escape = site.Escape;
+                if (site is null)
+                {
+                    if (fleet.Count == 0) throw new InvalidOperationException("No native furnace placement preserves service and escape access.");
+                    // More furnaces only shorten the lot. On 2026-10-07 (seed 987654321) the second furnace's site search beside a
+                    // distant refinery outran its budget and ended a chemical science goal, although one furnace could smelt the steel.
+                    await journal.AppendAsync("furnace-fleet-growth-stopped", new { furnaceItem, fleet, desired = count, map.CollectedTick }, cancellation);
+                    break;
+                }
+                var (candidate, escape) = site;
                 access.Add(escape);
                 string id = await new PoweredMachineController(game, journal).BuildAtAsync(furnaceItem, candidate, catalog, controller, cancellation, access);
                 fleet.Add(id);

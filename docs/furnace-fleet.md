@@ -53,6 +53,8 @@ Les premières tentatives sont conservées dans les preuves privées : une prép
 
 Les **1 569 tests offline** passent sans jeu ni cloud. Un essai natif distinct valide les douze contrôles du bus persistant et la lecture des champs de circuit vert d'un four extérieur au bus. Le contrat C# reconnaît ces champs natifs, y compris les listes vides encodées par Lua comme `{}`, et continue de refuser les champs inconnus.
 
+Un emplacement supplémentaire introuvable dans le budget de deux minutes arrête seulement la croissance de la flotte (`furnace-fleet-growth-stopped`) : les fours déjà présents cuisent le lot. Le 7 octobre 2026, dans la partie normale de graine **987654321**, la recherche du second four d'acier près d'une raffinerie éloignée a dépassé ce budget et terminé un objectif de science chimique. Sans aucun four, l'absence d'emplacement reste une erreur.
+
 ## Limites
 
 La répartition couvre les recettes déterministes à un ingrédient solide et un produit solide, avec des fours à combustible compatibles. L'extraction foreuse–four et les chaînes électriques ne bénéficient pas encore d'une extension générale en plusieurs sites. Les réservations locales ne remplacent pas une allocation persistante de tous les stocks de l'usine. Les besoins d'amorçage restent susceptibles de nécessiter du minage manuel, qui doit être mesuré séparément. Aucune fusée en campagne normale ni campagne finale n'est qualifiée par ces essais.
