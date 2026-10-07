@@ -503,7 +503,14 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         await ConfigureAsync(bus, state, catalog, controller, token);
         snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (!FactoryTransportHealth.Healthy(state, snapshot, bus))
-            throw new InvalidDataException("The built bus lacks a matching native graph, filtered stock control or fed endpoints.");
+        {
+            // A bus left building was finished again by every later goal and failed it again (seed 987654321, 2026-10-07).
+            // An unproven bus is abandoned instead: coverage only counts healthy buses, so the actor keeps delivering.
+            await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell with { Status = ResourceCellBuilder.Abandoned }), token);
+            await journal.AppendAsync("factory-transport-unhealthy", new { bus, cell.Entities, snapshot.CollectedTick,
+                reason = "no matching native graph, filtered stock control or fed endpoints" }, token);
+            return;
+        }
         cell = cell with { Status = "ready", Tick = snapshot.CollectedTick };
         await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
         await journal.AppendAsync("factory-transport-ready", new { bus, cell, snapshot.CollectedTick }, token);
