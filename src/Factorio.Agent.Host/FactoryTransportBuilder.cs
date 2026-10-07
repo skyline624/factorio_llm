@@ -8,7 +8,7 @@ namespace Factorio.Agent.Host;
 public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal journal, string directory)
 {
     internal const int FuelPlanningRadius = SpatialSnapshot.MaximumRadius;
-    private const int BalancedSearches = 4, BalancedSuppliersPerItem = 2;
+    private const int BalancedSearches = 4, BalancedSuppliersPerItem = 2, SuppliersPerIngredient = 2;
 
     private static readonly BeltTransportEquipment Equipment = new("transport-belt", "inserter", "small-electric-pole");
     private static readonly string[] Items = [Equipment.Belt, Equipment.Inserter, Equipment.Pole];
@@ -113,6 +113,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                 var sources = state.Cells.Where(c => c.Id != target.Id && c.Status == "ready" && c.Entities.ContainsKey("output-chest")
                     && Product(catalog, c) == ingredient.Name).Select(c => (Cell: c, Position: Position(snapshot, c.Entities["output-chest"])))
                     .Where(p => p.Position is not null).OrderBy(p => p.Position!.DistanceTo(destination)).ToArray();
+                int tried = 0;
                 foreach (var candidate in sources)
                 {
                     // Keep the existing graph, but do not mistake one supplier for enough supply or retry its old link.
@@ -121,6 +122,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                     var existingBus = (state.Transports ?? []).SingleOrDefault(b => b.SourceCellId == candidate.Cell.Id && b.Item == ingredient.Name);
                     var candidateFrame = FrameEntities(state, candidate.Cell, target, existingBus);
                     if (PlanningCenter(snapshot, candidateFrame) is null && !TransportCorridorSurvey.CanSurvey(snapshot, candidateFrame)) continue;
+                    // The nearest suppliers first: on 2026-10-07 (seed 987654321) one unreachable input chest took all eight
+                    // searches of every round, tried from eight smelters, and no other cell was ever linked.
+                    if (++tried > SuppliersPerIngredient) break;
                     if (++considered > 8) return connected;
                     int limit = checked((int)Math.Clamp(ingredient.Amount!.Value * FactoryLogistics.CellBufferCrafts(target, shares, 40), 1, 10000));
                     if (await LinkAsync(candidate.Cell.Id, target.Id, ingredient.Name, limit, catalog, controller, token))
