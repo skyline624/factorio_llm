@@ -17,8 +17,16 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
 {
     public const double TargetResearchSeconds = 900;
 
+    /// <summary>
+    /// Preparation stops growing the factory after this long, at its next safe boundary, so the labs get the rest of the goal's
+    /// two hours. On 2026-10-07 (seed 20261106) growing every registered target took the whole budget and the research goal was
+    /// cancelled mid-walk without a single unit researched.
+    /// </summary>
+    public static readonly TimeSpan PreparationBudget = TimeSpan.FromMinutes(75);
+
     public async Task<FactoryResearchResult> RunAsync(string technologyName, CancellationToken token = default)
     {
+        long began = System.Diagnostics.Stopwatch.GetTimestamp();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromHours(3));
         token = deadline.Token;
@@ -59,7 +67,7 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
         foreach (var pack in technology.Ingredients)
         {
             plan = await director.AutomateAsync(pack.Name, Math.Min(120, technology.Count * pack.Amount / minutes), token,
-                isObjectiveComplete: async _ => (await ReadStateAsync()).Researched);
+                isObjectiveComplete: async _ => (await ReadStateAsync()).Researched || PreparationSpent());
             state = await ReadStateAsync();
             if (state.Researched) return await FinishAsync(state.CollectedTick, 0);
         }
@@ -123,6 +131,8 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
             }
         }
         throw new TimeoutException("Factory research exhausted its round budget.");
+
+        bool PreparationSpent() => System.Diagnostics.Stopwatch.GetElapsedTime(began) > PreparationBudget;
 
         async Task<ResearchSnapshot> ReadStateAsync() => ResearchSnapshot.Parse(
             await game.ExecuteAsync(GameRequest.Create("research_state", new { technology = technologyName }), token), technologyName);
