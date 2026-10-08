@@ -7,9 +7,12 @@ namespace Factorio.Agent.Host;
 public sealed record NestClearingStep(string TargetId, string TargetName, IReadOnlyList<string> Turrets, double Exposure,
     int Destroyed, int Lost, int Recovered, string Outcome);
 public sealed record NestClearingResult(string Status, MapPosition? Center, int Spawners, int Worms, int Destroyed,
-    int TurretsLost, IReadOnlyList<NestClearingStep> Steps, long Tick);
+    int TurretsLost, IReadOnlyList<NestClearingStep> Steps, long Tick, string? Ammunition = null);
 public sealed record NestClearingAttempt(MapPosition Center, long Tick, string Outcome);
-public sealed record NestClearingState(int Version, string WorldId, IReadOnlyList<NestClearingAttempt> Attempts, long? LastScoutTick = null);
+/// <summary>A structure that destroyed a whole block loaded with this ammunition without being damaged to death.</summary>
+public sealed record NestOvermatch(string Structure, string Ammunition, long Tick);
+public sealed record NestClearingState(int Version, string WorldId, IReadOnlyList<NestClearingAttempt> Attempts, long? LastScoutTick = null,
+    IReadOnlyList<NestOvermatch>? Overmatched = null);
 
 /// <summary>
 /// Clears one remembered enemy base near own industry by turret creep. Nothing offensive existed before: on seed 20261072
@@ -75,14 +78,15 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         // The attempt counts before it starts: a death or an interruption must start the retry delay too. On 2026-10-08
         // (seed 20261107) the actor died at a worm, nothing was recorded, and it walked back to the same worm and died again.
         await SaveStateAsync(WithAttempt(state, new NestClearingAttempt(nest.Center, safety.Tick, StartedOutcome)), token);
-        var result = await ExecuteAsync(catalog, registry, nest, safety.Tick, token);
-        await SaveStateAsync(WithAttempt(state, new NestClearingAttempt(nest.Center, result.Tick, result.Status)), token);
+        var result = await ExecuteAsync(catalog, registry, nest, safety.Tick, token, state.Overmatched);
+        await SaveStateAsync(WithOvermatches(WithAttempt(state, new NestClearingAttempt(nest.Center, result.Tick, result.Status)), result), token);
         return await DoneAsync(result, token);
     }
 
     /// <summary>Clears the given remembered base with stocked turrets and magazines; selection and retry delays stay with the caller.</summary>
+    /// <param name="overmatched">Structures this ammunition already failed to destroy: such a nest waits for stronger rounds.</param>
     internal async Task<NestClearingResult> ExecuteAsync(ProductionCatalog catalog, FactoryState registry, NestCluster nest, long tick,
-        CancellationToken token)
+        CancellationToken token, IReadOnlyList<NestOvermatch>? overmatched = null)
     {
         var stock = SurvivalKitController.Stock(await new ProductionController(game, journal).ObserveAsync(token));
         string? turret = catalog.Turrets?.Keys.Where(k => stock.GetValueOrDefault(k) > 0 || FactoryDirector.Enabled(catalog, k))
@@ -95,6 +99,8 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         string? ammunition = choices.FirstOrDefault(a => AttackResponseController.Affordable(catalog, turret, a,
             (int)(magazines / TurretsPerStep) + 1, stock, TurretsPerStep) == TurretsPerStep);
         if (ammunition is null) return new("no-stock", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick);
+        if (nest.Structures.Any(s => (overmatched ?? []).Any(o => o.Structure == s.Name && o.Ammunition == ammunition)))
+            return new(UnderArmed, nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick, ammunition);
         // Portable defense draws from the same bag on the way in; on 2026-10-06 most assault steps in all three normal campaigns
         // returned "kit-spent" and walked back for turrets. When affordable, the portable reserve travels on top of the block.
         int kit = AttackResponseController.Affordable(catalog, turret, ammunition, MagazinesPerTurret + 1, stock, TurretsPerStep
@@ -112,8 +118,27 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         using (ProductionReservations.EnterFactory(registry))
         {
             await new SurvivalKitController(game, journal).EnsureAsync("nest-clearing", token);
-            return await ClearAsync(catalog, nest, turret, ammunition, kit, extra, token);
+            return (await ClearAsync(catalog, nest, turret, ammunition, kit, extra, token)) with { Ammunition = ammunition };
         }
+    }
+
+    /// <summary>Outcome when a structure of the nest already overmatched the only affordable ammunition.</summary>
+    internal const string UnderArmed = "under-armed";
+
+    /// <summary>
+    /// Records each structure that destroyed a whole loaded block without dying, with the block's ammunition. On 2026-10-08
+    /// (seed 20261106) four turrets with basic rounds were lost to a medium worm, whose flat physical resistance nearly cancels
+    /// them; every retry half an hour later would have lost four more.
+    /// </summary>
+    internal static NestClearingState WithOvermatches(NestClearingState state, NestClearingResult result)
+    {
+        if (result.Ammunition is not { } ammunition) return state;
+        var beaten = result.Steps.Where(s => s.Destroyed == 0 && s.Lost > 0 && s.Lost == s.Turrets.Count)
+            .Select(s => new NestOvermatch(s.TargetName, ammunition, result.Tick)).ToArray();
+        return beaten.Length == 0 ? state : state with
+        {
+            Overmatched = [.. (state.Overmatched ?? []).Where(o => !beaten.Any(b => b.Structure == o.Structure && b.Ammunition == o.Ammunition)), .. beaten]
+        };
     }
 
     /// <summary>Step outcome when a refused placement left part of the block; its turrets are picked up before loading.</summary>

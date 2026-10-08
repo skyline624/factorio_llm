@@ -40,6 +40,20 @@ public sealed class NestClearingTests
     }
 
     [Fact]
+    public void AStructureThatDestroysAWholeBlockUnharmedIsRememberedWithItsAmmunition()
+    {
+        // Seed 20261106 on 2026-10-08: four turrets with basic rounds were lost to a medium worm without damaging it to death.
+        var state = new NestClearingState(1, "world", []);
+        var beaten = new NestClearingStep("w", "medium-worm-turret", ["t1", "t2", "t3", "t4"], 6.5, 0, 4, 0, "turrets-destroyed");
+        var killed = new NestClearingStep("s", "spitter-spawner", ["t5", "t6", "t7", "t8"], 0, 1, 1, 3, "target-destroyed");
+        var result = new NestClearingResult("turret-losses", new(0, 0), 1, 1, 1, 5, [killed, beaten], 900, "basic-rounds");
+        var after = NestClearingController.WithOvermatches(state, result);
+        Assert.Equal([("medium-worm-turret", "basic-rounds", 900L)], after.Overmatched!.Select(o => (o.Structure, o.Ammunition, o.Tick)));
+        // A result without a known ammunition (e.g. no stock) teaches nothing.
+        Assert.Null(NestClearingController.WithOvermatches(state, result with { Ammunition = null }).Overmatched);
+    }
+
+    [Fact]
     public void AnAttemptThatNeverReportedBackDelaysItsRetryAndIsReplacedByItsOutcome()
     {
         // Seed 20261107 on 2026-10-08: the actor died at a worm, nothing was recorded, and it returned to the same worm and died again.
