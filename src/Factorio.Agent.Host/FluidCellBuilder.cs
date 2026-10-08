@@ -94,6 +94,7 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
             foreach (string fluid in fluids.Where(f => !FluidChainPlanner.Terrain(catalog, f)))
                 await WaitForStockAsync(fluid, sources[fluid], controller, catalog, token);
             var anchor = await AnchorAsync(fluids, sources, catalog, token);
+            await ReclaimAbandonedAsync(anchor, registry, catalog, controller, token);
             await controller.TravelAsync(anchor, 6, catalog, token);
             var map = await CaptureAsync(items, catalog, token);
             var stock = await SnapshotAsync(catalog, token);
@@ -442,6 +443,41 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
             blocked ??= cell;
         }
         return (null, blocked);
+    }
+
+    /// <summary>Distance from a new fluid site's anchor within which abandoned machines are reclaimed first.</summary>
+    internal const double ReclaimRadius = 48;
+
+    /// <summary>
+    /// Mines the standing machines of abandoned fluid cells near the anchor whose ports join nothing: they feed nothing, yet hold
+    /// the ground beside the supply and their unused ports claim the tiles around them. On 2026-10-08 (seed 987654321) an abandoned
+    /// refinery beside the only free pumpjack left every refinery site unrouted for hours. The machines return for reuse.
+    /// </summary>
+    private async Task ReclaimAbandonedAsync(MapPosition anchor, FactoryRegistry registry, ProductionCatalog catalog, SpatialController controller,
+        CancellationToken token)
+    {
+        var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
+        foreach (var cell in state.Cells.Where(c => c.Kind == MachineKind && c.Status == ResourceCellBuilder.Abandoned
+            && c.Entities.ContainsKey("machine") && c.Plan?.GetValueOrDefault("machine") is { } plan && plan.Position.DistanceTo(anchor) <= ReclaimRadius))
+        {
+            string id = cell.Entities["machine"];
+            var without = cell with { Entities = cell.Entities.Where(e => e.Key != "machine").ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal) };
+            if (!(await SnapshotAsync(catalog, token)).Records.Any(r => r.Kind == "entity" && r.EntityId == id))
+            {
+                await SaveAsync(registry, catalog, without, token);
+                continue;
+            }
+            try { await controller.ApproachEntityAsync(id, cell.Plan!["machine"].Position, catalog, token); }
+            catch (Exception error) when (error is EntityUnreachableException or NavigationPlanningException) { continue; }
+            var machine = (await CaptureAsync([cell.MachineItem], catalog, token)).Entities.SingleOrDefault(e => e.Id == id);
+            if (machine is null || (machine.FluidConnections ?? []).Any(p => p.TargetEntityId is not null)) continue;
+            var mined = await controller.WorkAsync("mine", new { entityId = id, count = 1 }, 3600, token: token);
+            if (mined.Status != "completed")
+                throw new InvalidOperationException($"Reclaiming abandoned machine {id} ended with {mined.Status}: {mined.Error?.Code}; reconcile partial effects.");
+            await SaveAsync(registry, catalog, without, token);
+            await journal.AppendAsync("fluid-machine-reclaimed", new { cell.Id, machineId = id, cell.Recipe, cell.MachineItem, mined.OperationId, mined.Effects },
+                token);
+        }
     }
 
     /// <summary>
