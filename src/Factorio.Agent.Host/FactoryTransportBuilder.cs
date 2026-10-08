@@ -268,7 +268,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         bool surveyed = frameCenter is null;
         if (surveyed && !TransportCorridorSurvey.CanSurvey(snapshot, frameEntities)) return await RefusedAsync("corridor-not-surveyable");
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
-        var equipment = target.Kind == "power" ? PowerFuelTransport.SelectEquipment(catalog) : Equipment;
+        // Underground belts cross the buses a dense base already holds: on 2026-10-08 most refused links had no route in their
+        // frame or corridor while ordinary links used surface belts only.
+        var equipment = PowerFuelTransport.SelectEquipment(catalog);
         string? alternativeInserter = target.Kind == "power" ? PowerFuelTransport.SelectAlternativeInserter(catalog) : null;
         SpatialSnapshot? map;
         // A frame or corridor no route reaches is one refused link, not a failed goal: on 2026-10-08 (seed 987654321) a coal
@@ -283,7 +285,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             else
             {
                 await controller.TravelAsync(frameCenter!, approachTiles, catalog, token);
-                map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
+                map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam, equipment.UndergroundBelt), 48, token);
             }
         }
         catch (Exception error) when (error is NavigationPlanningException or EntityUnreachableException)
@@ -617,7 +619,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     // additional item prototypes; retaining every historical plan eventually exceeds the native 16-item request budget.
     internal static string[] GeometryItems(FactoryState state, PowerExpansionController.SteamItems? steam = null,
         string? undergroundBelt = null, string? alternativeInserter = null) =>
-        [.. Items.Concat(new FactoryGround(state, steam).Items)
+        // Links use medium poles once researched; their native geometry is observable before that.
+        [.. Items.Append("medium-electric-pole").Concat(new FactoryGround(state, steam).Items)
             .Concat(UnfinishedParts(state).Select(p => p.Item))
             .Concat(undergroundBelt is null ? [] : new[] { undergroundBelt })
             .Concat(alternativeInserter is null ? [] : new[] { alternativeInserter }).Distinct(StringComparer.Ordinal)];

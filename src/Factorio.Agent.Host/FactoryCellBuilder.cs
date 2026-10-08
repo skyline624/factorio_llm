@@ -369,11 +369,15 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         string chest = Enabled("iron-chest") ? "iron-chest" : "wooden-chest";
         if (!Enabled("inserter") || !Enabled("small-electric-pole"))
             throw new InvalidOperationException("Factory cells need electric inserters and small electric poles; research electronics first.");
-        // Medium poles are made from factory steel and copper; small ones need wood, which the agent can only mine from trees.
-        // On 2026-10-08 (seed 20261106) the trees near the base were gone and a cell's power link failed on a far tree hunt.
-        string pole = Enabled("medium-electric-pole") ? "medium-electric-pole" : "small-electric-pole";
-        return new(machineItem, AutomationPlanner.CellInserter(catalog), chest, pole);
+        return new(machineItem, AutomationPlanner.CellInserter(catalog), chest, PoleItem(catalog));
     }
+
+    /// <summary>
+    /// Medium poles are made from factory steel and copper; small ones need wood, which the agent can only mine from trees.
+    /// On 2026-10-08 (seed 20261106) the trees near the base were gone and a cell's power link failed on a far tree hunt.
+    /// </summary>
+    internal static string PoleItem(ProductionCatalog catalog) =>
+        catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == "medium-electric-pole")) ? "medium-electric-pole" : "small-electric-pole";
 
     /// <summary>Whether the machine is given its recipe; furnaces select theirs from the ingredient they receive, a silo's is fixed.</summary>
     public static bool Configured(string kind, string? recipe) => recipe is not null && kind is not (FurnaceCellPlanner.Kind or SiloCellPlanner.Kind);

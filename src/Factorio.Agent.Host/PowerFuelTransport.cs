@@ -239,7 +239,7 @@ internal sealed class PowerFuelTransport(IGameClient game, IControllerJournal jo
         return (connected, true, unavailableTargets);
     }
 
-    internal static BeltTransportEquipment SelectEquipment(ProductionCatalog catalog) => new("transport-belt", "inserter", "small-electric-pole",
+    internal static BeltTransportEquipment SelectEquipment(ProductionCatalog catalog) => new("transport-belt", "inserter", FactoryCellBuilder.PoleItem(catalog),
         catalog.Items.TryGetValue("underground-belt", out var item) && item.PlaceEntityType == "underground-belt"
             && !string.IsNullOrWhiteSpace(item.PlaceEntity)
             && catalog.Recipes.Any(r => r.Enabled && r.Products.Any(p => p.Name == "underground-belt" && p.DeterministicItem))

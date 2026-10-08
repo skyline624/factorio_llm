@@ -33,7 +33,9 @@ public sealed class FactoryTransportGroundTests
         Assert.Equal(requested.Append("underground-belt"), crossingItems);
         Assert.InRange(crossingItems.Length, 1, 16);
         // The native photograph holds item mappings only for the request, but all visible entity prototypes.
-        map = map with { Items = requested.ToDictionary(i => i, i => i == belt.Name ? new PlaceableItem(belt.Name, 100) : map.Items[i]) };
+        // The synthetic catalog holds no medium pole, which links only request for its geometry.
+        map = map with { Items = requested.Where(i => i == belt.Name || map.Items.ContainsKey(i))
+            .ToDictionary(i => i, i => i == belt.Name ? new PlaceableItem(belt.Name, 100) : map.Items[i]) };
         var reserved = FactoryTransportBuilder.ProtectBands(map, state);
         var field = new SpatialCollisionField(reserved);
         Assert.False(field.PlacementClear(belt, new(6, 6), 0));
