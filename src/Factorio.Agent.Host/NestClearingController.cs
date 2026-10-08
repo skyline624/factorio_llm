@@ -72,9 +72,11 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             nest = Choose(await new NestMemoryStore(directory).LoadAsync(catalog.Scope.WorldId, token), industry, state, safety.Tick, planned);
             if (nest is null) return await DoneAsync(new("scouted-no-nest", null, 0, 0, 0, 0, [], safety.Tick), token);
         }
+        // The attempt counts before it starts: a death or an interruption must start the retry delay too. On 2026-10-08
+        // (seed 20261107) the actor died at a worm, nothing was recorded, and it walked back to the same worm and died again.
+        await SaveStateAsync(WithAttempt(state, new NestClearingAttempt(nest.Center, safety.Tick, StartedOutcome)), token);
         var result = await ExecuteAsync(catalog, registry, nest, safety.Tick, token);
-        await SaveStateAsync(state with { Attempts = state.Attempts.Where(a => a.Center.DistanceTo(nest.Center) > NestMemory.LinkDistance)
-            .Append(new NestClearingAttempt(nest.Center, result.Tick, result.Status)).TakeLast(64).ToArray() }, token);
+        await SaveStateAsync(WithAttempt(state, new NestClearingAttempt(nest.Center, result.Tick, result.Status)), token);
         return await DoneAsync(result, token);
     }
 
@@ -113,6 +115,15 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             return await ClearAsync(catalog, nest, turret, ammunition, kit, extra, token);
         }
     }
+
+    /// <summary>Outcome of an attempt that never reported back, e.g. after the actor's death; it delays retries like a failure.</summary>
+    internal const string StartedOutcome = "started";
+
+    /// <summary>The attempt replaces earlier ones at the same base.</summary>
+    internal static NestClearingState WithAttempt(NestClearingState state, NestClearingAttempt attempt) => state with
+    {
+        Attempts = state.Attempts.Where(a => a.Center.DistanceTo(attempt.Center) > NestMemory.LinkDistance).Append(attempt).TakeLast(64).ToArray()
+    };
 
     /// <summary>
     /// The remembered base closest to own industry or to an unfinished cell's planned entity, within reach and not inside a

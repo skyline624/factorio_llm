@@ -14,7 +14,7 @@ Jusqu'au 6 octobre 2026, l'agent ne faisait que défendre : périmètres de tour
 
 `NestClearingController`, appelé pendant la maintenance entre deux objectifs après la riposte aux attaques :
 
-1. choisit le nid mémorisé le plus proche de l'industrie propre, à moins de 192 cases, hors d'un délai de 30 minutes de jeu après un échec ;
+1. choisit le nid mémorisé le plus proche de l'industrie propre, à moins de 192 cases, hors d'un délai de 30 minutes de jeu après un échec ; la tentative est enregistrée (`started`) avant de partir, si bien qu'une mort ou une interruption ouvre aussi ce délai : le 8 octobre 2026 (graine 20261107), le personnage tué près d'un ver y est retourné aussitôt après sa réapparition et y est mort de nouveau ;
 2. vérifie le stock de tourelles et de magasins sans prélever les cellules, équipe le kit de survie et porte 4 tourelles et 40 magasins en plus de la réserve ;
 3. se rend à un point de rassemblement situé au-delà de toute portée de ver plus la marge de navigation ;
 4. pour chaque étape (au plus 12) : marche vers la position de pose par une route qui ignore les enveloppes de vers, en déplacements natifs de 24 cases au plus ; pose et charge les tourelles par des opérations payées ; se replie ; attend au plus une minute de combat, mesurée en ticks de jeu, en observant la cible et les tourelles ; ramasse les survivantes par `mine` (trois essais si la défense interrompt le ramassage) ;

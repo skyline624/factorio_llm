@@ -40,6 +40,18 @@ public sealed class NestClearingTests
     }
 
     [Fact]
+    public void AnAttemptThatNeverReportedBackDelaysItsRetryAndIsReplacedByItsOutcome()
+    {
+        // Seed 20261107 on 2026-10-08: the actor died at a worm, nothing was recorded, and it returned to the same worm and died again.
+        var center = Memory().Clusters().Single(c => c.Structures.Count == 2).Center;
+        var started = NestClearingController.WithAttempt(new NestClearingState(1, "world", []),
+            new(center, 1000, NestClearingController.StartedOutcome));
+        Assert.Null(NestClearingController.Choose(Memory(), Industry, started, 1001));
+        var finished = NestClearingController.WithAttempt(started, new(center, 1200, "cleared"));
+        Assert.Equal([("cleared", 1200L)], finished.Attempts.Select(a => (a.Outcome, a.Tick)));
+    }
+
+    [Fact]
     public void TheStrongestCompatibleStockedOrProducibleRoundsComeFirst()
     {
         var (_, catalog, _, _) = PortableDefenseTests.Fixture();
