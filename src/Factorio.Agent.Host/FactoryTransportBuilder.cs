@@ -34,6 +34,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var pausedCells = FactoryLogistics.PausedCells(state.Cells.Where(c => c.Status == "ready"), catalog,
             FactoryLogistics.StockCaps(catalog, state), FactoryLogistics.AvailableStock(stockSnapshot))
             .Select(p => p.Cell.Id).ToHashSet(StringComparer.Ordinal);
+        var attempts = new TransportLinkAttempts(directory);
+        var tried = await attempts.LoadAsync(catalog.Scope.WorldId, token);
         if (maximumLinks - connected >= 2 && FactoryDirector.Enabled(catalog, "splitter"))
         {
             // Split links have their own budget. On 2026-10-06 (seed 20261106) every round spent the shared budget of eight on one
@@ -77,7 +79,10 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                         .OrderBy(n => Position(stockSnapshot, n.Target.Entities["input-chest"])!.DistanceTo(from!)).Take(2).ToArray();
                     if (targets.Length != 2 || PlanningCenter(stockSnapshot,
                         [source.Entities["output-chest"], .. targets.Select(n => n.Target.Entities["input-chest"])]) is null) continue;
+                    string pair = $"{targets[0].Target.Id}+{targets[1].Target.Id}";
+                    if (TransportLinkAttempts.Delayed(tried, source.Id, pair, group.Key, stockSnapshot.CollectedTick)) continue;
                     if (++balancedSearches > BalancedSearches) break;
+                    await attempts.RecordAsync(catalog.Scope.WorldId, new(source.Id, pair, group.Key, stockSnapshot.CollectedTick), token);
                     int Limit(int index) => checked((int)Math.Clamp(targets[index].Ingredient.Amount!.Value
                         * FactoryLogistics.CellBufferCrafts(targets[index].Target, shares, 40), 1, 10000));
                     if (!await LinkPairAsync(source.Id, targets[0].Target.Id, targets[1].Target.Id, group.Key,
@@ -113,7 +118,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                 var sources = state.Cells.Where(c => c.Id != target.Id && c.Status == "ready" && c.Entities.ContainsKey("output-chest")
                     && Product(catalog, c) == ingredient.Name).Select(c => (Cell: c, Position: Position(snapshot, c.Entities["output-chest"])))
                     .Where(p => p.Position is not null).OrderBy(p => p.Position!.DistanceTo(destination)).ToArray();
-                int tried = 0;
+                int searched = 0;
                 foreach (var candidate in sources)
                 {
                     // Keep the existing graph, but do not mistake one supplier for enough supply or retry its old link.
@@ -124,8 +129,10 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                     if (PlanningCenter(snapshot, candidateFrame) is null && !TransportCorridorSurvey.CanSurvey(snapshot, candidateFrame)) continue;
                     // The nearest suppliers first: on 2026-10-07 (seed 987654321) one unreachable input chest took all eight
                     // searches of every round, tried from eight smelters, and no other cell was ever linked.
-                    if (++tried > SuppliersPerIngredient) break;
+                    if (TransportLinkAttempts.Delayed(tried, candidate.Cell.Id, target.Id, ingredient.Name, snapshot.CollectedTick)) continue;
+                    if (++searched > SuppliersPerIngredient) break;
                     if (++considered > 8) return connected;
+                    await attempts.RecordAsync(catalog.Scope.WorldId, new(candidate.Cell.Id, target.Id, ingredient.Name, snapshot.CollectedTick), token);
                     int limit = checked((int)Math.Clamp(ingredient.Amount!.Value * FactoryLogistics.CellBufferCrafts(target, shares, 40), 1, 10000));
                     if (await LinkAsync(candidate.Cell.Id, target.Id, ingredient.Name, limit, catalog, controller, token))
                     {
