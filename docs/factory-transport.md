@@ -106,6 +106,8 @@ Ce scénario prépare explicitement terrain, énergie, recherches, équipements,
 
 ## Ordre des tournées du personnage
 
+Une tournée s'arrête après deux trajets abandonnés par le planificateur de déplacement (`factory-logistics-stranded`) : un personnage isolé échoue de la même façon sur toutes les cibles restantes. Le 8 octobre 2026 (graine 987654321), le personnage, à 500 cases de la base derrière une ligne de falaises, a enchaîné pendant deux heures des transferts impossibles de quatre minutes chacun et l'objectif de recherche ne se terminait plus.
+
 La collecte des sorties, le ravitaillement des coffres et la visite des laboratoires choisissent leur ordre depuis les positions de la photographie d'usine et celle du personnage. Une recherche du prochain arrêt le plus proche propose une tournée ; C# conserve l'ordre précédent si sa longueur géométrique est inférieure ou égale. Les coffres d'entrée sont visités avec tous leurs ingrédients, après le calcul commun des parts : l'ordre de déplacement ne change pas ces parts. Une nouvelle photographie avant la répartition scientifique actualise les stocks consommés pendant le ravitaillement.
 
 Cette estimation concerne les distances entre centres, sans prouver un optimum ni la durée d'un trajet encombré. La navigation native, la défense et les vérifications de portée restent nécessaires à chaque approche. Les phases de combustible conservent leur priorité entre foreuses à charbon, production électrique et autres brûleurs. Un arrêt absent n'acquiert aucune position supposée. Les [stocks et réserves](factory.md) restent mesurés par les photographies et les reçus.

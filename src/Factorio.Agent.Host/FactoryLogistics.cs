@@ -37,6 +37,13 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
     public const long BetweenGoalsFreshnessTicks = 30 * 60;
 
     /// <summary>A cell selection starts newly built suppliers without collecting unrelated products or visiting laboratories.</summary>
+    /// <summary>
+    /// Trips the travel planner gave up on before a tour stops: a stranded actor fails every remaining target the same way. On
+    /// 2026-10-08 (seed 987654321) the actor, 500 tiles from the base behind a cliff line, spent two hours failing one transfer
+    /// after another, four minutes each, and the research goal never ended.
+    /// </summary>
+    internal const int StrandedTrips = 2;
+
     public async Task<LogisticsResult> ServiceAsync(int bufferCrafts = 40, CancellationToken token = default,
         long minimumIntervalTicks = 0, bool usePlannedBuffers = false, IReadOnlySet<string>? targetCellIds = null)
     {
@@ -58,6 +65,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         var supplied = new Dictionary<string, long>(upkeep.Supplied, StringComparer.Ordinal);
         var shortfall = new Dictionary<string, long>(upkeep.Shortfall, StringComparer.Ordinal);
         int actions = upkeep.Actions;
+        int lostTrips = 0;
         var snapshots = new FactorySnapshotClient(game);
         FactorySnapshot snapshot = await snapshots.CaptureAsync(cancellationToken: token);
         Require(snapshot.Scope, catalog);
@@ -375,6 +383,7 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
 
         async Task<long> TransferAsync(string kind, string entityId, string item, long count, string inventory = "chest")
         {
+            if (lostTrips >= StrandedTrips) return 0;
             var entity = snapshot.Records.Single(r => r.Kind == "entity" && r.EntityId == entityId);
             var position = entity.Data.GetProperty("position").Deserialize<MapPosition>(Protocol.Json)!;
             try { await controller.ApproachEntityAsync(entityId, position, catalog, token); }
@@ -391,6 +400,8 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
                 // 987654321) one chest walled in by new cells ended a research goal during its logistics tour.
                 await journal.AppendAsync("factory-transfer-target-unreachable", new { kind, entityId, item, count, error = error.GetType().Name,
                     error.Message }, token);
+                if (error is NavigationPlanningException && ++lostTrips == StrandedTrips)
+                    await journal.AppendAsync("factory-logistics-stranded", new { trips = lostTrips, entityId, action = "skip-remaining-transfers" }, token);
                 return 0;
             }
             var receipt = await controller.WorkAsync(kind, new { entityId, inventory, item, count = checked((int)Math.Min(count, 100000)) }, 600, token: token);
