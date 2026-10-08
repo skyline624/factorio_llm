@@ -366,8 +366,11 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 .Select(n => (n.Position, n.Range is { } range ? range + NestMemory.WormGuardMargin : NestMemory.SpawnerGuardRadius)).ToArray() : null;
             // A long way through remembered nests follows a coarse detour around their guards; the local steps aim at its next point.
             var aim = destination ?? remembered?.Position ?? hint?.Position ?? ring;
-            // Cliff lines seen on the way are walked around as well; their unseen parts count as open until observed.
-            (MapPosition Center, double Radius)[] obstacles = [.. guards ?? [], .. planner.RememberCliffs(map).Select(c => (c, CliffRadius))];
+            // Cliff lines seen on the way, or on any earlier trip, are walked around as well; their unseen parts count as open until observed.
+            var cliffs = planner.RememberCliffs(map);
+            if (aim is { } far && game is ICliffMemoryReader cliffReader)
+                cliffs = [.. cliffs.Concat((await cliffReader.ReadCliffMemoryAsync(map.Scope, token)).Near(map.Actor.Position, far, GuardedRoute.Margin)).Distinct()];
+            (MapPosition Center, double Radius)[] obstacles = [.. guards ?? [], .. cliffs.Select(c => (c, CliffRadius))];
             var detour = aim is { } target && obstacles.Length > 0 ? GuardedRoute.Waypoint(map.Actor.Position, target, obstacles) : null;
             if (detour == aim) detour = null;
             try

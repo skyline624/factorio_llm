@@ -6,7 +6,7 @@ namespace Factorio.Agent.Host;
 
 /// <summary>Serializes calls across CLI processes and detects observed world-history regressions.</summary>
 public sealed class SessionGameClient(RuntimeSession session, IGameClient inner, ActorControlLease? controllerLease = null)
-    : IGameClient, IResourceMemoryReader, IDangerZoneReader, INestMemoryReader, IAsyncDisposable
+    : IGameClient, IResourceMemoryReader, IDangerZoneReader, INestMemoryReader, ICliffMemoryReader, IAsyncDisposable
 {
     private static readonly HashSet<string> Mutations = ["hello", "submit", "cancel", "mark_fixture", "prepare_checkpoint"];
     private readonly SemaphoreSlim callGate = new(1, 1);
@@ -64,6 +64,7 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
             if (map.Coverage.Resources) await new ResourceMemoryStore(session.Directory).RecordAsync(map, cancellationToken);
             // Enemy bases enter memory only from the actor's own photographs, which already follow normal visibility.
             await new NestMemoryStore(session.Directory).RecordAsync(map, cancellationToken);
+            await new CliffMemoryStore(session.Directory).RecordAsync(map, cancellationToken);
         }
         // A reading of the force's map enters the same memory, as charted destinations rather than local sightings.
         if (request.Action == "charted_resources" && response.Ok)
@@ -80,6 +81,15 @@ public sealed class SessionGameClient(RuntimeSession session, IGameClient inner,
         using IDisposable priority = await AcquireCallAsync(control: false, token);
         await using FileStream guard = await AcquireLockAsync(token);
         return (await new DangerZoneStore(session.Directory).LoadAsync(session.ProposedWorldId, token)).Active(surfaceIndex, tick);
+    }
+
+    public async Task<CliffMemory> ReadCliffMemoryAsync(ActorScope scope, CancellationToken token = default)
+    {
+        if (scope.WorldId != session.ProposedWorldId || scope.SessionId != session.SessionId)
+            throw new SessionDivergenceException("Cliff memory request belongs to another world or controller session.");
+        using IDisposable priority = await AcquireCallAsync(control: false, token);
+        await using FileStream guard = await AcquireLockAsync(token);
+        return await new CliffMemoryStore(session.Directory).LoadAsync(session.ProposedWorldId, token);
     }
 
     public async Task<NestMemory> ReadNestMemoryAsync(ActorScope scope, CancellationToken token = default)
