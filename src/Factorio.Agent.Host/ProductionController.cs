@@ -338,8 +338,9 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
         // Every known own entity is needed for exact stock; the 2026-09-30 campaign (seed 20261002) outgrew the 200-entity
         // default and every production step failed on an incomplete observation.
         // Production reads the actor and its own entities only; nearby ore and trees cost a third of this call (2026-10-06).
+        // Only entities holding items are listed: on 2026-10-08 (seed 20261106) 3992 belts made 5190 known entities, past the bound.
         GameResponse response = await game.ExecuteAsync(GameRequest.Create("observe",
-            new { radius = 64, limit = 200, entityLimit = MaximumOwnEntities, resourceLimit = 0 }), token);
+            new { radius = 64, limit = 200, entityLimit = MaximumOwnEntities, resourceLimit = 0, inventoryEntities = true }), token);
         if (!response.Ok) throw new GameRpcException(response.Error!);
         JsonElement data = response.Data, agent = data.GetProperty("agent");
         if (!agent.GetProperty("alive").GetBoolean()) throw new InvalidOperationException("The actor died; production requires recovery.");

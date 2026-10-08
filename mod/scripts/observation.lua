@@ -16,6 +16,14 @@ local function compartment(entity, name, seen)
   return {items = U.inventory(inventory), slots = #inventory, collection = "native-inventory"}
 end
 
+local function holds_items(entity)
+  for _, name in ipairs(inventory_names) do
+    local ok, inventory = pcall(Targets.inventory, entity, name)
+    if ok and inventory and inventory.valid then return true end
+  end
+  return false
+end
+
 function M.entity(entity, include_inventory)
   local result = {id = U.entity_id(entity), name = entity.name, type = entity.type,
     position = U.copy(entity.position), direction = entity.direction, force = entity.force.name,
@@ -67,6 +75,11 @@ function M.observe(args)
   local entity_limit = U.number(args.entityLimit, "entityLimit", 1, 5000, limit, true)
   -- The defense reflex reads only enemies; resources and trees are neither searched nor sorted when none are wanted.
   local resource_limit = U.number(args.resourceLimit, "resourceLimit", 0, 200, limit, true)
+  -- Stock readers need only entities holding items: on 2026-10-08 (seed 20261106) 3992 belts took the known own entities past
+  -- the 5000 bound, and every production observation reported incomplete inventories although 400 entities held items.
+  U.check(args.inventoryEntities == nil or type(args.inventoryEntities) == "boolean", "invalid_argument",
+    "inventoryEntities must be a boolean")
+  local inventory_only = args.inventoryEntities == true
   s.snapshotSequence = s.snapshotSequence + 1
   local result = {scope = Actor.scope(), snapshotId = s.snapshotSequence, collectedTick = game.tick,
     agent = {alive = c ~= nil, controlMode = s.controlMode, deaths = s.deaths, respawnTick = s.respawnTick,
@@ -149,12 +162,14 @@ function M.observe(args)
   end
   local ids = {}
   for id, entity in pairs(s.known) do
-    if entity.valid and entity.force == c.force then ids[#ids + 1] = id else s.known[id] = nil end
+    if not (entity.valid and entity.force == c.force) then s.known[id] = nil
+    elseif not inventory_only or holds_items(entity) then ids[#ids + 1] = id end
   end
   table.sort(ids)
   for index = 1, math.min(#ids, entity_limit) do result.entities[#result.entities + 1] = M.entity(s.known[ids[index]], true) end
   result.coverage.knownEntityCount, result.coverage.returnedEntityCount = #ids, #result.entities
   result.coverage.knownInventoriesComplete = #ids <= entity_limit
+  result.coverage.inventoryEntitiesOnly = inventory_only
   result.coverage.resourcesTruncated = resource_count > resource_limit or #found == 10000
   result.coverage.enemiesTruncated = enemy_count > limit or #found == 10000
   result.coverage.resourceDiscovery = resource_limit > 0 and "local-radius-only" or "not-requested"
