@@ -90,7 +90,7 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
         {
             var sources = new Dictionary<string, string?>(StringComparer.Ordinal);
             foreach (string fluid in fluids)
-                sources[fluid] = FluidChainPlanner.Resource(catalog, fluid) is null ? null : await FreeExtractorAsync(fluid, null, catalog, controller, token);
+                sources[fluid] = FluidChainPlanner.Resource(catalog, fluid) is null ? null : (await FreeExtractorAsync(fluid, null, catalog, controller, token)).Free;
             foreach (string fluid in fluids.Where(f => !FluidChainPlanner.Terrain(catalog, f)))
                 await WaitForStockAsync(fluid, sources[fluid], controller, catalog, token);
             var anchor = await AnchorAsync(fluids, sources, catalog, token);
@@ -413,28 +413,61 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
             && r.Position.DistanceTo(map.Actor.Position) > 24 && !deaths.Any(d => DangerZones.Covers(d, r.Position)));
     }
 
-    /// <summary>A ready extractor of the fluid whose output port feeds nothing yet, nearest to the given point or the actor.</summary>
-    private async Task<string?> FreeExtractorAsync(string fluid, MapPosition? near, ProductionCatalog catalog, SpatialController controller,
-        CancellationToken token)
+    /// <summary>
+    /// A ready extractor of the fluid whose output port feeds nothing yet and can start a pipe, nearest to the given point or
+    /// the actor. The nearest unconnected extractor whose output tile another network claims is reported as blocked.
+    /// </summary>
+    private async Task<(string? Free, FactoryCell? Blocked)> FreeExtractorAsync(string fluid, MapPosition? near, ProductionCatalog catalog,
+        SpatialController controller, CancellationToken token)
     {
         var extractors = (await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token)).Cells
             .Where(c => c.Kind == ExtractorKind && c.Status == "ready" && c.Recipe == fluid && c.Entities.ContainsKey("drill") && c.Plan?.ContainsKey("drill") == true)
             .ToArray();
-        if (extractors.Length == 0) return null;
+        if (extractors.Length == 0) return (null, null);
+        string pipeItem = PipeItem(catalog);
         var reference = near ?? (await CaptureAsync([], catalog, token)).Actor.Position;
+        FactoryCell? blocked = null;
         foreach (var cell in extractors.OrderBy(c => c.Plan!["drill"].Position.DistanceTo(reference)).ThenBy(c => c.Id, StringComparer.Ordinal).Take(16))
         {
-            var map = await CaptureAsync([cell.MachineItem], catalog, token);
+            var map = await CaptureAsync([cell.MachineItem, pipeItem], catalog, token);
             if (map.Entities.All(e => e.Id != cell.Entities["drill"]))
             {
                 await controller.TravelAsync(cell.Plan!["drill"].Position, 8, catalog, token);
-                map = await CaptureAsync([cell.MachineItem], catalog, token);
+                map = await CaptureAsync([cell.MachineItem, pipeItem], catalog, token);
             }
             var drill = map.Entities.SingleOrDefault(e => e.Id == cell.Entities["drill"]);
-            if (drill?.FluidConnections is { } ports && ports.Where(p => p.FlowDirection is "output" or "input-output").All(p => p.TargetEntityId is null))
-                return drill.Id;
+            if (drill?.FluidConnections is not { } ports || ports.Where(p => p.FlowDirection is "output" or "input-output").Any(p => p.TargetEntityId is not null))
+                continue;
+            if (PipeRoutePlanner.CanStart(map, pipeItem, drill)) return (drill.Id, null);
+            blocked ??= cell;
         }
-        return null;
+        return (null, blocked);
+    }
+
+    /// <summary>
+    /// Retires the nearest unconnected extractor whose every output tile another network's port claims: a pipe there would
+    /// join that network, so it can feed no machine, yet it counts as capacity. The drill returns to the inventory for a
+    /// replacement on a clean deposit. On 2026-10-08 (seed 987654321) a refinery gas pipe passed beside pumpjack 1967's
+    /// output tile and every later refinery site was rejected as unrouted.
+    /// </summary>
+    public async Task<bool> RetireBlockedExtractorAsync(string product, CancellationToken token = default)
+    {
+        var catalog = await CatalogAsync(token);
+        var registry = new FactoryRegistry(directory);
+        await using var controller = new SpatialController(game, journal);
+        var (free, blocked) = await FreeExtractorAsync(product, null, catalog, controller, token);
+        if (free is not null || blocked is null) return false;
+        string drillId = blocked.Entities["drill"];
+        var position = blocked.Plan!["drill"].Position;
+        // Registered as abandoned first: an interrupted retirement must not be rebuilt in place by maintenance.
+        await SaveAsync(registry, catalog, blocked with { Status = ResourceCellBuilder.Abandoned }, token);
+        await controller.ApproachEntityAsync(drillId, position, catalog, token);
+        var mined = await controller.WorkAsync("mine", new { entityId = drillId, count = 1 }, 3600, token: token);
+        if (mined.Status != "completed")
+            throw new InvalidOperationException($"Retiring extractor {drillId} ended with {mined.Status}: {mined.Error?.Code}; reconcile partial effects.");
+        await journal.AppendAsync("fluid-extractor-retired", new { blocked.Id, drillId, position, product, reason = "output-tile-claimed",
+            mined.OperationId, mined.Effects }, token);
+        return true;
     }
 
     private async Task WaitForStockAsync(string fluid, string? holder, SpatialController controller, ProductionCatalog catalog, CancellationToken token)
@@ -520,7 +553,7 @@ public sealed class FluidCellBuilder(IGameClient game, IControllerJournal journa
             && p.TargetEntityId is not null) != true).ToList();
         foreach (string fluid in pending.Where(f => FluidChainPlanner.Resource(catalog, f) is not null).ToArray())
         {
-            if (await FreeExtractorAsync(fluid, machinePosition, catalog, controller, token) is not { } source) continue;
+            if ((await FreeExtractorAsync(fluid, machinePosition, catalog, controller, token)).Free is not { } source) continue;
             cell = await RecordPipesAsync(cell, await new PipeConnectionController(game, journal).RunAsync(source, machineId, fluid, token, Keep,
                 geometryItems: [.. ground.Items]),
                 registry, catalog, pipeItem, token);

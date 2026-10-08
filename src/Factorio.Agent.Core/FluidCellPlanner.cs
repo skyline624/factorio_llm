@@ -214,10 +214,12 @@ public sealed class FluidCellPlanner
             {
                 var placement = new PlacementCandidate(resource.Position, direction, resource.Position.DistanceTo(map.Actor.Position));
                 if (!field.PlacementClear(drill, resource.Position, direction)) continue;
-                // Other deposits stay free for future extractors, and the first pipe must fit in front of the port.
+                // Other deposits stay free for future extractors, and the first pipe must fit in front of the port without
+                // joining a neighbour's port (seed 987654321: a gas pipe beside a pumpjack's output tile).
                 bool Free(WorldBox box) => !deposits.Any(d => d.Id != resource.Id && d.Bounds.Overlaps(box));
                 if (!Ports(drill, placement).Where(p => p.FlowDirection is "output" or "input-output").All(p =>
-                        field.PlacementClear(pipe, p.TargetPosition, 0) && Free(pipe.CollisionBox.Translate(p.TargetPosition)))) continue;
+                        field.PlacementClear(pipe, p.TargetPosition, 0) && Free(pipe.CollisionBox.Translate(p.TargetPosition))
+                        && !PipeRoutePlanner.Claimed(map, p.TargetPosition))) continue;
                 foreach (var layout in Layouts(map, equipment, placement, false, false))
                 {
                     var pole = layout.Role("pole")!;

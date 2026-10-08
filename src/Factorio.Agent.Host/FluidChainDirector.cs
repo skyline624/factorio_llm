@@ -43,6 +43,7 @@ public sealed class FluidChainDirector(IGameClient game, IControllerJournal jour
             (c.Kind == FluidCellBuilder.MachineKind && c.Recipe == stage.Recipe
                 || c.Kind == FluidCellBuilder.ExtractorKind && c.Recipe == source?.Fluid)).Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
         if (powerTargets.Count > 0) await new FluidPowerRepair(game, journal, directory).RunAsync(token, powerTargets);
+        bool retired = false;
         for (int added = 0; ; added++)
         {
             var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
@@ -54,6 +55,12 @@ public sealed class FluidChainDirector(IGameClient game, IControllerJournal jour
             var next = rates is null ? (Extractor: false, Machine: machines < wanted)
                 : NextPair(machines, wanted, rates.Count, rates.Values.Sum(), source!.UnitsPerMinute);
             if (!next.Machine) break;
+            // An extractor no pipe can leave would anchor every new machine; once retired, the pair is weighed again.
+            if (!next.Extractor && !retired && source is not null && (retired = await builder.RetireBlockedExtractorAsync(source.Fluid, token)))
+            {
+                added--;
+                continue;
+            }
             if (added >= MaximumNewMachines)
             {
                 await journal.AppendAsync("fluid-chain-stage-short", new { stage, machines, extraction = rates?.Values.Sum(), source }, token);

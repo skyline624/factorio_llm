@@ -111,6 +111,23 @@ public sealed class PipeRoutePlanner
                 && p.FlowDirection is "input" or "input-output"
                 && Math.Abs(p.TargetPosition.X - cell.X) + Math.Abs(p.TargetPosition.Y - cell.Y) <= 1.01);
 
+    /// <summary>
+    /// Whether an ordinary pipe can begin at one of the entity's unconnected output ports: the tile is clear and no other
+    /// observed port aims at it, so the first pipe joins this entity alone.
+    /// </summary>
+    public static bool CanStart(SpatialSnapshot map, string pipeItem, SpatialEntity entity)
+    {
+        var pipe = map.Prototypes[map.Items[pipeItem].EntityName];
+        var field = new SpatialCollisionField(map with { Entities = map.Entities.Where(e => e.Id != map.Actor.Id).ToArray() });
+        return (entity.FluidConnections ?? []).Any(p => p.Type == "normal" && p.TargetEntityId is null
+            && p.FlowDirection is "output" or "input-output" && field.PlacementClear(pipe, p.TargetPosition, 0)
+            && !Claimed(map, p.TargetPosition, entity.Id));
+    }
+
+    /// <summary>Whether a port of another observed entity aims at the tile; a pipe there would join it.</summary>
+    public static bool Claimed(SpatialSnapshot map, MapPosition tile, string? exceptId = null) => map.Entities.Any(e => e.Id != exceptId
+        && (e.FluidConnections ?? []).Any(p => p.TargetPosition.DistanceTo(tile) < .01));
+
     internal static bool Matches(SpatialEntity entity, ObservedFluidConnection port, FluidEndpoint endpoint) =>
         entity.Id == endpoint.EntityId && port.BoxIndex == endpoint.BoxIndex && port.PortIndex == endpoint.PortIndex
         && port.Position == endpoint.Position && port.TargetPosition == endpoint.TargetPosition;

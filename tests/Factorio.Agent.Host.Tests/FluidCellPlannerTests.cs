@@ -159,6 +159,26 @@ public sealed class FluidCellPlannerTests
     }
 
     [Fact]
+    public void AnOutputTileAnotherNetworkAimsAtCannotStartAPipe()
+    {
+        var deposit = OilMaps.Crude("crude", new(8.5, .5), 150000);
+        // A gas pipe north of the north-facing port tile (9.5, -1.5) would join any crude pipe placed there.
+        var gas = new SpatialEntity("gas", "pipe", new(9.5, -2.5), new WorldBox(new(-.3, -.3), new(.3, .3)).Translate(new(9.5, -2.5)), 0, "agent",
+            FluidConnections: [new(1, 1, new(9.5, -2.5), new(9.5, -1.5), Type: "normal", FlowDirection: "input-output")]);
+        var map = OilMaps.Map([deposit, gas]);
+        var site = new FluidCellPlanner().FindExtractor(map, Pumpjack, "crude-oil", "pipe")!;
+        var placement = new PlacementCandidate(site.Layout.Machine.Position, site.Layout.Machine.Direction, 0);
+        Assert.NotEqual(new MapPosition(9.5, -1.5), FluidCellPlanner.Ports(map.Prototypes["pumpjack"], placement).Single().TargetPosition);
+
+        var north = new PlacementCandidate(deposit.Position, 0, 0);
+        SpatialEntity Jack(SpatialSnapshot on) => new("jack", "pumpjack", deposit.Position, new WorldBox(new(-1.2, -1.2), new(1.2, 1.2)).Translate(deposit.Position),
+            0, "agent", FluidConnections: FluidCellPlanner.Ports(on.Prototypes["pumpjack"], north));
+        Assert.False(PipeRoutePlanner.CanStart(map with { Entities = [.. map.Entities, Jack(map)] }, "pipe", Jack(map)));
+        var open = OilMaps.Map([deposit]);
+        Assert.True(PipeRoutePlanner.CanStart(open with { Entities = [.. open.Entities, Jack(open)] }, "pipe", Jack(open)));
+    }
+
+    [Fact]
     public void AnOccupiedDepositIsNotOfferedAgain()
     {
         var deposit = OilMaps.Crude("crude", new(8.5, .5), 150000);
