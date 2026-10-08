@@ -50,6 +50,16 @@ public sealed class AutomationDemandTests
     }
 
     [Fact]
+    public void CellsUseWoodlessMediumPolesOnceTheirRecipeIsEnabled()
+    {
+        NativeRecipe Recipe(string item) => new(item, true, "crafting", .5, [], [new(item, "item", 1)], false);
+        var catalog = Catalogs.Early() with { Recipes = [.. Catalogs.Early().Recipes, Recipe("inserter"), Recipe("small-electric-pole")] };
+        Assert.Equal("small-electric-pole", FactoryCellBuilder.Equipment(catalog, "assembling-machine-1").Pole);
+        catalog = catalog with { Recipes = [.. catalog.Recipes, Recipe("medium-electric-pole")] };
+        Assert.Equal("medium-electric-pole", FactoryCellBuilder.Equipment(catalog, "assembling-machine-1").Pole);
+    }
+
+    [Fact]
     public void TransportNeedsAreWeighedByTheItemsACellConsumes()
     {
         var catalog = Catalogs.Early();

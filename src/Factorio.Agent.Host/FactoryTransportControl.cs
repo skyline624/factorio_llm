@@ -13,7 +13,7 @@ public sealed class FactoryTransportControl(IGameClient game, IControllerJournal
             || comparator is not ("<" or ">") || chestId is null && comparator != "<")
             throw new ArgumentException("A native item and, together, a destination chest and bounded stock limit are required.");
         var map = await CaptureAsync();
-        var arm = map.Entities.Single(e => e.Id == inserterId);
+        var arm = map.Entities.SingleOrDefault(e => e.Id == inserterId) ?? throw new EntityMissingException(inserterId, map.Actor.Position);
         if (Matches(arm.InserterControl, item, chestId, maximum, comparator)) return;
         if (map.Prototypes[arm.Name].FilterSlots is not > 0)
             throw new InvalidOperationException("Persistent transport requires native inserter filters; update the mod if their geometry is missing.");
@@ -21,7 +21,8 @@ public sealed class FactoryTransportControl(IGameClient game, IControllerJournal
         else
         {
             // Native wiring checks both endpoints. Approaching only the arm can leave a long arm's chest out of reach.
-            var chest = map.Entities.Single(e => e.Id == chestId);
+            // A chest outside the photograph around the arm (seed 20261106) is left to the caller's deferral, not a crash.
+            var chest = map.Entities.SingleOrDefault(e => e.Id == chestId) ?? throw new EntityMissingException(chestId, arm.Position);
             var approach = new PlacementPlanner().FindInteractionApproach(new(map, ExplorationPlanner.ThreatMargin), [arm, chest], token)
                 ?? throw new InvalidOperationException("No reachable position can interact with both the inserter and its chest.");
             await controller.TravelAsync(approach, .2, catalog, token);

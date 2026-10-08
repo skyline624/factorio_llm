@@ -19,7 +19,7 @@ Une cellule comprend :
 - une machine ;
 - un inserteur d'entrée depuis un coffre ;
 - un inserteur de sortie vers un coffre ;
-- un petit poteau électrique.
+- un petit poteau électrique, ou un poteau moyen dès que sa recette est disponible : il est fait d'acier, de cuivre et de fer de l'usine, alors que le petit poteau demande du bois que seul le minage d'arbres fournit. Le 8 octobre 2026 (graine 20261106), les arbres proches de la base étaient épuisés et le raccordement électrique d'une cellule a échoué au bout d'une longue recherche d'arbres.
 
 Les cellules sont alignées en **bandes**. Une rangée nord et une rangée sud se font face autour d'une **allée partagée** de deux cases, qui garde chaque coffre accessible. Cette allée évite aussi que le personnage s'enferme lui-même, comme lors de la campagne du 20/09.
 
