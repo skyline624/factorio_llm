@@ -748,11 +748,21 @@ try
                                     {
                                         await maintenanceJournal.AppendAsync("factory-throughput-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
                                     }
-                                    var round = await new FactoryLogistics(game, maintenanceJournal, session.Directory)
-                                        .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks, usePlannedBuffers: true);
+                                    // A failed tour leaves the steps that take hand deliveries away to run: on 2026-10-08 the logistics
+                                    // error of each round skipped the feeders and belt growth in all three normal campaigns.
+                                    LogisticsResult? round = null;
+                                    try
+                                    {
+                                        round = await new FactoryLogistics(game, maintenanceJournal, session.Directory)
+                                            .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks, usePlannedBuffers: true);
+                                    }
+                                    catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+                                    {
+                                        await maintenanceJournal.AppendAsync("factory-logistics-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
+                                    }
                                     // An attack can cut cells from the generators; on 2026-10-01 (seed 20261002) the whole mining
                                     // area stayed on an unfed island for hours. Reconnect before the next decision.
-                                    if (round.Maintenance?.Unpowered.Count > 0)
+                                    if (round?.Maintenance?.Unpowered.Count > 0)
                                         await new FactoryCellBuilder(game, maintenanceJournal, session.Directory).RepairPowerAsync(token);
                                     // Laboratories built before they had an input side get one, so the growth below can belt them.
                                     try { await new LabInputRetrofit(game, maintenanceJournal, session.Directory).RunAsync(token); }
