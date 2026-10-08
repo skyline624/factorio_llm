@@ -92,7 +92,8 @@ public sealed class SiloCellTests
         Assert.True(FactoryCellBuilder.Configured("assembler", "iron-gear-wheel"));
         Assert.Equal((true, false), FactoryCellBuilder.Sides(SiloCellPlanner.Kind));
         Assert.Equal((true, true), FactoryCellBuilder.Sides("assembler"));
-        Assert.Equal((false, false), FactoryCellBuilder.Sides("lab"));
+        // Laboratories gained an input side on 2026-10-08 so buses can feed them.
+        Assert.Equal((true, false), FactoryCellBuilder.Sides("lab"));
         Assert.Equal(SiloCellPlanner.MaximumCells, FactoryCellBuilder.Slots(SiloCellPlanner.Kind));
         Assert.Equal(FactoryCellBuilder.ZoneSlots, FactoryCellBuilder.Slots("assembler"));
     }

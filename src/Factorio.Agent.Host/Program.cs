@@ -754,6 +754,12 @@ try
                                     // area stayed on an unfed island for hours. Reconnect before the next decision.
                                     if (round.Maintenance?.Unpowered.Count > 0)
                                         await new FactoryCellBuilder(game, maintenanceJournal, session.Directory).RepairPowerAsync(token);
+                                    // Laboratories built before they had an input side get one, so the growth below can belt them.
+                                    try { await new LabInputRetrofit(game, maintenanceJournal, session.Directory).RunAsync(token); }
+                                    catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+                                    {
+                                        await maintenanceJournal.AppendAsync("lab-input-retrofit-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
+                                    }
                                     // Each round turns at most one more hand-carried flow into belts. On seed 20261072 the actor
                                     // carried about 28k iron plates, 26k coal and 13k copper cables between chests in 183 rounds.
                                     try

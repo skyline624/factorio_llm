@@ -94,15 +94,15 @@ public sealed class FactoryThroughput(IGameClient game, IControllerJournal journ
     {
         var connected = FactoryTransportCoverage.Connected(state, snapshot, catalog, FactoryLogistics.CellShares(catalog, state));
         var ready = state.Cells.Where(c => c.Status == "ready").ToArray();
-        var needs = ready.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest"))
-            .SelectMany(c => (catalog.Recipes.FirstOrDefault(r => r.Name == c.Recipe)?.Ingredients ?? []).Where(i => i.DeterministicItem)
+        var needs = ready.Where(c => c.Entities.ContainsKey("input-chest"))
+            .SelectMany(c => (FactoryTransportBuilder.InputRecipe(catalog, state, c)?.Ingredients ?? []).Where(i => i.DeterministicItem)
                 .Select(i => (Chest: c.Entities["input-chest"], Item: i.Name))).Distinct().ToArray();
         var hand = needs.Where(n => !connected.Contains(n)).GroupBy(n => n.Item, StringComparer.Ordinal).OrderByDescending(g => g.Count())
             .ThenBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
         // Resource smelters and band furnaces burn fuel the actor carries; electric furnaces need none.
         int fuelled = ready.Count(c => c.Kind is "smelter" or FurnaceCellPlanner.Kind && c.Entities.TryGetValue("furnace", out _)
             && snapshot.Records.Any(r => r.Kind == "inventory" && r.EntityId == c.Entities["furnace"] && r.Name.Contains("fuel", StringComparison.Ordinal)));
-        return new(needs.Length, needs.Length - hand.Values.Sum(), hand, ready.Count(c => c.Kind == "lab"), fuelled);
+        return new(needs.Length, needs.Length - hand.Values.Sum(), hand, ready.Count(c => c.Kind == "lab" && !c.Entities.ContainsKey("input-chest")), fuelled);
     }
 
     private static string? Text(FactoryRecord record, string property) =>

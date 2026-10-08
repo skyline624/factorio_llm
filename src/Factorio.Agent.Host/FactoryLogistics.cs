@@ -220,8 +220,11 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         // Parallel research needs every lab fed; filling the first stack stranded new labs without scarce green packs.
         foreach (string lab in laboratoryIds)
         {
+            string? labChest = cells.FirstOrDefault(c => c.Kind == "lab" && c.Entities.GetValueOrDefault("machine") == lab)?.Entities.GetValueOrDefault("input-chest");
             foreach (var pack in carried.Keys.Where(IsSciencePack).ToArray())
             {
+                // A bus feeding this laboratory's chest replaces the hand delivery of that pack.
+                if (labChest is not null && connected.Contains((labChest, pack))) continue;
                 long give = Math.Min(carried[pack], scienceAllotments[(lab, pack)]);
                 if (give <= 0) continue;
                 long moved = await TransferAsync("insert", lab, pack, give, "lab");

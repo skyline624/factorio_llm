@@ -378,8 +378,11 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
     /// <summary>Whether the machine is given its recipe; furnaces select theirs from the ingredient they receive, a silo's is fixed.</summary>
     public static bool Configured(string kind, string? recipe) => recipe is not null && kind is not (FurnaceCellPlanner.Kind or SiloCellPlanner.Kind);
 
-    /// <summary>Chest sides of a cell: laboratories take packs by hand, a silo consumes its ingredients without an item product.</summary>
-    public static (bool Input, bool Output) Sides(string kind) => (kind != "lab", kind is not ("lab" or SiloCellPlanner.Kind));
+    /// <summary>
+    /// Chest sides of a cell: laboratories and a silo consume their inputs without an item product. Laboratories took packs by hand
+    /// until 2026-10-08; their input chest now lets buses feed them.
+    /// </summary>
+    public static (bool Input, bool Output) Sides(string kind) => (true, kind is not ("lab" or SiloCellPlanner.Kind));
 
     /// <summary>Slots of a new band: silos get a band of their own, sized for the one a factory builds.</summary>
     public static int Slots(string kind) => kind == SiloCellPlanner.Kind ? SiloCellPlanner.MaximumCells : ZoneSlots;

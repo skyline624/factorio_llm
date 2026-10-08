@@ -55,9 +55,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                 if (stockSnapshot.Scope != catalog.Scope) throw new InvalidDataException("Converted transport demand scope changed.");
             }
             var covered = FactoryTransportCoverage.Connected(state, stockSnapshot, catalog, shares);
-            var needs = state.Cells.Where(c => c.Status == "ready" && c.Recipe is not null && c.Entities.ContainsKey("input-chest")
+            var needs = state.Cells.Where(c => c.Status == "ready" && InputRecipe(catalog, state, c) is not null && c.Entities.ContainsKey("input-chest")
                 && !pausedCells.Contains(c.Id) && (targetCellIds is null || targetCellIds.Contains(c.Id)))
-                .SelectMany(c => catalog.Recipes.FirstOrDefault(r => r.Name == c.Recipe)?.Ingredients
+                .SelectMany(c => InputRecipe(catalog, state, c)?.Ingredients
                     .Where(i => i.DeterministicItem && !covered.Contains((c.Entities["input-chest"], i.Name)))
                     .Select(i => (Target: c, Ingredient: i)) ?? []).ToArray();
             // The largest hand-carried flows first: every link built between goals should remove the most actor transfers.
@@ -95,13 +95,13 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                 if (maximumLinks - connected < 2) break;
             }
         }
-        foreach (var target in state.Cells.Where(c => c.Status == "ready" && c.Recipe is not null && c.Entities.ContainsKey("input-chest")
+        foreach (var target in state.Cells.Where(c => c.Status == "ready" && InputRecipe(catalog, state, c) is not null && c.Entities.ContainsKey("input-chest")
             && (targetCellIds is null || targetCellIds.Contains(c.Id)))
-            .OrderByDescending(c => catalog.Recipes.FirstOrDefault(r => r.Name == c.Recipe)?.Ingredients.Where(i => i.DeterministicItem)
+            .OrderByDescending(c => InputRecipe(catalog, state, c)?.Ingredients.Where(i => i.DeterministicItem)
                 .Sum(i => InputVolume(catalog, c, i)) ?? 0).ThenBy(c => c.Id, StringComparer.Ordinal).ToArray())
         {
             if (pausedCells.Contains(target.Id)) continue;
-            var recipe = catalog.Recipes.FirstOrDefault(r => r.Name == target.Recipe);
+            var recipe = InputRecipe(catalog, state, target);
             if (recipe is null) continue;
             var batch = await PlanNewBatchAsync(target, recipe, catalog, shares, controller, maximumLinks - connected, token);
             connected += batch.Connected;
@@ -241,7 +241,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var source = state.Cells.Single(c => c.Id == sourceCellId);
         var target = state.Cells.Single(c => c.Id == targetCellId);
         var power = target.Kind == "power" ? await new PowerExpansionController(game, journal, directory).ObserveAsync(token) : null;
-        bool consumes = catalog.Recipes.Any(r => r.Name == target.Recipe && r.Ingredients.Any(i => i.DeterministicItem && i.Name == item))
+        bool consumes = InputRecipe(catalog, state, target)?.Ingredients.Any(i => i.DeterministicItem && i.Name == item) == true
             || PowerFuelPolicy.Demand(catalog, target, item, power) is > 0;
         if (source.Status != "ready" || target.Status != "ready" || Product(catalog, source) != item
             || !source.Entities.ContainsKey("output-chest") || !target.Entities.ContainsKey("input-chest")
@@ -427,8 +427,24 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     }
 
     /// <summary>Items per minute of one ingredient a cell consumes at its native rate with its own arm; zero when unknown.</summary>
+    /// <summary>
+    /// The solid inputs a cell takes from buses, as a recipe: its native recipe, or for a laboratory every science pack a registered
+    /// cell makes, one per cycle. Until 2026-10-08 laboratories had no input side and the actor's tours filled them by hand.
+    /// </summary>
+    internal static NativeRecipe? InputRecipe(ProductionCatalog catalog, FactoryState state, FactoryCell cell) => cell.Kind == "lab"
+        ? new("lab", true, "research", 1, state.Cells.Where(c => c.Status == "ready" && c.Entities.ContainsKey("output-chest"))
+            .Select(c => Product(catalog, c)).OfType<string>().Where(IsSciencePack).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+            .Select(p => new NativeMaterial(p, "item", 1)).ToArray(), [], true)
+        : cell.Recipe is null ? null : catalog.Recipes.FirstOrDefault(r => r.Name == cell.Recipe);
+
+    internal static bool IsSciencePack(string item) => item.EndsWith("-science-pack", StringComparison.Ordinal);
+
+    /// <summary>Packs a laboratory uses per minute while researching: about two per pack type for a thirty-second unit.</summary>
+    internal const double LaboratoryPacksPerMinute = 2;
+
     internal static double InputVolume(ProductionCatalog catalog, FactoryCell cell, NativeMaterial ingredient)
     {
+        if (cell.Kind == "lab") return IsSciencePack(ingredient.Name) ? LaboratoryPacksPerMinute : 0;
         var recipe = catalog.Recipes.FirstOrDefault(r => r.Name == cell.Recipe);
         bool known = catalog.Assemblers?.ContainsKey(cell.MachineItem) == true || catalog.Machines.ContainsKey(cell.MachineItem)
             || catalog.Silos?.ContainsKey(cell.MachineItem) == true;
