@@ -51,6 +51,10 @@ public sealed class ExplorationPlannerTests
         Assert.True(direct.DistanceTo(spawner[0].Center) <= spawner[0].Radius, $"The unguarded step {direct} should head straight through.");
         var step = new ExplorationPlanner().Choose(map, "", Catalog(), destination, guards: spawner);
         Assert.True(step.DistanceTo(spawner[0].Center) > spawner[0].Radius, $"The step {step} enters the remembered nest's guard.");
+        // Guards walling off the whole way are crossed instead of paced along (seed 987654321: two overlapping nest groups).
+        (MapPosition Center, double Radius)[] wall = [(new(-60, -40), 70), (new(60, -40), 70)];
+        var through = new ExplorationPlanner().Choose(map, "", Catalog(), destination, guards: wall);
+        Assert.True(through.DistanceTo(destination) < map.Actor.Position.DistanceTo(destination) - 1, $"The step {through} does not approach.");
         // A nest guarding the destination itself cannot be avoided, so it does not steer the steps.
         var guarded = new ExplorationPlanner().Choose(map, "", Catalog(), new(0, -45), guards: spawner);
         Assert.Equal(new ExplorationPlanner().Choose(map, "", Catalog(), new(0, -45)), guarded);

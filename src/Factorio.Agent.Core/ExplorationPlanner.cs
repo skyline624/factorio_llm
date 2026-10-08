@@ -98,6 +98,10 @@ public sealed class ExplorationPlanner
                         for (int dy = -7; dy <= 7; dy++) if (!observed.Contains((x + dx, y + dy))) gain++;
                     candidates.Add((point, (x, y), gain));
                 }
+            // Guards that wall off a destination are crossed rather than paced along: on 2026-10-08 (seed 987654321) two remembered
+            // nest groups overlapped across the way home and the actor walked north and south until its travel budget ran out.
+            if (pass == 0 && known is { } goal && !candidates.Any(c => c.Point.DistanceTo(goal) < map.Actor.Position.DistanceTo(goal) - 1))
+                candidates.Clear();
         }
         if (candidates.Count == 0 && hazardous > 0)
             throw new ExplorationDangerException($"All {hazardous} local exploration steps enter a recent death zone or "
