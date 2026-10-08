@@ -9,6 +9,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
 {
     /// <summary>Own entities one observation may return; beyond it production reports an incomplete view instead of guessing.</summary>
     public const int MaximumOwnEntities = 5000;
+    /// <summary>Unreachable natural sources skipped by one production run before its navigation failure propagates.</summary>
+    internal const int MaximumUnreachableSources = 8;
 
     public Task<ProductionResult> ProduceAsync(string item, int targetStock, CancellationToken token = default,
         IReadOnlySet<string>? reservedEntityIds = null) => RunAsync(item, targetStock, token, reservedEntityIds, existingStockOnly: false);
@@ -46,6 +48,8 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
             await journal.AppendAsync("stock-collection-budget", new { item, targetStock, initial.Scope,
                 initial.Tick, observedStock = remainingObservedStock }, deadline.Token);
         var receipts = new List<OperationReceipt>();
+        // Natural sources no route reaches stay out of the planner's view; the next nearest is tried instead.
+        var unreachableSources = new HashSet<string>(StringComparer.Ordinal);
         for (int stepNumber = 0; stepNumber < 256; stepNumber++)
         {
             ProductionState state = await ObserveAsync(deadline.Token);
@@ -67,6 +71,7 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
             if (drillItems.Length > SpatialSnapshot.MaximumItems) throw new InvalidOperationException("Mining drill geometry exceeds the snapshot budget.");
             SpatialSnapshot map = await spatial.CaptureAsync(drillItems, radius: 48, cancellationToken: deadline.Token);
+            if (unreachableSources.Count > 0) map = map with { Entities = map.Entities.Where(e => !unreachableSources.Contains(e.Id)).ToArray() };
             if (catalog.Scope != state.Scope || map.Scope != state.Scope) throw new InvalidDataException("Production observations span different actor scopes.");
             if (ready is not null)
             {
@@ -145,8 +150,17 @@ public sealed class ProductionController(IGameClient game, IControllerJournal jo
                 case "mine":
                     if (await new CraftInventoryController(game, journal).PrepareMiningAsync(step.Item, step.Quantity, catalog, controller, deadline.Token))
                         continue; // A storage visit changed the actor position and stock: select the native source again.
-                    await TravelAsync(step.Source!.Position, MiningDistance(step.Source, map), catalog);
-                    await ActAsync("mine", new { name = step.Source.Name, position = step.Source.Position, count = step.Quantity }, 36000);
+                    var source = step.Source!;
+                    try { await TravelAsync(source.Position, MiningDistance(source, map), catalog); }
+                    catch (NavigationPlanningException error) when (unreachableSources.Count < MaximumUnreachableSources)
+                    {
+                        // On 2026-10-08 (seed 20261107) the nearest tree for pole wood had NoRouteOnKnownGrid and the goal failed.
+                        unreachableSources.Add(source.Id);
+                        await journal.AppendAsync("production-source-unreachable", new { step.Item, source.Id, source.Name, source.Position,
+                            error.Status }, deadline.Token);
+                        continue;
+                    }
+                    await ActAsync("mine", new { name = source.Name, position = source.Position, count = step.Quantity }, 36000);
                     break;
                 case "craft":
                     if (!carriedHandcraftOnly && await new CraftInventoryController(game, journal).PrepareAsync(step.Recipe!, step.Quantity, catalog, controller, deadline.Token))
