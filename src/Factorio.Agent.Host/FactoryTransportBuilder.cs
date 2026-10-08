@@ -22,10 +22,30 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         await using var controller = new SpatialController(game, journal);
         int connected = 0, considered = 0;
         var state = await registry.LoadAsync(catalog.Scope.WorldId, token);
-        foreach (var bus in (state.Transports ?? []).Where(b => state.Cells.Single(c => c.Id == b.CellId).Status == "building"))
+        var pending = (state.Transports ?? []).Where(b => state.Cells.Single(c => c.Id == b.CellId).Status == "building").ToArray();
+        if (pending.Length > 0)
         {
-            await FinishAsync(bus, catalog, controller, token);
-            if (++connected == maximumLinks) return connected;
+            var attempted = new TransportLinkAttempts(directory);
+            var deferred = await attempted.LoadAsync(catalog.Scope.WorldId, token);
+            long now = (await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token)).CollectedTick;
+            foreach (var bus in pending)
+            {
+                if (bus.Consumers.All(c => TransportLinkAttempts.Delayed(deferred, bus.SourceCellId, c.TargetCellId, bus.Item, now))) continue;
+                try { await FinishAsync(bus, catalog, controller, token); }
+                // A part the engine refuses, or a way that cannot be walked, defers that bus like a refused link instead of ending the
+                // round: on 2026-10-08 (seed 20261107) one such bus 300 tiles out, by the nest where the actor had died, ended every
+                // growth round before any new link.
+                catch (Exception error) when (error is PlacementRefusedException or NavigationPlanningException or EntityUnreachableException
+                    or ExplorationBlockedException or ExplorationDangerException)
+                {
+                    foreach (var consumer in bus.Consumers)
+                        await attempted.RecordAsync(catalog.Scope.WorldId, new(bus.SourceCellId, consumer.TargetCellId, bus.Item, now), token);
+                    await journal.AppendAsync("factory-transport-finish-deferred", new { bus.Id, bus.Item, bus.SourceCellId,
+                        error = error.GetType().Name, error.Message, now }, token);
+                    continue;
+                }
+                if (++connected == maximumLinks) return connected;
+            }
         }
         state = await registry.LoadAsync(catalog.Scope.WorldId, token);
         var shares = FactoryLogistics.CellShares(catalog, state);
