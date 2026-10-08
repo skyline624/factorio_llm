@@ -9,6 +9,24 @@ public static class FurnaceCellPlanner
 {
     public const string Kind = "furnace";
 
+    /// <summary>
+    /// The furnace a band cell uses: the fastest craftable electric furnace, which needs no fuel, else the fastest burner furnace
+    /// burning the fuel. On 2026-10-08 band and ore furnaces of the three normal campaigns waited for fuel between hand deliveries
+    /// although two of them had researched electric furnaces.
+    /// </summary>
+    public static string? Preferred(ProductionCatalog catalog, string fuel) =>
+        (catalog.ElectricFurnaces ?? new Dictionary<string, NativeElectricFurnace>()).Where(p => Craftable(catalog, p.Key))
+            .OrderByDescending(p => p.Value.CraftingSpeed).ThenBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key).FirstOrDefault()
+        ?? Machine(catalog, fuel);
+
+    /// <summary>The native furnace an item places, burner or electric (with no fuel categories), or null.</summary>
+    public static NativeFurnace? Furnace(ProductionCatalog catalog, string machineItem) =>
+        catalog.Machines.TryGetValue(machineItem, out var burner) ? burner
+        : catalog.ElectricFurnaces?.TryGetValue(machineItem, out var electric) == true
+            ? new(electric.EntityName, electric.Categories, new Dictionary<string, bool>(), electric.CraftingSpeed) : null;
+
+    public static bool IsElectric(ProductionCatalog catalog, string machineItem) => catalog.ElectricFurnaces?.ContainsKey(machineItem) == true;
+
     /// <summary>The fastest burner furnace whose recipe is enabled and whose burner accepts the fuel, or null.</summary>
     public static string? Machine(ProductionCatalog catalog, string fuel) =>
         catalog.Items.TryGetValue(fuel, out var item) && item.FuelCategory is { } category
@@ -23,10 +41,11 @@ public static class FurnaceCellPlanner
     /// </summary>
     public static string? Failure(ProductionCatalog catalog, string machineItem, string? recipe, string fuel)
     {
-        if (!catalog.Machines.TryGetValue(machineItem, out var furnace)) return $"{machineItem} is not a native burner furnace.";
+        if (Furnace(catalog, machineItem) is not { } furnace) return $"{machineItem} is not a native furnace.";
         if (!Craftable(catalog, machineItem)) return $"No enabled recipe makes {machineItem}.";
         if (recipe is null || catalog.Recipes.FirstOrDefault(r => r.Name == recipe) is not { } native || !Smeltable(native, furnace))
             return $"{machineItem} cannot smelt {recipe ?? "an unnamed recipe"} from one enabled solid ingredient.";
+        if (IsElectric(catalog, machineItem)) return null;
         return catalog.Items.TryGetValue(fuel, out var item) && item.FuelValue > 0 && item.FuelCategory is { } category
             && furnace.FuelCategories.ContainsKey(category) ? null : $"{machineItem} does not burn {fuel}.";
     }

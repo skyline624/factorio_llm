@@ -18,6 +18,7 @@ public static class BeltTransportTiming
         string name = map.Entities.Single(e => e.Id == endpoint.EntityId).Name;
         double speed = catalog.Assemblers?.Values.SingleOrDefault(m => m.EntityName == name)?.CraftingSpeed
             ?? catalog.Machines.Values.SingleOrDefault(m => m.EntityName == name)?.CraftingSpeed
+            ?? catalog.ElectricFurnaces?.Values.SingleOrDefault(m => m.EntityName == name)?.CraftingSpeed
             ?? throw new InvalidDataException("Missing native endpoint crafting speed.");
         if (!double.IsFinite(speed) || speed <= 0 || endpoint.UnitsPerCycle <= 0)
             throw new InvalidDataException("Invalid native endpoint material rate.");

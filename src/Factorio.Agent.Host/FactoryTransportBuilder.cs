@@ -485,7 +485,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         if (cell.Kind == "lab") return IsSciencePack(ingredient.Name) ? LaboratoryPacksPerMinute : 0;
         if (cell.Kind == FurnaceFeederController.Kind) return FurnaceFuelPerMinute;
         var recipe = catalog.Recipes.FirstOrDefault(r => r.Name == cell.Recipe);
-        bool known = catalog.Assemblers?.ContainsKey(cell.MachineItem) == true || catalog.Machines.ContainsKey(cell.MachineItem)
+        bool known = catalog.Assemblers?.ContainsKey(cell.MachineItem) == true || FurnaceCellPlanner.Furnace(catalog, cell.MachineItem) is not null
             || catalog.Silos?.ContainsKey(cell.MachineItem) == true;
         if (recipe is null || !known || ingredient.Amount is not { } amount) return 0;
         return amount * AutomationPlanner.CellCraftsPerMinute(catalog, recipe, cell.MachineItem, cell.Plan?.GetValueOrDefault("input-inserter")?.Item);

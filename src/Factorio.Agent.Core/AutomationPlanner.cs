@@ -76,7 +76,7 @@ public static class AutomationPlanner
         double speed = Kind(catalog, machineItem) switch
         {
             SiloCellPlanner.Kind => catalog.Silos![machineItem].CraftingSpeed,
-            FurnaceCellPlanner.Kind => catalog.Machines[machineItem].CraftingSpeed,
+            FurnaceCellPlanner.Kind => FurnaceCellPlanner.Furnace(catalog, machineItem)!.CraftingSpeed,
             _ => catalog.Assemblers![machineItem].CraftingSpeed
         };
         double machineCrafts = 60 * speed / recipe.EnergySeconds;
@@ -117,7 +117,8 @@ public static class AutomationPlanner
         var assemblers = (catalog.Assemblers ?? new Dictionary<string, NativeAssembler>())
             .Where(p => machineItems.Contains(p.Key)).OrderByDescending(p => p.Value.CraftingSpeed).ThenBy(p => p.Key, StringComparer.Ordinal).ToArray();
         var furnaces = ResourceCellPlanner.Supply(catalog, item) is null
-            ? catalog.Machines.Where(p => machineItems.Contains(p.Key)).OrderByDescending(p => p.Value.CraftingSpeed)
+            ? machineItems.Select(m => (Key: m, Value: FurnaceCellPlanner.Furnace(catalog, m))).Where(p => p.Value is not null)
+                .Select(p => new KeyValuePair<string, NativeFurnace>(p.Key, p.Value!)).OrderByDescending(p => p.Value.CraftingSpeed)
                 .ThenBy(p => p.Key, StringComparer.Ordinal).ToArray()
             : [];
         foreach (var recipe in catalog.Recipes.Where(r => r.Enabled && r.Products.Count == 1 && r.Products[0].Name == item

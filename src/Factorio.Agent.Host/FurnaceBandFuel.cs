@@ -15,7 +15,7 @@ public static class FurnaceBandFuel
 
     /// <summary>Fuel units each ready band furnace's input chest keeps for the buffered crafts, by cell id.</summary>
     public static IReadOnlyDictionary<string, long> Reserves(ProductionCatalog catalog, SpatialSnapshot map, IEnumerable<FactoryCell> cells,
-        int crafts, string fuel) => Served(cells).ToDictionary(c => c.Id, c => (long)FurnaceCellPlanner.FuelReserve(
+        int crafts, string fuel) => Served(cells).Where(c => !FurnaceCellPlanner.IsElectric(catalog, c.MachineItem)).ToDictionary(c => c.Id, c => (long)FurnaceCellPlanner.FuelReserve(
             catalog.Recipes.Single(r => r.Name == c.Recipe), catalog.Machines[c.MachineItem],
             map.Prototypes[map.Items[c.MachineItem].EntityName], catalog.Items[fuel], crafts), StringComparer.Ordinal);
 
@@ -23,8 +23,9 @@ public static class FurnaceBandFuel
     public static async Task<IReadOnlyDictionary<string, long>> ReservesAsync(IGameClient game, ProductionCatalog catalog,
         IReadOnlyList<FactoryCell> cells, int crafts, string fuel, CancellationToken token)
     {
-        var machines = MachineItems(cells);
-        if (machines.Count == 0) return new Dictionary<string, long>();
+        // Electric band furnaces keep no fuel.
+        var machines = MachineItems(cells).Where(m => !FurnaceCellPlanner.IsElectric(catalog, m)).ToArray();
+        if (machines.Length == 0) return new Dictionary<string, long>();
         var map = await new SpatialClient(game).CaptureAsync(machines, 4, token);
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor identity changed while sizing band furnace fuel.");
         return Reserves(catalog, map, cells, crafts, fuel);

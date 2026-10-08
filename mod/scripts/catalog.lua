@@ -74,7 +74,7 @@ function M.production()
   local c = Actor.get()
   U.check(c ~= nil, "actor_dead", "Production catalog requires a living character")
   local result = {scope = Actor.scope(), collectedTick = game.tick, recipes = {}, items = {}, mining = {}, miningSourceTypes = {}, machines = {}, assemblers = {}, turrets = {},
-    guns = {}, armors = {}, silos = {}, handCategories = c.prototype.crafting_categories}
+    guns = {}, armors = {}, silos = {}, electricFurnaces = {}, handCategories = c.prototype.crafting_categories}
   for name, recipe in pairs(c.force.recipes) do
     if not recipe.hidden then
       result.recipes[#result.recipes + 1] = {name = name, enabled = recipe.enabled, category = recipe.category,
@@ -120,6 +120,11 @@ function M.production()
     if entity and entity.type == "furnace" and entity.burner_prototype then
       result.machines[name] = {entityName = entity.name, categories = entity.crafting_categories,
         fuelCategories = entity.burner_prototype.fuel_categories, craftingSpeed = entity.get_crafting_speed("normal")}
+    end
+    -- Electric furnaces burn nothing: band cells built with them need no fuel deliveries.
+    if entity and entity.type == "furnace" and entity.electric_energy_source_prototype then
+      result.electricFurnaces[name] = {entityName = entity.name, categories = entity.crafting_categories,
+        craftingSpeed = entity.get_crafting_speed("normal")}
     end
     if entity and entity.type == "assembling-machine" and entity.electric_energy_source_prototype then
       local fluid_inputs, fluid_outputs = 0, 0

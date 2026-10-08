@@ -30,6 +30,8 @@ public sealed record NativeGun(double Range, double Cooldown, double DamageModif
 public sealed record NativeArmor(double PhysicalDecrease, double PhysicalPercent, int InventoryBonus);
 public sealed record NativeFurnace(string EntityName, IReadOnlyDictionary<string, bool> Categories,
     IReadOnlyDictionary<string, bool> FuelCategories, double CraftingSpeed);
+/// <summary>A furnace powered from the electric network: no burner, no fuel.</summary>
+public sealed record NativeElectricFurnace(string EntityName, IReadOnlyDictionary<string, bool> Categories, double CraftingSpeed);
 public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
     [property: JsonConverter(typeof(NativeArrayConverter<NativeRecipe>))] IReadOnlyList<NativeRecipe> Recipes,
     IReadOnlyDictionary<string, NativeItem> Items, IReadOnlyDictionary<string, NativeMaterial[]> Mining,
@@ -38,7 +40,8 @@ public sealed record ProductionCatalog(ActorScope Scope, long CollectedTick,
     IReadOnlyDictionary<string, string>? MiningSourceTypes = null, IReadOnlyDictionary<string, NativeTurret>? Turrets = null,
     [property: JsonConverter(typeof(NativeArrayConverter<string>))] IReadOnlyList<string>? TerrainFluids = null,
     IReadOnlyDictionary<string, NativeGun>? Guns = null, IReadOnlyDictionary<string, NativeArmor>? Armors = null,
-    IReadOnlyDictionary<string, RocketSiloPrototype>? Silos = null)
+    IReadOnlyDictionary<string, RocketSiloPrototype>? Silos = null,
+    IReadOnlyDictionary<string, NativeElectricFurnace>? ElectricFurnaces = null)
 {
     public bool CanHandCraft(NativeRecipe recipe) => !recipe.HandCraftingDisabled && HandCategories.ContainsKey(recipe.Category);
 

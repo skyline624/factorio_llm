@@ -205,6 +205,41 @@ public sealed class FurnaceBandTests
 
     private static NativeRecipe Recipe(ProductionCatalog catalog, string name) => catalog.Recipes.Single(r => r.Name == name);
 
+    [Fact]
+    public void AnEnabledElectricFurnaceIsPreferredAndNeedsNoFuel()
+    {
+        // 2026-10-08: band and ore furnaces waited for fuel although two campaigns had researched electric furnaces.
+        var burner = WithSteelFurnace(Catalogs.Raw(), enabled: true);
+        Assert.Equal("steel-furnace", FurnaceCellPlanner.Preferred(burner, "coal"));
+        Assert.Equal("steel-furnace", FurnaceCellPlanner.Preferred(WithElectricFurnace(burner, enabled: false), "coal"));
+        var electric = WithElectricFurnace(burner, enabled: true);
+        Assert.Equal("electric-furnace", FurnaceCellPlanner.Preferred(electric, "coal"));
+        Assert.True(FurnaceCellPlanner.IsElectric(electric, "electric-furnace"));
+        Assert.Empty(FurnaceCellPlanner.Furnace(electric, "electric-furnace")!.FuelCategories);
+        Assert.Null(FurnaceCellPlanner.Failure(electric, "electric-furnace", "steel-plate", "no-such-fuel"));
+        Assert.NotNull(FurnaceCellPlanner.Failure(electric, "steel-furnace", "steel-plate", "no-such-fuel"));
+        var plan = AutomationPlanner.Plan(electric, "steel-plate", 3, new HashSet<string> { "assembling-machine-1", "electric-furnace" });
+        Assert.Equal((FurnaceCellPlanner.Kind, "electric-furnace"), (plan.Stages.Single().Kind, plan.Stages.Single().MachineItem));
+        // Electric band furnaces keep no fuel reserve in their input chest.
+        var cells = new[] { new FactoryCell("steel", 1, new(0, 0, true), FurnaceCellPlanner.Kind, "electric-furnace", "steel-plate",
+            new Dictionary<string, string> { ["input-chest"] = "c" }, "ready", 1) };
+        Assert.Empty(FurnaceBandFuel.Reserves(electric, FactoryMaps.Grass(4), cells, 40, "coal"));
+    }
+
+    private static ProductionCatalog WithElectricFurnace(ProductionCatalog catalog, bool enabled) => catalog with
+    {
+        Recipes = [.. catalog.Recipes, new("electric-furnace", enabled, "crafting", 5,
+            [new("steel-plate", "item", 10), new("stone-brick", "item", 10)], [new("electric-furnace", "item", 1)], false)],
+        Items = new Dictionary<string, NativeItem>(catalog.Items)
+        {
+            ["electric-furnace"] = new(0, 50, PlaceEntity: "electric-furnace", PlaceEntityType: "furnace")
+        },
+        ElectricFurnaces = new Dictionary<string, NativeElectricFurnace>
+        {
+            ["electric-furnace"] = new("electric-furnace", new Dictionary<string, bool> { ["smelting"] = true }, 2)
+        }
+    };
+
     private static ProductionCatalog WithSteelFurnace(ProductionCatalog catalog, bool enabled) => catalog with
     {
         Recipes = [.. catalog.Recipes, new("steel-furnace", enabled, "crafting", 3,

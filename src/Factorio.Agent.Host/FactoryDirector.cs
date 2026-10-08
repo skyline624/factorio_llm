@@ -44,7 +44,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
     /// <summary>Machines new cells are built with: the best enabled assembler, the fastest enabled furnace burning coal and an enabled silo.</summary>
     public static IReadOnlySet<string> MachineItems(ProductionCatalog catalog) =>
         MachinePreference.Where(m => Enabled(catalog, m)).Take(1)
-            .Concat(FurnaceCellPlanner.Machine(catalog, FactoryLogistics.Fuel) is { } furnace ? [furnace] : Array.Empty<string>())
+            .Concat(FurnaceCellPlanner.Preferred(catalog, FactoryLogistics.Fuel) is { } furnace ? [furnace] : Array.Empty<string>())
             .Concat(SiloCellPlanner.Machines(catalog)).ToHashSet(StringComparer.Ordinal);
 
     public async Task<AutomationPlan> AutomateAsync(string item, double perMinute, CancellationToken token,
