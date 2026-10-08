@@ -80,8 +80,10 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                 .SelectMany(c => InputRecipe(catalog, state, c)?.Ingredients
                     .Where(i => i.DeterministicItem && !covered.Contains((c.Entities["input-chest"], i.Name)))
                     .Select(i => (Target: c, Ingredient: i)) ?? []).ToArray();
-            // The largest hand-carried flows first: every link built between goals should remove the most actor transfers.
-            foreach (var group in needs.GroupBy(n => n.Ingredient.Name).OrderByDescending(g => g.Sum(n => InputVolume(catalog, n.Target, n.Ingredient)))
+            // Furnace fuel first, then the largest hand-carried flows: every link built between goals should remove the most actor
+            // transfers, but unfuelled furnaces make the plates every other input needs.
+            foreach (var group in needs.GroupBy(n => n.Ingredient.Name).OrderByDescending(g => g.Any(n => n.Target.Kind == FurnaceFeederController.Kind))
+                .ThenByDescending(g => g.Sum(n => InputVolume(catalog, n.Target, n.Ingredient)))
                 .ThenBy(g => g.Key, StringComparer.Ordinal))
             {
                 if (balancedSearches >= BalancedSearches) break;
@@ -117,7 +119,8 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         }
         foreach (var target in state.Cells.Where(c => c.Status == "ready" && InputRecipe(catalog, state, c) is not null && c.Entities.ContainsKey("input-chest")
             && (targetCellIds is null || targetCellIds.Contains(c.Id)))
-            .OrderByDescending(c => InputRecipe(catalog, state, c)?.Ingredients.Where(i => i.DeterministicItem)
+            .OrderByDescending(c => c.Kind == FurnaceFeederController.Kind)
+            .ThenByDescending(c => InputRecipe(catalog, state, c)?.Ingredients.Where(i => i.DeterministicItem)
                 .Sum(i => InputVolume(catalog, c, i)) ?? 0).ThenBy(c => c.Id, StringComparer.Ordinal).ToArray())
         {
             if (pausedCells.Contains(target.Id)) continue;
