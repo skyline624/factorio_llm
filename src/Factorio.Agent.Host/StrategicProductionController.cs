@@ -49,7 +49,10 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         string facts = Facts(compact: false);
         if (facts.Length > 23_000) facts = Facts(compact: true);
         if (facts.Length > 23_000) facts = Facts(compact: true, omitResearchUnlocks: true);
-        string Facts(bool compact, bool omitResearchUnlocks = false) => JsonSerializer.Serialize(new
+        // The measured throughput must never cost the goal itself: on 2026-10-08 (seed 987654321) it pushed the facts past the
+        // planner's limit and no goal could be chosen.
+        if (facts.Length > 23_000) facts = Facts(compact: true, omitResearchUnlocks: true, omitThroughput: true);
+        string Facts(bool compact, bool omitResearchUnlocks = false, bool omitThroughput = false) => JsonSerializer.Serialize(new
         {
             observedTick = observation.Tick,
             agent = new
@@ -119,12 +122,16 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 laboratories = cells.Count(c => c.Kind == "lab"),
                 siloCells = cells.Count(c => c.Kind == SiloCellPlanner.Kind),
                 rawSupply = factoryState is null ? [] : FactoryDirector.RawSupply(factoryState),
-                measuredThroughput = throughput is null ? null : new
+                measuredThroughput = throughput is null || omitThroughput ? null : new
                 {
                     fromTick = throughput.FromTick, toTick = throughput.ToTick, machines = throughput.Machines, working = throughput.Working,
-                    itemsPerMinute = throughput.ItemsPerMinute, targets = throughput.Targets, laboratories = throughput.LabStates,
-                    recipes = throughput.Recipes.Take(24).Select(r => new { r.Recipe, r.Machines, r.MeasuredCraftsPerMinute, r.Utilization, r.States }).ToArray(),
-                    interpretation = "Native finished crafts between two maintenance photographs. Utilization is measured crafts over the machines' nominal speed; item_ingredient_shortage and no_fuel states mean the cell waits for deliveries rather than lacks machines."
+                    targetItemsPerMinute = throughput.Targets.Keys.ToDictionary(k => k, k => throughput.ItemsPerMinute.GetValueOrDefault(k), StringComparer.Ordinal),
+                    targets = throughput.Targets,
+                    coverage = throughput.Coverage is { } coverage ? new { coverage.Inputs, coverage.BeltFed, coverage.HandFedLaboratories,
+                        coverage.HandFuelledFurnaces, handFed = coverage.HandFedByItem.Take(8).ToDictionary(p => p.Key, p => p.Value) } : null,
+                    recipes = compact ? null : throughput.Recipes.Take(10).Select(r => new { r.Recipe, r.Machines, r.MeasuredCraftsPerMinute, r.Utilization,
+                        state = r.States.OrderByDescending(p => p.Value).Select(p => p.Key).FirstOrDefault() }).ToArray(),
+                    interpretation = "Native finished crafts between two maintenance photographs; utilization is measured over nominal speed. item_ingredient_shortage and no_fuel mean cells wait for deliveries; hand-fed inputs and furnaces are carried by the actor, not belts."
                 },
                 enabledDrills = catalog.Items.Where(p => p.Value.PlaceEntityType == "mining-drill" && FactoryDirector.Enabled(catalog, p.Key))
                     .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray(),

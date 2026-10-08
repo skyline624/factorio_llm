@@ -124,17 +124,18 @@ public sealed class FactoryMaintenance(IGameClient game, IControllerJournal jour
                     await journal.AppendAsync("factory-rebuild-blocked", new { cell = missing.Cell.Id, missing.Role, missing.PreviousId, missing.Plan, error.Message }, token);
                     continue;
                 }
-                catch (NavigationPlanningException error)
+                catch (Exception error) when (error is NavigationPlanningException or ExplorationBlockedException or ExplorationDangerException)
                 {
-                    // BuildAt has not submitted a build when its approach planner refuses the route.
+                    // BuildAt has not submitted a build when its approach planner refuses the route. A far part whose exploration
+                    // steps find no way (seed 987654321, 2026-10-08: two goals failed in a row) is deferred the same way.
                     // Preserve the missing role and refresh the same actor's stocks after navigation/defense.
                     // Unknown receipts, death, scope changes and lease failures still stop the round.
                     snapshot = await CaptureAsync();
                     carried = FactoryLogistics.Carried(snapshot);
                     blocked.Add(missing.PreviousId);
                     await journal.AppendAsync("factory-rebuild-navigation-deferred", new { cell = missing.Cell.Id,
-                        missing.Role, missing.PreviousId, missing.Plan, routeStatus = error.Status, error.Message,
-                        snapshot.Scope, snapshot.CollectedTick, buildNotSubmitted = true }, token);
+                        missing.Role, missing.PreviousId, missing.Plan, routeStatus = (error as NavigationPlanningException)?.Status.ToString() ?? error.GetType().Name,
+                        error.Message, snapshot.Scope, snapshot.CollectedTick, buildNotSubmitted = true }, token);
                     continue;
                 }
                 catch (ConstructionItemUnavailableException error) when (error.Item == item)
