@@ -6,7 +6,8 @@ public sealed record SteamChain(SpatialEntity Boiler, IReadOnlyList<SpatialEntit
 public sealed record SteamLink(string Source, string Target, FluidConnectionPlacement Connection);
 /// <summary>
 /// "complete" adds engines to an under-equipped boiler; "unit" adds a boiler fed from an existing boiler's water port; "site"
-/// adds an offshore pump, its boiler and engines on a free shore (BoilerId then names the planned boiler role).
+/// adds an offshore pump, its boiler and engines on a free shore (BoilerId then names the planned boiler role); "piped" adds a
+/// boiler and engines on open land, watered by a pipe from the free water port of the observed boiler BoilerId.
 /// </summary>
 public sealed record SteamExpansionPlan(string Kind, string BoilerId, IReadOnlyList<PlannedMachine> Machines, IReadOnlyList<SteamLink> Links);
 
@@ -119,6 +120,61 @@ public sealed class PowerExpansionPlanner
 
     /// <summary>Shore placements tried for a new unit; each costs a few fluid searches.</summary>
     private const int MaximumShores = 64;
+    /// <summary>Boiler placements tried for a piped unit per source boiler; each costs an engine search and one pipe route.</summary>
+    private const int MaximumPipedSites = 48;
+    /// <summary>Pieces of the water route a piped unit may need, and the route search bound proving it.</summary>
+    public const int MaximumWaterPieces = 48;
+    private const int WaterRouteBudget = 4000;
+
+    /// <summary>
+    /// A new unit on open land, watered by a pipe from a watered boiler's free water port, when no chain grows in place and no
+    /// shore is free. One offshore pump outflows many boilers, so an installation's spare water feeds the unit. On 2026-10-08
+    /// (seed 20261106) belts hugged the whole lake and every boiler was boxed in by engines and belts at 98 % of capacity.
+    /// Placements lie on a three-tile lattice within <paramref name="reach"/> of the source boiler so the bounded search spreads
+    /// past the crowded installation; the route only proves the water can come, construction plans its own on observed ground.
+    /// </summary>
+    public SteamExpansionPlan? Piped(SpatialSnapshot map, string boilerItem, string engineItem, string pipeItem, string? undergroundItem,
+        string force, double reach, CancellationToken cancellationToken = default)
+    {
+        EntityGeometry boiler = Geometry(map, boilerItem), engine = Geometry(map, engineItem);
+        int ratio = EnginesPerBoiler(boiler, engine);
+        var field = new SpatialCollisionField(map);
+        static bool Lattice(MapPosition p) => (int)Math.Floor(p.X) % 3 == 0 && (int)Math.Floor(p.Y) % 3 == 0;
+        foreach (var chain in Chains(map, force).Where(c => FreeWaterPort(map, c.Boiler)).OrderBy(c => c.Boiler.Position.DistanceTo(map.Actor.Position))
+            .ThenBy(c => c.Boiler.Id, StringComparer.Ordinal))
+        {
+            int tried = 0;
+            foreach (var placement in new PlacementPlanner().FindCandidates(field, boilerItem, chain.Boiler.Position, requireBuildReach: false,
+                eligible: c => Lattice(c.Position) && c.Position.DistanceTo(chain.Boiler.Position) <= reach, cancellationToken: cancellationToken))
+            {
+                if (++tried > MaximumPipedSites) break;
+                var withBoiler = Planned(map, "boiler", boiler, placement);
+                var engines = Extend(withBoiler, boiler, placement, "boiler", engineItem, ratio, 1);
+                if (engines.Count < ratio) continue;
+                var unit = engines.Aggregate(withBoiler, (current, e) => Planned(current, e.Machine.Role, engine, e.Machine.Placement));
+                var route = new PipeRoutePlanner().Find(unit, pipeItem, chain.Boiler.Id, "planned:boiler", "water", WaterRouteBudget,
+                    cancellationToken, undergroundItem: undergroundItem);
+                if (route.Status != PipeRouteStatus.Found || (route.Pieces?.Count ?? route.Pipes.Count) is 0 or > MaximumWaterPieces) continue;
+                return new("piped", chain.Boiler.Id, [new("boiler", boilerItem, placement), .. engines.Select(e => e.Machine)],
+                    engines.Select(e => e.Link).ToArray());
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Whether the boiler has an unconnected native water port a pipe could start from.</summary>
+    private static bool FreeWaterPort(SpatialSnapshot map, SpatialEntity boiler) => (boiler.FluidConnections ?? []).Any(p => p.Type == "normal"
+        && p.TargetEntityId is null && p.FlowDirection == "input-output"
+        && map.Prototypes[boiler.Name].FluidBoxes?.FirstOrDefault(b => b.Index == p.BoxIndex)?.ProductionType != "output");
+
+    /// <summary>A planned machine with its native ports, so a route keeps off its unused ones.</summary>
+    private static SpatialSnapshot Planned(SpatialSnapshot map, string role, EntityGeometry geometry, PlacementCandidate placement) =>
+        map with
+        {
+            Entities = [.. map.Entities, new("planned:" + role, geometry.Name, placement.Position,
+                geometry.CollisionBox.Rotate(placement.Direction).Translate(placement.Position), placement.Direction, "planned",
+                FluidConnections: FluidCellPlanner.Ports(geometry, placement))]
+        };
 
     /// <summary>
     /// The room the installation needs to keep growing, as planned entities: the missing engines of every watered chain,

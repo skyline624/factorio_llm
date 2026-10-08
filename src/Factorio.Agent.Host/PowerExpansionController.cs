@@ -131,16 +131,21 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         SpatialSnapshot map = null!;
         SteamExpansionPlan? plan = null;
         string force = "";
+        string? pipeItem = catalog.Items.Where(p => p.Value.PlaceEntityType == "pipe" && FactoryDirector.Enabled(catalog, p.Key))
+            .Select(p => p.Key).Order(StringComparer.Ordinal).FirstOrDefault();
+        string? tunnelItem = pipeItem is null ? null : FluidRelayController.UndergroundItem(catalog);
+        string[] water = [.. new[] { pipeItem, tunnelItem }.OfType<string>()];
         foreach (var candidate in anchors)
         {
             anchor = candidate;
             await controller.TravelAsync(anchor.Position, 6, catalog, token);
-            map = await CaptureAsync(items, catalog, token);
+            map = await CaptureAsync(items, catalog, token, water);
             force = map.Entities.Single(e => e.Id == map.Actor.Id).Force;
             var planning = await PlanningAsync(map, items, catalog, token);
-            // A chain without room to grow in place continues on its own shore nearby.
+            // A chain without room to grow in place continues on its own shore nearby, else on open land fed by a water pipe.
             plan = planner.Next(planning, items.Boiler, items.Engine, force)
-                ?? (items.Pump is { } pump ? planner.Site(planning, pump, items.Boiler, items.Engine, SiteReach) : null);
+                ?? (items.Pump is { } pump ? planner.Site(planning, pump, items.Boiler, items.Engine, SiteReach) : null)
+                ?? (pipeItem is null ? null : planner.Piped(planning, items.Boiler, items.Engine, pipeItem, tunnelItem, force, SiteReach, token));
             if (plan is not null) break;
         }
         if (plan is null) return null;
@@ -157,9 +162,18 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
             await journal.AppendAsync("power-machine-built", new { machine, entityId = ids[machine.Role] }, token);
         }
         string Id(string reference) => ids.GetValueOrDefault(reference, reference);
-        map = await CaptureAsync(items, catalog, token);
+        map = await CaptureAsync(items, catalog, token, water);
         foreach (var link in plan.Links) SteamPowerController.VerifyLink(map, Id(link.Source), Id(link.Target), link.Connection);
         await journal.AppendAsync("power-fluid-links", new { plan.Links, ids, map.CollectedTick }, token);
+        if (plan.Kind == "piped")
+        {
+            // The water route is planned again on the ground as built, around bands kept for the factory, and proven natively.
+            var zones = (await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token)).Zones;
+            await new PipeConnectionController(game, journal).RunAsync(plan.BoilerId, ids["boiler"], "water", token,
+                ground: current => zones.Aggregate(current, (reserved, zone) => FactoryCellBuilder.ReserveZone(reserved, zone, items.Pole)),
+                geometryItems: items.All);
+            map = await CaptureAsync(items, catalog, token, water);
+        }
 
         // A completed boiler may be one an interrupted step left dry, with engines never joined: light it and join its whole chain.
         string boilerId = ids.GetValueOrDefault("boiler", plan.BoilerId);
@@ -427,9 +441,9 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         if (carried < count) await new ProductionGoalExecutor(game, journal).RunAsync(item, count, token);
     }
 
-    private async Task<SpatialSnapshot> CaptureAsync(SteamItems items, ProductionCatalog catalog, CancellationToken token)
+    private async Task<SpatialSnapshot> CaptureAsync(SteamItems items, ProductionCatalog catalog, CancellationToken token, params string[] extra)
     {
-        var map = await new SpatialClient(game).CaptureAsync(items.All, 48, token);
+        var map = await new SpatialClient(game).CaptureAsync([.. items.All.Concat(extra).Distinct(StringComparer.Ordinal)], 48, token);
         Require(map.Scope, catalog);
         return map;
     }

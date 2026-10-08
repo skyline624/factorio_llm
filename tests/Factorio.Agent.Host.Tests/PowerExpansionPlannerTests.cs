@@ -97,6 +97,37 @@ public sealed class PowerExpansionPlannerTests
     }
 
     [Fact]
+    public void ABoxedInstallationGrowsOnOpenLandWateredByAPipeFromAFreeBoilerPort()
+    {
+        // Seed 20261106 on 2026-10-08: belts along the whole lake and engines around every boiler left neither shore nor chained room.
+        var supply = CompleteSupply().Select(e => e.Id != "boiler1" ? e : e with
+        {
+            FluidConnections = e.FluidConnections!.Select(p => p with { Type = "normal", FlowDirection = p.BoxIndex == 1 ? "input-output" : "output",
+                Filter = p.BoxIndex == 1 ? "water" : "steam" }).ToArray()
+        }).ToArray();
+        // Walls beside the free water port's tile (0.5, 4.5) leave it open for a pipe but too narrow for a chained boiler.
+        var map = Shore([.. supply, Entity("w1", "stone-wall", new(-0.5, 4.5), 0), Entity("w2", "stone-wall", new(1.5, 4.5), 0)]);
+        var pipe = new EntityGeometry("pipe", "pipe", new(new(-.3, -.3), new(.3, .3)), map.Prototypes["boiler"].Mask, 1, 1,
+            FluidBoxes: [new(1, "input-output", [])]);
+        map = map with
+        {
+            Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { ["pipe"] = pipe },
+            Items = new Dictionary<string, PlaceableItem>(map.Items) { ["pipe"] = new("pipe", 100) }
+        };
+        Assert.Null(new PowerExpansionPlanner().Next(map, "boiler", "steam-engine", Force));
+        var plan = new PowerExpansionPlanner().Piped(map, "boiler", "steam-engine", "pipe", null, Force, reach: 32)!;
+        Assert.Equal("piped", plan.Kind);
+        Assert.Equal("boiler1", plan.BoilerId);
+        Assert.Equal(["boiler", "engine-1", "engine-2"], plan.Machines.Select(m => m.Role));
+        Assert.Equal([("boiler", "engine-1"), ("engine-1", "engine-2")], plan.Links.Select(l => (l.Source, l.Target)));
+        AssertBuildable(map, plan);
+        // Without a free water port nothing can be piped.
+        var closed = map with { Entities = map.Entities.Select(e => e.Id != "boiler1" ? e : e with
+            { FluidConnections = e.FluidConnections!.Select(p => p with { TargetEntityId = p.TargetEntityId ?? "w1" }).ToArray() }).ToArray() };
+        Assert.Null(new PowerExpansionPlanner().Piped(closed, "boiler", "steam-engine", "pipe", null, Force, reach: 32));
+    }
+
+    [Fact]
     public void ReservedGrowthKeepsFeedersOutOfTheNextUnit()
     {
         // Trees behind the boiler push the nearest feeder in front of the free water port, where the next boiler goes.
