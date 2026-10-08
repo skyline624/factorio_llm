@@ -385,6 +385,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
 
     /// <summary>How far the actor walks inside a clearing to reach the tree it clears next.</summary>
     private const double ClearingEdgeRadius = 12;
+    private bool walkingToClearingEdge;
 
     private async Task<bool> ClearTreeAsync(SpatialSnapshot map, ProductionCatalog catalog, MapPosition? destination, CancellationToken token)
     {
@@ -392,10 +393,21 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         if (tree is null)
         {
             // In a clearing ringed by trees none stands within reach: walk to the edge toward the destination, then clear there.
-            tree = new TreeClearancePlanner().SelectNear(map, catalog, destination, ClearingEdgeRadius);
+            // The walk itself must not clear for its own way: navigation clears trees when blocked, which recursed until cancellation.
+            if (walkingToClearingEdge) return false;
+            walkingToClearingEdge = true;
+            try
+            {
+                foreach (var edge in new TreeClearancePlanner().SelectNear(map, catalog, destination, ClearingEdgeRadius, 4))
+                {
+                    try { await NavigateAsync(edge.Position, Math.Min(2.5, map.Actor.ReachDistance), token); }
+                    catch (NavigationPlanningException) { continue; }
+                    tree = edge;
+                    break;
+                }
+            }
+            finally { walkingToClearingEdge = false; }
             if (tree is null) return false;
-            try { await NavigateAsync(tree.Position, 2, token); }
-            catch (NavigationPlanningException) { return false; }
             map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed while reaching a clearing edge.");
             if (map.Entities.All(e => e.Id != tree.Id)) return true;
