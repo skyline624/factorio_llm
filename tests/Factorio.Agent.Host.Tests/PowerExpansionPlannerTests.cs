@@ -8,6 +8,17 @@ public sealed class PowerExpansionPlannerTests
     private const string Force = "agent";
 
     [Fact]
+    public void SearchPointsCoverEveryInstallationOldestFirst()
+    {
+        // Seed 20261106 on 2026-10-08: unit numbers sorted as text put boiler 989 last and left 6374 beside a free pond unsearched.
+        ObservedBoiler Boiler(string id, double x, double y) => new(id, "boiler", new(x, y), 0, 30000, 1, new Dictionary<string, long>(), ["e"]);
+        var anchors = PowerExpansionController.Anchors([Boiler("989", 41, 40.5), Boiler("30", 35.5, 38), Boiler("1854", 41, 43.5),
+            Boiler("4201", 61.5, 51), Boiler("4758", 75, 57.5), Boiler("5690", 82.5, 44), Boiler("6258", 85.5, 44), Boiler("6374", 89.5, 35)]);
+        Assert.Equal(["30", "4201", "5690"], anchors.Select(a => a.Id));
+        Assert.All(anchors, a => Assert.All(anchors.Where(b => b != a), b => Assert.True(a.Position.DistanceTo(b.Position) > PowerExpansionController.SiteReach / 2)));
+    }
+
+    [Fact]
     public void NativeHeatAndOutputGiveTwoEnginesPerBoiler()
     {
         var map = FactoryMaps.Grass(8);

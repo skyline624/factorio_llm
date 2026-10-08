@@ -425,10 +425,15 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                 || FactoryTransportHealth.Healthy(state, snapshot, bus)) continue;
             // The stock photograph can predate an attack. On seed 20261106 an attacked bus inserter vanished between the
             // photograph and the approach, failing the whole goal; maintenance rebuilds the part from its plan instead.
+            // A part no route reaches is left for a later pass too (seed 987654321: a research goal died on BudgetExceeded).
             try { await ConfigureAsync(bus, state, catalog, controller, token); }
             catch (EntityMissingException missing)
             {
                 await journal.AppendAsync("factory-transport-control-deferred", new { bus.Id, missing.EntityId, missing.Message }, token);
+            }
+            catch (Exception error) when (error is EntityUnreachableException or NavigationPlanningException)
+            {
+                await journal.AppendAsync("factory-transport-control-deferred", new { bus.Id, error = error.GetType().Name, error.Message }, token);
             }
         }
     }

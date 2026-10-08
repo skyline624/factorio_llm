@@ -26,7 +26,17 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
     public const int ReservedUnits = 8;
     /// <summary>Tiles from the anchor boiler within which a new shore unit stays observable and linkable to the network.</summary>
     public const double SiteReach = 32;
-    private const int MaximumAnchors = 3;
+    /// <summary>
+    /// Search points among the boilers, at least half a site reach apart. On 2026-10-08 (seed 20261106) eight boilers gave
+    /// only two points 32 tiles apart; a free pond 25 tiles from a third boiler was never searched while belts hugged the lake.
+    /// </summary>
+    internal const int MaximumAnchors = 6;
+    /// <summary>
+    /// A search that found no site is not repeated for the same boilers within this many ticks (30 game minutes): every new
+    /// cell asked again and walked to each search point between builds.
+    /// </summary>
+    internal const long NoSiteBackoffTicks = 108000;
+    private static readonly Dictionary<string, (string Boilers, long Tick)> NoSite = new(StringComparer.Ordinal);
     private const string Fuel = "coal";
 
     public async Task<PowerState> ObserveAsync(CancellationToken token) =>
@@ -80,9 +90,18 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         var budget = before;
         while (steps.Count < MaximumSteps && (force && steps.Count == 0 || budget.Exceeded(additionalPerTick)))
         {
+            string boilers = string.Join(",", Boilers(state, network).Select(b => b.Id).Order(StringComparer.Ordinal));
+            (string Boilers, long Tick) last;
+            lock (NoSite) NoSite.TryGetValue(directory, out last);
+            if (!force && last.Boilers == boilers && state.CollectedTick - last.Tick is >= 0 and < NoSiteBackoffTicks)
+            {
+                await journal.AppendAsync("power-expansion-search-skipped", new { budget, additionalPerTick, lastNoSiteTick = last.Tick }, token);
+                break;
+            }
             var step = await StepAsync(state, network, catalog, controller, token);
             if (step is null)
             {
+                lock (NoSite) NoSite[directory] = (boilers, state.CollectedTick);
                 await journal.AppendAsync("power-expansion-no-site", new { budget, additionalPerTick }, token);
                 if (force && steps.Count == 0) throw new InvalidOperationException("No clear site extends the observed steam installation.");
                 break;
@@ -107,9 +126,7 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         var planner = new PowerExpansionPlanner();
         // Each installation is tried from its oldest boiler. On 2026-10-07 (seed 20261106) the first installation's shore was
         // full and a second one 43 tiles away, beyond the site reach of the first boiler, was never extended.
-        var anchors = new List<ObservedBoiler>();
-        foreach (var boiler in Boilers(state, network).OrderBy(b => b.Id, StringComparer.Ordinal))
-            if (anchors.All(a => a.Position.DistanceTo(boiler.Position) > SiteReach) && anchors.Count < MaximumAnchors) anchors.Add(boiler);
+        var anchors = Anchors(Boilers(state, network));
         ObservedBoiler anchor = anchors[0];
         SpatialSnapshot map = null!;
         SteamExpansionPlan? plan = null;
@@ -433,6 +450,15 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         var equipment = FactoryCellBuilder.Equipment(catalog, Item(boiler.Name));
         string? pump = catalog.Items.Where(p => p.Value.PlaceEntityType == "offshore-pump").Select(p => p.Key).Order(StringComparer.Ordinal).FirstOrDefault();
         return new(equipment.Machine, Item(engine.Name), equipment.Pole, equipment.Chest, equipment.Inserter, pump);
+    }
+
+    /// <summary>Oldest boilers first (native unit numbers), each at least half a site reach from the previous points.</summary>
+    internal static IReadOnlyList<ObservedBoiler> Anchors(IEnumerable<ObservedBoiler> boilers)
+    {
+        var anchors = new List<ObservedBoiler>();
+        foreach (var boiler in boilers.OrderBy(b => long.TryParse(b.Id, out long unit) ? unit : long.MaxValue).ThenBy(b => b.Id, StringComparer.Ordinal))
+            if (anchors.Count < MaximumAnchors && anchors.All(a => a.Position.DistanceTo(boiler.Position) > SiteReach / 2)) anchors.Add(boiler);
+        return anchors;
     }
 
     private static IReadOnlyList<ObservedBoiler> Boilers(PowerState state, ElectricNetworkState network)
