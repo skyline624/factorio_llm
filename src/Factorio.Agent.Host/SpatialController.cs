@@ -57,57 +57,62 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         var exploration = new ExplorationPlanner();
         int invalidatedWaypoints = 0, localFailures = 0;
         bool skipLocal = false;
-        for (int segment = 0; segment < 64; segment++)
+        try
         {
-            if (inspectDestination is not null) await inspectDestination(token);
-            SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token, light: true);
-            if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during travel to a known destination.");
-            double distance = map.Actor.Position.DistanceTo(destination);
-            // A trip beyond the local area may leave defended ground: equip first (cheap when the loadout is unchanged).
-            if (segment == 0 && distance > 24) await new SurvivalKitController(game, journal).BeforeTripAsync("travel", token);
-            // A quick search budget is not a reason to explore around an already observed destination.
-            // Navigation owns the bounded search, wider reobservation and confirmed tree clearance.
-            bool local = distance <= 24 || map.Bounds.Contains(destination) && !skipLocal;
-            skipLocal = false;
-            if (local)
+            for (int segment = 0; segment < 64; segment++)
             {
-                await journal.AppendAsync("travel-local-navigation", new { map.Scope, map.CollectedTick, map.Actor.Position,
-                    destination, arrivalDistance, radius = map.Coverage.Radius, observedDestination = map.Bounds.Contains(destination) }, token);
-                try
+                if (inspectDestination is not null) await inspectDestination(token);
+                SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token, light: true);
+                if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during travel to a known destination.");
+                double distance = map.Actor.Position.DistanceTo(destination);
+                // A trip beyond the local area may leave defended ground: equip first (cheap when the loadout is unchanged).
+                if (segment == 0 && distance > 24) await new SurvivalKitController(game, journal).BeforeTripAsync("travel", token);
+                // A quick search budget is not a reason to explore around an already observed destination.
+                // Navigation owns the bounded search, wider reobservation and confirmed tree clearance.
+                bool local = distance <= 24 || map.Bounds.Contains(destination) && !skipLocal;
+                skipLocal = false;
+                if (local)
                 {
-                    await NavigateAsync(destination, arrivalDistance, token, inspectDestination);
-                    return;
+                    await journal.AppendAsync("travel-local-navigation", new { map.Scope, map.CollectedTick, map.Actor.Position,
+                        destination, arrivalDistance, radius = map.Coverage.Radius, observedDestination = map.Bounds.Contains(destination) }, token);
+                    try
+                    {
+                        await NavigateAsync(destination, arrivalDistance, token, inspectDestination);
+                        return;
+                    }
+                    // A destination at the edge of the photograph can exhaust even the deepened search when obstacles extend
+                    // past that edge (seed 20261106, 2026-10-06: 67 tiles, a failed research goal). Such a far destination then
+                    // takes one waypoint segment toward it and is planned again from there; a refusal well inside the view stands.
+                    // A detour can also carry the actor until a far destination leaves the view, wherever it stood in the first
+                    // photograph (seed 20261106, 2026-10-07: 44 tiles, two failed chemical science goals).
+                    catch (NavigationPlanningException error) when (distance > 24 && localFailures++ < 3
+                        && (error.Status == RouteStatus.GoalOutsideSnapshot
+                            || NearEdge(map.Bounds, destination) && error.Status is RouteStatus.BudgetExceeded or RouteStatus.NoRouteOnKnownGrid))
+                    {
+                        await journal.AppendAsync("travel-local-fallback", new { map.Scope, map.CollectedTick, destination,
+                            error.Status, localFailures }, token);
+                        skipLocal = true;
+                        continue;
+                    }
                 }
-                // A destination at the edge of the photograph can exhaust even the deepened search when obstacles extend
-                // past that edge (seed 20261106, 2026-10-06: 67 tiles, a failed research goal). Such a far destination then
-                // takes one waypoint segment toward it and is planned again from there; a refusal well inside the view stands.
-                // A detour can also carry the actor until a far destination leaves the view, wherever it stood in the first
-                // photograph (seed 20261106, 2026-10-07: 44 tiles, two failed chemical science goals).
-                catch (NavigationPlanningException error) when (distance > 24 && localFailures++ < 3
-                    && (error.Status == RouteStatus.GoalOutsideSnapshot
-                        || NearEdge(map.Bounds, destination) && error.Status is RouteStatus.BudgetExceeded or RouteStatus.NoRouteOnKnownGrid))
+                ExplorationWaypoint next = await FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
+                bool reached;
+                try { reached = await NavigateExplorationAsync(next, map, catalog, token, inspectDestination); }
+                // A detour can also lose an exploration point from view (seed 20261107, 2026-10-07: a failed chemical science goal);
+                // with no operation left running, it counts as one more invalidated point and a new one is chosen.
+                catch (NavigationPlanningException error) when (error.Status is RouteStatus.GoalOutsideSnapshot or RouteStatus.BudgetExceeded
+                    && ownedOperation is null && !ownedStopRequested)
                 {
-                    await journal.AppendAsync("travel-local-fallback", new { map.Scope, map.CollectedTick, destination,
-                        error.Status, localFailures }, token);
-                    skipLocal = true;
-                    continue;
+                    await journal.AppendAsync("travel-exploration-point-lost", new { next.Position, destination, error.Status }, token);
+                    reached = false;
                 }
+                if (!reached && ++invalidatedWaypoints > 4)
+                    throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its newly observed threat invalidation budget.");
             }
-            ExplorationWaypoint next = await FindExplorationWaypointAsync(exploration, catalog, "", destination, token);
-            bool reached;
-            try { reached = await NavigateExplorationAsync(next, map, catalog, token, inspectDestination); }
-            // A detour can also lose an exploration point from view (seed 20261107, 2026-10-07: a failed chemical science goal);
-            // with no operation left running, it counts as one more invalidated point and a new one is chosen.
-            catch (NavigationPlanningException error) when (error.Status is RouteStatus.GoalOutsideSnapshot or RouteStatus.BudgetExceeded
-                && ownedOperation is null && !ownedStopRequested)
-            {
-                await journal.AppendAsync("travel-exploration-point-lost", new { next.Position, destination, error.Status }, token);
-                reached = false;
-            }
-            if (!reached && ++invalidatedWaypoints > 4)
-                throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its newly observed threat invalidation budget.");
+            throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its local segment budget.");
         }
-        throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its local segment budget.");
+        // A squeezed margin serves one trip out of an enclosure, never the next one.
+        finally { threatMargin = ExplorationPlanner.ThreatMargin; }
     }
 
     /// <summary>Within eight tiles of the photograph's edge, where an unseen obstacle can hide the only detour.</summary>
@@ -133,7 +138,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             RequireAi(fresh);
             var introduced = (fresh.StationaryThreats ?? []).Where(t =>
                 !(origin.StationaryThreats ?? []).Any(previous => previous.Id == t.Id && previous.Position == t.Position && previous.Range == t.Range)
-                && waypoint.Position.DistanceTo(t.Position) < Math.Min(t.Range + ExplorationPlanner.ThreatMargin,
+                && waypoint.Position.DistanceTo(t.Position) < Math.Min(t.Range + threatMargin,
                     fresh.Actor.Position.DistanceTo(t.Position)) - 1e-9).ToArray();
             if (introduced.Length == 0) throw;
             await journal.AppendAsync("exploration-waypoint-threat-invalidated", new { fresh.Scope, fresh.CollectedTick,
@@ -184,7 +189,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (map.CollectedTick < latestObservationTick)
                 throw new InvalidDataException("Navigation observation predates the previous view; reconcile before choosing a route.");
             latestObservationTick = map.CollectedTick;
-            var field = new SpatialCollisionField(map, ExplorationPlanner.ThreatMargin);
+            var field = new SpatialCollisionField(map, threatMargin);
             if (completedMove is { } completed && requireStableArrival
                 && completed.Receipt.Effects.TryGetProperty("position", out var nativePosition)
                 && nativePosition.Deserialize<MapPosition>(Protocol.Json) is { } stopped
@@ -213,7 +218,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 route = route with { Waypoints = Subdivide(map.Actor.Position, route.Waypoints) };
             plans++;
             await journal.AppendAsync("route-plan", new { map.Scope, map.CollectedTick, destination, arrivalDistance, requireStableArrival,
-                map.StationaryThreats, stationaryThreatMargin = ExplorationPlanner.ThreatMargin,
+                map.StationaryThreats, stationaryThreatMargin = threatMargin,
                 radius = map.Coverage.Radius, reused = reusable, route }, deadline.Token);
             if (!reusable && route.Status == RouteStatus.BudgetExceeded)
             {
@@ -303,6 +308,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     {
         for (int cleared = 0; ; cleared++)
         {
+            threatMargin = planner.Margin;
             SpatialSnapshot map = await spatial.CaptureAsync(radius: 48, cancellationToken: token);
             RequireAi(map);
             if (map.Scope != catalog.Scope) throw new InvalidDataException("Actor changed during exploration clearance.");
@@ -375,7 +381,13 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             catch (ExplorationBlockedException) when (cleared < 48)
             {
                 // Toward the detour when there is one: the straight way may lie behind the cliffs it avoids.
-                if (!await ClearTreeAsync(map, catalog, detour ?? destination, token)) throw;
+                if (await ClearTreeAsync(map, catalog, detour ?? destination, token)) continue;
+                // Without a tree to clear, an enclosure of cliffs and worm margins is left through the narrower margin.
+                if (planner.Margin <= ExplorationPlanner.SqueezeMargin || !(map.StationaryThreats ?? []).Any(t =>
+                    map.Actor.Position.DistanceTo(t.Position) <= t.Range + ExplorationPlanner.ThreatMargin + 28)) throw;
+                planner.Margin = ExplorationPlanner.SqueezeMargin;
+                await journal.AppendAsync("threat-margin-squeeze", new { map.Scope, map.CollectedTick, map.Actor.Position, destination, detour,
+                    margin = planner.Margin, map.StationaryThreats }, token);
             }
             catch (ExplorationDangerException error)
             {
@@ -389,6 +401,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
 
     /// <summary>Half the span of a native cliff segment, as the detour planner's keep-out radius around it.</summary>
     private const double CliffRadius = 4;
+    /// <summary>Margin beyond worm ranges for routes, lowered with the exploration search's for the rest of one trip.</summary>
+    private double threatMargin = ExplorationPlanner.ThreatMargin;
 
     /// <summary>How far the actor walks inside a clearing to reach the tree it clears next.</summary>
     private const double ClearingEdgeRadius = 12;
@@ -611,7 +625,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 lastTerrainTick = current.CollectedTick;
                 // The active corner and position must come from one native frame; a receipt queried before this
                 // photograph can already refer to a corner that the continuously walking character has passed.
-                bool valid = MovementPathIsClear(current, submission.Scope, submission.OperationId, movementStart!, watchedPath, out int leg);
+                bool valid = MovementPathIsClear(current, submission.Scope, submission.OperationId, movementStart!, watchedPath, out int leg,
+                    threatMargin);
                 await journal.AppendAsync("movement-terrain-check", new { submission.OperationId, current.Scope,
                     current.CollectedTick, current.Actor.Position, destination = watchedPath[^1], waypointIndex = leg + 1, valid }, token);
                 if (!valid)
@@ -635,12 +650,12 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     }
 
     internal static bool MovementPathIsClear(SpatialSnapshot current, ActorScope scope, string operationId,
-        MapPosition plannedStart, IReadOnlyList<MapPosition> path, out int leg)
+        MapPosition plannedStart, IReadOnlyList<MapPosition> path, out int leg, double threatMargin = ExplorationPlanner.ThreatMargin)
     {
         leg = path.Count == 1 ? 0 : current.Actor.Movement is { } movement
             && movement.OperationId == operationId && movement.WaypointCount == path.Count ? movement.WaypointIndex - 1 : -1;
         if (current.Scope != scope || current.Actor.ControlMode != "ai" || leg < 0 || leg >= path.Count) return false;
-        var field = new SpatialCollisionField(current, ExplorationPlanner.ThreatMargin);
+        var field = new SpatialCollisionField(current, threatMargin);
         MapPosition from = current.Actor.Position;
         for (int index = leg; index < path.Count; index++)
         {

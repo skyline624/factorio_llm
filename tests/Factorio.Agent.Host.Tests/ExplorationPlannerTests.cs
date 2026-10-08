@@ -89,6 +89,32 @@ public sealed class ExplorationPlannerTests
     }
 
     [Fact]
+    public void ASqueezedMarginLeavesAnEnclosureOfWallsAndAWormExclusion()
+    {
+        // Seed 987654321, 2026-10-08: the only gap of a cliff line lay 19 to 23 tiles beyond a range-30 worm's range.
+        var map = Map(new(0, 0));
+        map = map with
+        {
+            Entities = [Block("north", -48, -48, 49, -3), Block("south", -48, 3, 49, 49), Block("east", 20, -3, 49, 3)],
+            StationaryThreats = [new("worm", new(-70, 0), 30, map.CollectedTick)]
+        };
+        var surveyed = Enumerable.Range(-40, 80).SelectMany(x => Enumerable.Range(-40, 80).Select(y => new SurveyedCell(x, y))).ToArray();
+        var planner = new ExplorationPlanner();
+        Assert.Equal(ExplorationPlanner.ThreatMargin, planner.Margin);
+        Assert.Throws<ExplorationBlockedException>(() =>
+        {
+            for (int step = 0; step < 100; step++) Assert.True(planner.Choose(map, "", Catalog(), new(-200, 0), surveyed).X > 0);
+        });
+        planner.Margin = ExplorationPlanner.SqueezeMargin;
+        var way = planner.Choose(map, "", Catalog(), new(-200, 0), surveyed);
+        Assert.True(way.X < 0, $"{way} does not leave through the squeezed margin.");
+        Assert.True(way.DistanceTo(new(-70, 0)) > 30 + ExplorationPlanner.SqueezeMargin);
+
+        static SpatialEntity Block(string id, double x0, double y0, double x1, double y1) =>
+            new(id, "wall", new((x0 + x1) / 2, (y0 + y1) / 2), new(new(x0, y0), new(x1, y1)), 0, "neutral");
+    }
+
+    [Fact]
     public void SeeingAFrontierDoesNotReverseTheWalkBeforeApproachingIt()
     {
         var planner = new ExplorationPlanner();

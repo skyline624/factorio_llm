@@ -23,6 +23,17 @@ public sealed class GuardedRouteTests
     }
 
     [Fact]
+    public void ADetourLiesAtLeastOneStepAheadEvenBesideACliff()
+    {
+        // Seed 987654321 on 2026-10-08: a cliff 3.5 tiles from the actor left only a cell centre two tiles away in sight.
+        (MapPosition, double)[] cliffs = [.. Enumerable.Range(0, 8).Select(i => (new MapPosition(302, 354 + 4 * i), 4.0)),
+            .. Enumerable.Range(0, 5).Select(i => (new MapPosition(306 + (i > 0 ? 4 : 0), 402 + 4 * i), 4.0))];
+        var from = new MapPosition(305.5, 386);
+        var waypoint = GuardedRoute.Waypoint(from, new(-32.5, -50.5), cliffs)!;
+        Assert.True(waypoint.DistanceTo(from) >= GuardedRoute.MinimumLead, $"The detour {waypoint} is too close to lead any step.");
+    }
+
+    [Fact]
     public void NeighbouringStartsShareTheSameDetour()
     {
         // Seed 987654321 on 2026-10-08: a grid moving with the actor sent it south-east from one point and five tiles away from

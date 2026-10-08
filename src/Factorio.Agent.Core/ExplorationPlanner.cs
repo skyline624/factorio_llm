@@ -19,6 +19,14 @@ public sealed class ExplorationPlanner
     /// (seed 20261002) exploration steps died 37 to 38 tiles from visible range-25 worms.
     /// </summary>
     public const double ThreatMargin = 24;
+    /// <summary>
+    /// The margin kept when the full one encloses the actor, still above the 12 to 13 tiles beyond range where the 2026-10-01
+    /// deaths happened. On 2026-10-08 (seed 987654321) the only gap of a cliff line lay 19 to 23 tiles beyond a range-30 worm, and
+    /// the actor stayed between the cliffs and the worm's 54-tile exclusion for hours.
+    /// </summary>
+    public const double SqueezeMargin = 16;
+    /// <summary>The margin this search keeps beyond worm ranges: <see cref="ThreatMargin"/> unless its caller squeezed it.</summary>
+    public double Margin { get; set; } = ThreatMargin;
     /// <summary>A frontier nearer than this to a hazard boundary costs up to as many extra tiles of walking.</summary>
     public const double PreferredClearance = 32;
     private readonly HashSet<(int X, int Y)> observed = [];
@@ -68,11 +76,11 @@ public sealed class ExplorationPlanner
             for (int y = (int)Math.Ceiling(map.Bounds.Min.Y / 4); y < map.Bounds.Max.Y / 4; y++) observed.Add((x, y));
         bool exploring = deaths is not null;
         bool InDeathZone(MapPosition p) => exploring && deaths!.Any(d => DangerZones.Covers(d, p));
-        bool NearThreat(MapPosition p) => threats.Values.Any(t => p.DistanceTo(t.Position) <= t.Range + ThreatMargin);
+        bool NearThreat(MapPosition p) => threats.Values.Any(t => p.DistanceTo(t.Position) <= t.Range + Margin);
         MapPosition? known = destination ?? resources.Values.Where(e => catalog.Mining[e.Name].Any(p => p.Name == wanted && p.DeterministicItem)
                 && !InDeathZone(e.Position) && deferredResourceIds?.Contains(e.Id) != true)
             .OrderBy(e => e.Position.DistanceTo(map.Actor.Position)).Select(e => e.Position).FirstOrDefault();
-        var field = new SpatialCollisionField(map, ThreatMargin);
+        var field = new SpatialCollisionField(map, Margin);
         if (known is not null) frontierGoal = null;
         else if (frontierGoal is not null)
         {
@@ -101,7 +109,7 @@ public sealed class ExplorationPlanner
                     // but the endpoint must remain still between its native receipt and the next observation.
                     if (distance is < 16 or > 28 || !PlacementPlanner.CanStop(field, point)) continue;
                     if (exploring && deaths!.Any(d => Enters(map, point, d.Position, DangerZones.Radius))
-                        || threats.Values.Any(t => Enters(map, point, t.Position, t.Range + ThreatMargin))
+                        || threats.Values.Any(t => Enters(map, point, t.Position, t.Range + Margin))
                         || pass == 0 && avoided.Any(g => Enters(map, point, g.Center, g.Radius)))
                     {
                         hazardous++;
@@ -119,7 +127,7 @@ public sealed class ExplorationPlanner
         }
         if (candidates.Count == 0 && hazardous > 0)
             throw new ExplorationDangerException($"All {hazardous} local exploration steps enter a recent death zone or "
-                + $"{ThreatMargin} tiles beyond a known stationary threat's range.");
+                + $"{Margin} tiles beyond a known stationary threat's range.");
 
         bool Progresses((MapPosition Point, (int, int) Cell, int Gain) candidate, MapPosition target) => candidate.Gain > 0
             || candidate.Point.DistanceTo(target) < map.Actor.Position.DistanceTo(target) - 1;
@@ -136,7 +144,7 @@ public sealed class ExplorationPlanner
                 var safe = frontier.Where(p => !InDeathZone(Center(p)) && !NearThreat(Center(p))).ToArray();
                 if (safe.Length == 0)
                     throw new ExplorationDangerException($"All {frontier.Count} exploration frontiers lie within a recent death zone or "
-                        + $"{ThreatMargin} tiles beyond a known stationary threat's range; this local refusal does not prove the resource absent.");
+                        + $"{Margin} tiles beyond a known stationary threat's range; this local refusal does not prove the resource absent.");
                 // Prefer nearby frontiers while retaining a modest home-distance cost. Pure nearest
                 // selection drifts along one axis when tile rounding makes that border slightly nearer.
                 // Frontiers just outside a hazard cost extra walking, so farther safe ones can win.
@@ -204,7 +212,7 @@ public sealed class ExplorationPlanner
         // Distance from a point to the nearest hazard boundary; negative inside.
         double Clearance(MapPosition p) => !exploring ? double.PositiveInfinity
             : deaths!.Select(d => p.DistanceTo(d.Position) - DangerZones.Radius)
-                .Concat(threats.Values.Select(t => p.DistanceTo(t.Position) - t.Range - ThreatMargin))
+                .Concat(threats.Values.Select(t => p.DistanceTo(t.Position) - t.Range - Margin))
                 .DefaultIfEmpty(double.PositiveInfinity).Min();
     }
 

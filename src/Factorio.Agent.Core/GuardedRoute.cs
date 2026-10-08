@@ -12,6 +12,8 @@ public static class GuardedRoute
     /// <summary>How far beyond the trip's own box the detour may go.</summary>
     public const double Margin = 320;
     private const int MaximumNodes = 20000;
+    /// <summary>Least distance of a returned detour point, beyond the longest local exploration step.</summary>
+    public const double MinimumLead = 32;
 
     /// <summary>
     /// The farthest point of the detour visible from the start, or <paramref name="to"/> when the straight way is clear. Guards
@@ -46,8 +48,12 @@ public static class GuardedRoute
             {
                 var path = new List<MapPosition> { to };
                 for (var node = current; previous.TryGetValue(node, out var parent); node = parent) path.Insert(0, Center(parent));
-                // The farthest path point reachable in a straight line keeps the steps from zigzagging over grid cells.
-                return path.LastOrDefault(p => !Crosses(from, p, active)) ?? path[0];
+                // The farthest path point reachable in a straight line keeps the steps from zigzagging over grid cells. It lies at
+                // least one exploration step ahead: on 2026-10-08 (seed 987654321) a cliff beside the actor left only the first cell
+                // centre in sight, two tiles away, which no 16-to-28-tile step could approach.
+                var visible = path.LastOrDefault(p => !Crosses(from, p, active));
+                return visible is not null && visible.DistanceTo(from) >= MinimumLead ? visible
+                    : path.FirstOrDefault(p => p.DistanceTo(from) >= MinimumLead) ?? to;
             }
             foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1) })
             {
