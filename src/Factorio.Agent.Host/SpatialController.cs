@@ -112,7 +112,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its local segment budget.");
         }
         // A squeezed margin and a kept detour serve one trip, never the next one.
-        finally { threatMargin = ExplorationPlanner.ThreatMargin; (keptDetour, keptAim) = (null, null); }
+        finally { threatMargin = ExplorationPlanner.ThreatMargin; (keptDetour, keptAim, stallTarget) = (null, null, null); }
     }
 
     /// <summary>Within eight tiles of the photograph's edge, where an unseen obstacle can hide the only detour.</summary>
@@ -377,6 +377,14 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 detour = kept;
             (keptDetour, keptAim) = detour is not null && detour != aim ? (detour, aim) : (null, null);
             if (detour == aim) detour = null;
+            // Steps that never bring the actor nearer stall in a forest whose trunks block every way forward; on 2026-10-08 (seed
+            // 987654321) reachable steps around a valley kept counting as new ground. Trees toward the target are cleared instead.
+            if ((detour ?? aim) is { } goal && cleared < 48 && Stalled(map.Actor.Position, goal)
+                && new TreeClearancePlanner().SelectNear(map, catalog, goal, ClearingEdgeRadius, 1).Count > 0)
+            {
+                await journal.AppendAsync("exploration-stalled", new { map.Scope, map.CollectedTick, map.Actor.Position, goal, StallSteps }, token);
+                if (await ClearTreeAsync(map, catalog, goal, token)) continue;
+            }
             try
             {
                 var point = planner.Choose(map, wanted, catalog, detour ?? aim, memory?.SurveyedCells, deaths, deferredResourceIds, guards);
@@ -412,6 +420,22 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     private double threatMargin = ExplorationPlanner.ThreatMargin;
     /// <summary>The coarse detour point a trip walks toward, with the destination it serves.</summary>
     private MapPosition? keptDetour, keptAim;
+    /// <summary>Exploration steps toward one target without coming two tiles nearer, after which trees toward it are cleared.</summary>
+    internal const int StallSteps = 8;
+    private MapPosition? stallTarget;
+    private double stallBest;
+    private int stallSteps;
+
+    /// <summary>
+    /// Whether <see cref="StallSteps"/> steps toward the same target have not brought the actor two tiles nearer; it stays stalled,
+    /// so trees keep being cleared, until it does.
+    /// </summary>
+    private bool Stalled(MapPosition actor, MapPosition target)
+    {
+        double distance = actor.DistanceTo(target);
+        if (stallTarget != target || distance < stallBest - 2) (stallTarget, stallBest, stallSteps) = (target, distance, 0);
+        return ++stallSteps > StallSteps;
+    }
 
     /// <summary>How far the actor walks inside a clearing to reach the tree it clears next.</summary>
     private const double ClearingEdgeRadius = 12;
