@@ -665,6 +665,18 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     private static IEnumerable<PlannedEntity> UnfinishedParts(FactoryState state) =>
         state.Cells.Where(c => c.Status == "building" && c.Kind != "transport").SelectMany(c => c.Plan?.Values ?? []);
 
+    /// <summary>
+    /// Registered parts of ready cells missing from an observation that covers their tile: they will be rebuilt there. On 2026-10-08
+    /// (seed 20261107) a new bus was routed across a tile of a bus that biters had broken, and rebuilding one of them then failed.
+    /// </summary>
+    internal static IEnumerable<PlannedEntity> DestroyedParts(SpatialSnapshot map, FactoryState state)
+    {
+        var present = map.Entities.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+        return state.Cells.Where(c => c.Status == "ready" && c.Plan is not null).SelectMany(c => c.Plan!
+            .Where(p => c.Entities.TryGetValue(p.Key, out var id) && !present.Contains(id) && map.Bounds.Contains(p.Value.Position))
+            .Select(p => p.Value));
+    }
+
     internal static SpatialSnapshot ProtectBands(SpatialSnapshot map, FactoryState state, PowerExpansionController.SteamItems? steam = null,
         IReadOnlySet<int>? sourceTransportRows = null)
     {
@@ -681,7 +693,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                     boxes.Add(new(new(zone.Origin.X + i * zone.Pitch, top), new(zone.Origin.X + (i + 1) * zone.Pitch, top + rowHeight)));
                 }
         }
-        boxes.AddRange(UnfinishedParts(state)
+        boxes.AddRange(UnfinishedParts(state).Concat(DestroyedParts(map, state))
             .Where(p => map.Items.ContainsKey(p.Item)).Select(p => map.Prototypes[map.Items[p.Item].EntityName].CollisionBox.Rotate(p.Direction).Translate(p.Position)));
         boxes.AddRange((state.Rows ?? []).SelectMany(r => ResourceCellPlanner.Reservation(map, r, reserveWalkway: sourceTransportRows?.Contains(r.Id) != true)));
         if (steam is not null)

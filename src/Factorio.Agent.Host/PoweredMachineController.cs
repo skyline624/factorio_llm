@@ -201,8 +201,11 @@ public sealed class PoweredMachineController(IGameClient game, IControllerJourna
             && receipt.Effects.TryGetProperty("inventoryDelta", out var delta) && delta.ValueKind == System.Text.Json.JsonValueKind.Object
             && !delta.EnumerateObject().Any() && !receipt.Effects.TryGetProperty("entityId", out _))
             throw new ConstructionItemUnavailableException(item, receipt);
-        if (receipt.Status != "completed" && receipt.Error?.Code is "placement_blocked" or "out_of_reach")
-            throw new PlacementRefusedException($"Construction ended with {receipt.Status}: {receipt.Error.Code}.");
+        // An engine that created nothing on the tile refused it as well: on 2026-10-08 (seed 20261107) a belt of another bus held
+        // the tile and every maintenance round stopped on the same failed rebuild.
+        if (receipt.Status != "completed" && (receipt.Error?.Code is "placement_blocked" or "out_of_reach"
+            || receipt.Error?.Code == "build_failed" && !receipt.Effects.TryGetProperty("entityId", out _)))
+            throw new PlacementRefusedException($"Construction ended with {receipt.Status}: {receipt.Error!.Code}.");
         Completed(receipt);
         return receipt.Effects.GetProperty("entityId").GetString()!;
     }

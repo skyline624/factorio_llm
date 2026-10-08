@@ -46,6 +46,24 @@ public sealed class FactoryTransportGroundTests
     }
 
     [Fact]
+    public void ADestroyedPartOfAReadyCellKeepsItsTileFromNewRoutes()
+    {
+        // Seed 20261107, 2026-10-08: a new bus crossed a tile of a bus broken by biters; rebuilding one of them then failed.
+        var map = FactoryMaps.Grass(24);
+        var belt = map.Prototypes["inserter"] with { Name = "transport-belt", Type = "transport-belt" };
+        map = map with { Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { [belt.Name] = belt },
+            Items = new Dictionary<string, PlaceableItem>(map.Items) { [belt.Name] = new(belt.Name, 100) } };
+        var broken = new FactoryCell("bus", 0, new(0, 0, true), "transport", "transport-belt", null,
+            new Dictionary<string, string> { ["belt-0"] = "gone", ["belt-1"] = "far" }, "ready", 1,
+            Plan: new Dictionary<string, PlannedEntity> { ["belt-0"] = new("belt-0", "transport-belt", new(3.5, 3.5), 0),
+                ["belt-1"] = new("belt-1", "transport-belt", new(300.5, 3.5), 0) });
+        var state = new FactoryState(1, "world", [], [broken]);
+        Assert.Equal([new MapPosition(3.5, 3.5)], FactoryTransportBuilder.DestroyedParts(map, state).Select(p => p.Position));
+        Assert.False(new SpatialCollisionField(FactoryTransportBuilder.ProtectBands(map, state)).PlacementClear(belt, new(3.5, 3.5), 0));
+        Assert.True(new SpatialCollisionField(FactoryTransportBuilder.ProtectBands(map, new(1, "world", [], []))).PlacementClear(belt, new(3.5, 3.5), 0));
+    }
+
+    [Fact]
     public void FuelExportsCanUseTheirSourceWalkwayWhileEveryMachineSlotStaysReserved()
     {
         var map = FactoryMaps.Grass(24);

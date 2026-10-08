@@ -12,8 +12,11 @@ public sealed class PlacementRefusalTests
     public void OnlyNativePlacementRefusalsAreRefusalsNotShortagesOrOtherFailures()
     {
         Assert.Equal("42", PoweredMachineController.BuiltEntity(Build("completed", effects: new { entityId = "42" })));
-        foreach (var code in new[] { "placement_blocked", "out_of_reach" })
+        foreach (var code in new[] { "placement_blocked", "out_of_reach", "build_failed" })
             Assert.Throws<PlacementRefusedException>(() => PoweredMachineController.BuiltEntity(Build("failed", code)));
+        // A build failure that reports an entity is not a refusal of the tile.
+        Assert.IsNotType<PlacementRefusedException>(Assert.ThrowsAny<InvalidOperationException>(() =>
+            PoweredMachineController.BuiltEntity(Build("failed", "build_failed", new { entityId = "7" }))));
         // A missing item, a rejected submission or an interrupted build is not the engine refusing this tile.
         foreach (var receipt in new[] { Build("failed", "missing_item"), Build("rejected", "actor_busy"), Build("cancelled"), Build("failed", "actor_dead") })
         {
