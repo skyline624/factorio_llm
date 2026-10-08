@@ -37,6 +37,21 @@ public sealed class ResourceCellRecoveryTests
         Assert.Equal(new Dictionary<string, int> { ["electric-mining-drill"] = 1, ["stone-furnace"] = 1, ["inserter"] = 1 }, unplaced);
     }
 
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(3, 2)]
+    [InlineData(9, FactoryCellBuilder.MaximumCarriedCells - 1)]
+    public void FollowingCellsOfAStageAreCarriedWithTheFirst(int upcoming, int following)
+    {
+        var map = FactoryMaps.Grass(30);
+        var layout = new ResourceCellPlanner().Layout(map, Row(map, Smelter), 0);
+        var recorded = new Dictionary<string, string> { ["pole"] = "10" };
+        var batch = FactoryCellBuilder.Batch(layout, recorded, upcoming);
+        var whole = layout.Entities.GroupBy(e => e.Item).ToDictionary(g => g.Key, g => g.Count());
+        foreach (var (item, count) in whole)
+            Assert.Equal(CarriedStock.Unplaced(layout, recorded).GetValueOrDefault(item) + following * count, batch[item]);
+    }
+
     [Fact]
     public void InterruptedCellsResumeWithinTheirAttemptBudgetAndAreAbandonedAfterIt()
     {

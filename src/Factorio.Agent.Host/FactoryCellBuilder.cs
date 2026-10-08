@@ -21,7 +21,13 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         return outputs.Length == 0 ? null : new(outputs.Average(p => p.X), outputs.Average(p => p.Y));
     }
 
-    public async Task<FactoryCell> BuildAsync(string kind, string machineItem, string? recipe, CancellationToken token = default)
+    /// <summary>Most cells of one stage whose parts are carried together to their zone.</summary>
+    internal const int MaximumCarriedCells = 4;
+
+    /// <param name="upcoming">Cells of this stage still to build, this one included; parts for up to
+    /// <see cref="MaximumCarriedCells"/> of them are carried at once.</param>
+    public async Task<FactoryCell> BuildAsync(string kind, string machineItem, string? recipe, CancellationToken token = default,
+        int upcoming = 1)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromMinutes(40));
@@ -75,7 +81,7 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
             state.Cells.Where(c => c.Id != cell.Id).SelectMany(c => c.Entities.Values).ToHashSet(StringComparer.Ordinal), removeMissing: true);
         await registry.SaveAsync((await registry.LoadAsync(catalog.Scope.WorldId, token)).With(cell), token);
         await journal.AppendAsync("factory-cell-plan", new { cell.Id, kind, recipe, zone, layout }, token);
-        await EnsureCarriedAsync(registry, catalog, CarriedStock.Unplaced(layout, cell.Entities), token);
+        await EnsureCarriedAsync(registry, catalog, Batch(layout, cell.Entities, upcoming), token);
 
         var walkway = new MapPosition((layout.Walkway.Min.X + layout.Walkway.Max.X) / 2, (layout.Walkway.Min.Y + layout.Walkway.Max.Y) / 2);
         // Transport links may run along a band's walkway; a belt is no stopping point, and on 2026-10-06 (seed 987654321)
@@ -263,6 +269,18 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         repaired += await new ResourceCellBuilder(game, journal, directory).RepairPowerAsync(token);
         repaired += await new SupplyLineBuilder(game, journal, directory).RepairPowerAsync(token);
         return repaired + await new FluidPowerRepair(game, journal, directory).RunAsync(token);
+    }
+
+    /// <summary>
+    /// This cell's unplaced parts plus whole layouts for the next cells of its stage. On 2026-10-08 (seed 20261106) a zone 300
+    /// tiles from the base received one advanced-circuit cell per round trip, the parts of each crafted at the base.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, int> Batch(CellLayout layout, IReadOnlyDictionary<string, string> recorded, int upcoming)
+    {
+        int following = Math.Clamp(upcoming, 1, MaximumCarriedCells) - 1;
+        var needed = new Dictionary<string, int>(CarriedStock.Unplaced(layout, recorded), StringComparer.Ordinal);
+        foreach (var part in layout.Entities) needed[part.Item] = needed.GetValueOrDefault(part.Item) + following;
+        return needed;
     }
 
     internal Task EnsureCarriedAsync(FactoryRegistry registry, ProductionCatalog catalog, string item, int count, CancellationToken token) =>

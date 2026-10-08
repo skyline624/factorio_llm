@@ -113,7 +113,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
                     await StartStageAsync(stage, catalog, existing, token, isObjectiveComplete);
                     return plan;
                 }
-                await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token);
+                await builder.BuildAsync(stage.Kind, stage.MachineItem, stage.Recipe, token, upcoming: missing - count);
                 await ExpandPowerAsync(catalog.Scope, token);
             }
             await StartStageAsync(stage, catalog, existing, token, isObjectiveComplete);
