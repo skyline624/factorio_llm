@@ -369,7 +369,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                     wanted, destination, detour, planner.Frontier, point }, token);
                 return new(point, map.CollectedTick, remembered, map.Actor.Position);
             }
-            catch (ExplorationBlockedException) when (cleared < 16)
+            // A forest band takes many trunks to cross (seed 987654321: a clearing 400 tiles from the base).
+            catch (ExplorationBlockedException) when (cleared < 48)
             {
                 if (!await ClearTreeAsync(map, catalog, destination, token)) throw;
             }
@@ -395,10 +396,15 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             // In a clearing ringed by trees none stands within reach: walk to the edge toward the destination, then clear there.
             // The walk itself must not clear for its own way: navigation clears trees when blocked, which recursed until cancellation.
             if (walkingToClearingEdge) return false;
+            // Only a forest calls for walking on: a barrier without trees still refuses the move outright.
+            var edges = new TreeClearancePlanner().SelectNear(map, catalog, destination, ClearingEdgeRadius, 4);
+            if (edges.Count == 0) return false;
             walkingToClearingEdge = true;
             try
             {
-                foreach (var edge in new TreeClearancePlanner().SelectNear(map, catalog, destination, ClearingEdgeRadius, 4))
+                // Step into the ground the last clearances freed, toward the destination, so the next trunks come within reach.
+                if (destination is { } goal && await AdvanceAsync(map.Actor.Position, goal, token)) return true;
+                foreach (var edge in edges)
                 {
                     try { await NavigateAsync(edge.Position, Math.Min(2.5, map.Actor.ReachDistance), token); }
                     catch (NavigationPlanningException) { continue; }
@@ -414,6 +420,24 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
         }
         await ClearObservedTreeAsync(map, tree, destination, "navigation", token);
         return true;
+    }
+
+    /// <summary>A short walk straight toward the goal, the longest of a few steps the local planner can route.</summary>
+    private async Task<bool> AdvanceAsync(MapPosition from, MapPosition goal, CancellationToken token)
+    {
+        double distance = from.DistanceTo(goal);
+        if (distance < 2) return false;
+        foreach (double step in new[] { 3.0, 2.0, 1.5 })
+        {
+            var target = new MapPosition(from.X + (goal.X - from.X) / distance * step, from.Y + (goal.Y - from.Y) / distance * step);
+            try
+            {
+                await NavigateAsync(target, 0.5, token);
+                return true;
+            }
+            catch (NavigationPlanningException) { }
+        }
+        return false;
     }
 
     internal async Task<bool> ClearPlacementTreeAsync(SpatialSnapshot map, ProductionCatalog catalog, string item,
