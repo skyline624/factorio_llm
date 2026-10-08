@@ -271,15 +271,24 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         var equipment = target.Kind == "power" ? PowerFuelTransport.SelectEquipment(catalog) : Equipment;
         string? alternativeInserter = target.Kind == "power" ? PowerFuelTransport.SelectAlternativeInserter(catalog) : null;
         SpatialSnapshot? map;
-        if (surveyed)
-            map = await new TransportCorridorSurvey(game, journal).CaptureAsync(snapshot, frameEntities,
-                GeometryItems(state, steam, equipment.UndergroundBelt, alternativeInserter), catalog, controller, token);
-        else if (target.Kind == "power") map = await CaptureFuelFrameAsync(state, snapshot, frameEntities, steam, catalog, controller, token,
-            equipment.UndergroundBelt, alternativeInserter);
-        else
+        // A frame or corridor no route reaches is one refused link, not a failed goal: on 2026-10-08 (seed 987654321) a coal
+        // corridor survey met NoRouteOnKnownGrid and ended a research goal.
+        try
         {
-            await controller.TravelAsync(frameCenter!, approachTiles, catalog, token);
-            map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
+            if (surveyed)
+                map = await new TransportCorridorSurvey(game, journal).CaptureAsync(snapshot, frameEntities,
+                    GeometryItems(state, steam, equipment.UndergroundBelt, alternativeInserter), catalog, controller, token);
+            else if (target.Kind == "power") map = await CaptureFuelFrameAsync(state, snapshot, frameEntities, steam, catalog, controller, token,
+                equipment.UndergroundBelt, alternativeInserter);
+            else
+            {
+                await controller.TravelAsync(frameCenter!, approachTiles, catalog, token);
+                map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
+            }
+        }
+        catch (Exception error) when (error is NavigationPlanningException or EntityUnreachableException)
+        {
+            return await RefusedAsync(surveyed ? "corridor-unreachable" : "frame-unreachable");
         }
         if (map is null) return await RefusedAsync("no-frame");
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Transport planning scope changed.");
