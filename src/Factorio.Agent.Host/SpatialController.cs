@@ -358,12 +358,15 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                     radius = DangerZones.Radius }, token);
             var guards = game is INestMemoryReader guardReader ? (await guardReader.ReadNestMemoryAsync(map.Scope, token))?.Structures
                 .Select(n => (n.Position, n.Range is { } range ? range + NestMemory.WormGuardMargin : NestMemory.SpawnerGuardRadius)).ToArray() : null;
+            // A long way through remembered nests follows a coarse detour around their guards; the local steps aim at its next point.
+            var aim = destination ?? remembered?.Position ?? hint?.Position ?? ring;
+            var detour = aim is { } target && guards is { Length: > 0 } ? GuardedRoute.Waypoint(map.Actor.Position, target, guards) : null;
+            if (detour == aim) detour = null;
             try
             {
-                var point = planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position ?? ring,
-                    memory?.SurveyedCells, deaths, deferredResourceIds, guards);
+                var point = planner.Choose(map, wanted, catalog, detour ?? aim, memory?.SurveyedCells, deaths, deferredResourceIds, guards);
                 await journal.AppendAsync("exploration-waypoint", new { map.Scope, map.CollectedTick, map.Actor.Position,
-                    wanted, destination, planner.Frontier, point }, token);
+                    wanted, destination, detour, planner.Frontier, point }, token);
                 return new(point, map.CollectedTick, remembered, map.Actor.Position);
             }
             catch (ExplorationBlockedException) when (cleared < 16)
