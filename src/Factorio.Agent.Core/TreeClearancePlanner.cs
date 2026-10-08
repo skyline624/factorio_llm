@@ -13,6 +13,16 @@ public sealed class TreeClearancePlanner
             .OrderBy(e => e.Position.DistanceTo(destination ?? map.Actor.Position))
             .ThenBy(e => e.Position.DistanceTo(map.Actor.Position)).ThenBy(e => e.Id, StringComparer.Ordinal).FirstOrDefault();
 
+    /// <summary>
+    /// A clearable tree within <paramref name="radius"/> of the actor, nearest the destination, for an actor standing in a clearing
+    /// ringed by trees with none in reach. On 2026-10-08 (seed 987654321) such a clearing 400 tiles from the base held the actor:
+    /// every exploration step was blocked and no trunk stood within mining reach.
+    /// </summary>
+    public SpatialEntity? SelectNear(SpatialSnapshot map, ProductionCatalog catalog, MapPosition? destination, double radius) =>
+        map.Entities.Where(e => Clearable(map, catalog, e) && e.Position.DistanceTo(map.Actor.Position) <= radius)
+            .OrderBy(e => e.Position.DistanceTo(destination ?? map.Actor.Position))
+            .ThenBy(e => e.Position.DistanceTo(map.Actor.Position)).ThenBy(e => e.Id, StringComparer.Ordinal).FirstOrDefault();
+
     /// <summary>Clears a committed footprint only when all its entity blockers are mineable neutral trees and the terrain allows it.</summary>
     public SpatialEntity? SelectPlacement(SpatialSnapshot map, ProductionCatalog catalog, string item, PlacementCandidate placement)
     {
