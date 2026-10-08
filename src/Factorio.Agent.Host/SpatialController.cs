@@ -111,8 +111,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             }
             throw new NavigationPlanningException(RouteStatus.BudgetExceeded, "Travel exhausted its local segment budget.");
         }
-        // A squeezed margin serves one trip out of an enclosure, never the next one.
-        finally { threatMargin = ExplorationPlanner.ThreatMargin; }
+        // A squeezed margin and a kept detour serve one trip, never the next one.
+        finally { threatMargin = ExplorationPlanner.ThreatMargin; (keptDetour, keptAim) = (null, null); }
     }
 
     /// <summary>Within eight tiles of the photograph's edge, where an unseen obstacle can hide the only detour.</summary>
@@ -371,6 +371,11 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (aim is { } far && game is ICliffMemoryReader cliffReader)
                 cliffs = [.. cliffs.Concat((await cliffReader.ReadCliffMemoryAsync(map.Scope, token)).Near(map.Actor.Position, far, GuardedRoute.Margin)).Distinct()];
             var detour = aim is { } target ? GuardedRoute.Around(map.Actor.Position, target, guards ?? [], [.. cliffs.Select(c => (c, CliffRadius))]) : null;
+            // A detour point is kept until it is reached: recomputed from each step it moved between several points of the same way
+            // around (seed 987654321, 2026-10-08), each step undid the last, and the pacing filter never saw a step fail to approach.
+            if (detour is not null && detour != aim && keptDetour is { } kept && keptAim == aim && map.Actor.Position.DistanceTo(kept) > 16)
+                detour = kept;
+            (keptDetour, keptAim) = detour is not null && detour != aim ? (detour, aim) : (null, null);
             if (detour == aim) detour = null;
             try
             {
@@ -405,6 +410,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
     private const double CliffRadius = 4;
     /// <summary>Margin beyond worm ranges for routes, lowered with the exploration search's for the rest of one trip.</summary>
     private double threatMargin = ExplorationPlanner.ThreatMargin;
+    /// <summary>The coarse detour point a trip walks toward, with the destination it serves.</summary>
+    private MapPosition? keptDetour, keptAim;
 
     /// <summary>How far the actor walks inside a clearing to reach the tree it clears next.</summary>
     private const double ClearingEdgeRadius = 12;
