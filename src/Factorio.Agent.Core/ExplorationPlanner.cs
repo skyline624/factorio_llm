@@ -34,9 +34,11 @@ public sealed class ExplorationPlanner
     public MapPosition? Frontier => frontierGoal;
 
     /// <param name="deaths">Active death zones while exploring; null when <paramref name="destination"/> is the caller's own choice.</param>
+    /// <param name="guards">Circles around remembered nests that steps keep out of, unless one holds the target itself. On
+    /// 2026-10-08 (seed 20261106) the actor died twice walking between two remembered spawner groups on a long trip.</param>
     public MapPosition Choose(SpatialSnapshot map, string wanted, ProductionCatalog catalog, MapPosition? destination = null,
         IReadOnlyList<SurveyedCell>? surveyed = null, IReadOnlyList<NativeDeathTransition>? deaths = null,
-        IReadOnlySet<string>? deferredResourceIds = null)
+        IReadOnlySet<string>? deferredResourceIds = null, IReadOnlyList<(MapPosition Center, double Radius)>? guards = null)
     {
         origin ??= map.Actor.Position;
         foreach (var cell in surveyed ?? []) observed.Add((cell.X, cell.Y));
@@ -71,25 +73,32 @@ public sealed class ExplorationPlanner
         var candidates = new List<(MapPosition Point, (int, int) Cell, int Gain)>();
         var unreachable = new HashSet<(int, int)>();
         int hazardous = 0;
-        for (int x = (int)Math.Ceiling(map.Bounds.Min.X / 4) + 1; x < map.Bounds.Max.X / 4 - 1; x++)
-            for (int y = (int)Math.Ceiling(map.Bounds.Min.Y / 4) + 1; y < map.Bounds.Max.Y / 4 - 1; y++)
-            {
-                var point = new MapPosition(x * 4, y * 4);
-                double distance = point.DistanceTo(map.Actor.Position);
-                // Each exploration step hands control back over the network. Belts can be crossed,
-                // but the endpoint must remain still between its native receipt and the next observation.
-                if (distance is < 16 or > 28 || !PlacementPlanner.CanStop(field, point)) continue;
-                if (exploring && deaths!.Any(d => Enters(map, point, d.Position, DangerZones.Radius))
-                    || threats.Values.Any(t => Enters(map, point, t.Position, t.Range + ThreatMargin)))
+        var avoided = (guards ?? []).Where(g => known is not { } target || target.DistanceTo(g.Center) > g.Radius).ToArray();
+        // Remembered nests only steer the steps: when they leave none, the steps are chosen as without them.
+        for (int pass = avoided.Length > 0 ? 0 : 1; pass < 2 && candidates.Count == 0; pass++)
+        {
+            hazardous = 0;
+            for (int x = (int)Math.Ceiling(map.Bounds.Min.X / 4) + 1; x < map.Bounds.Max.X / 4 - 1; x++)
+                for (int y = (int)Math.Ceiling(map.Bounds.Min.Y / 4) + 1; y < map.Bounds.Max.Y / 4 - 1; y++)
                 {
-                    hazardous++;
-                    continue;
+                    var point = new MapPosition(x * 4, y * 4);
+                    double distance = point.DistanceTo(map.Actor.Position);
+                    // Each exploration step hands control back over the network. Belts can be crossed,
+                    // but the endpoint must remain still between its native receipt and the next observation.
+                    if (distance is < 16 or > 28 || !PlacementPlanner.CanStop(field, point)) continue;
+                    if (exploring && deaths!.Any(d => Enters(map, point, d.Position, DangerZones.Radius))
+                        || threats.Values.Any(t => Enters(map, point, t.Position, t.Range + ThreatMargin))
+                        || pass == 0 && avoided.Any(g => Enters(map, point, g.Center, g.Radius)))
+                    {
+                        hazardous++;
+                        continue;
+                    }
+                    int gain = 0;
+                    for (int dx = -7; dx <= 7; dx++)
+                        for (int dy = -7; dy <= 7; dy++) if (!observed.Contains((x + dx, y + dy))) gain++;
+                    candidates.Add((point, (x, y), gain));
                 }
-                int gain = 0;
-                for (int dx = -7; dx <= 7; dx++)
-                    for (int dy = -7; dy <= 7; dy++) if (!observed.Contains((x + dx, y + dy))) gain++;
-                candidates.Add((point, (x, y), gain));
-            }
+        }
         if (candidates.Count == 0 && hazardous > 0)
             throw new ExplorationDangerException($"All {hazardous} local exploration steps enter a recent death zone or "
                 + $"{ThreatMargin} tiles beyond a known stationary threat's range.");

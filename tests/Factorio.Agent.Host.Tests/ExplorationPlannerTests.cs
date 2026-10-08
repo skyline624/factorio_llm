@@ -41,6 +41,22 @@ public sealed class ExplorationPlannerTests
     }
 
     [Fact]
+    public void LongTripsStepAroundRememberedNestsUnlessOneGuardsTheTarget()
+    {
+        // Seed 20261106 on 2026-10-08: the actor died twice walking between remembered spawner groups toward a far bus part.
+        var map = Map(new(0, 0));
+        var destination = new MapPosition(0, -200);
+        (MapPosition Center, double Radius)[] spawner = [(new(0, -40), 30)];
+        var direct = new ExplorationPlanner().Choose(map, "", Catalog(), destination);
+        Assert.True(direct.DistanceTo(spawner[0].Center) <= spawner[0].Radius, $"The unguarded step {direct} should head straight through.");
+        var step = new ExplorationPlanner().Choose(map, "", Catalog(), destination, guards: spawner);
+        Assert.True(step.DistanceTo(spawner[0].Center) > spawner[0].Radius, $"The step {step} enters the remembered nest's guard.");
+        // A nest guarding the destination itself cannot be avoided, so it does not steer the steps.
+        var guarded = new ExplorationPlanner().Choose(map, "", Catalog(), new(0, -45), guards: spawner);
+        Assert.Equal(new ExplorationPlanner().Choose(map, "", Catalog(), new(0, -45)), guarded);
+    }
+
+    [Fact]
     public void SeeingAFrontierDoesNotReverseTheWalkBeforeApproachingIt()
     {
         var planner = new ExplorationPlanner();

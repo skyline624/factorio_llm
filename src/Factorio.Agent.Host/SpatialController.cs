@@ -356,10 +356,12 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             if (deaths is { Count: > 0 })
                 await journal.AppendAsync("exploration-death-zones", new { map.Scope, map.CollectedTick, wanted, deaths,
                     radius = DangerZones.Radius }, token);
+            var guards = game is INestMemoryReader guardReader ? (await guardReader.ReadNestMemoryAsync(map.Scope, token))?.Structures
+                .Select(n => (n.Position, n.Range is { } range ? range + NestMemory.WormGuardMargin : NestMemory.SpawnerGuardRadius)).ToArray() : null;
             try
             {
                 var point = planner.Choose(map, wanted, catalog, destination ?? remembered?.Position ?? hint?.Position ?? ring,
-                    memory?.SurveyedCells, deaths, deferredResourceIds);
+                    memory?.SurveyedCells, deaths, deferredResourceIds, guards);
                 await journal.AppendAsync("exploration-waypoint", new { map.Scope, map.CollectedTick, map.Actor.Position,
                     wanted, destination, planner.Frontier, point }, token);
                 return new(point, map.CollectedTick, remembered, map.Actor.Position);
