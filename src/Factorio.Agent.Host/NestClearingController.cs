@@ -116,6 +116,9 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         }
     }
 
+    /// <summary>Step outcome when a refused placement left part of the block; its turrets are picked up before loading.</summary>
+    internal const string PartialBlock = "partial-block";
+
     /// <summary>Outcome of an attempt that never reported back, e.g. after the actor's death; it delays retries like a failure.</summary>
     internal const string StartedOutcome = "started";
 
@@ -253,8 +256,13 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
                 await MoveDirectAsync(controller, staging, token);
                 continue;
             }
-            failedApproaches = 0;
             steps.Add(outcome);
+            if (outcome.Outcome == PartialBlock)
+            {
+                if (++failedApproaches >= 3) { status = "approach-failed"; break; }
+                continue;
+            }
+            failedApproaches = 0;
             destroyed += outcome.Destroyed;
             lost += outcome.Lost;
             if (lost >= MaximumLostTurrets) { status = "turret-losses"; break; }
@@ -290,6 +298,17 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             catch (PlacementRefusedException) { break; }
             if (built.Status != "completed" || !built.Effects.TryGetProperty("entityId", out var id) || id.GetString() is not { } entityId) break;
             placed.Add(entityId);
+        }
+        if (placed.Count > 0 && placed.Count < plan.Turrets.Count)
+        {
+            // A refused placement left part of the block. On 2026-10-08 (seed 20261106) a lone turret was twice left at a worm guarded by
+            // two spawners and destroyed without a kill: the unloaded turrets are picked up and the step is planned again.
+            foreach (string id in placed)
+                await controller.WorkAsync("mine", new { entityId = id, count = 1 }, 600, token: token);
+            await MoveDirectAsync(controller, staging, token);
+            var partial = new NestClearingStep(plan.Target.Id, plan.Target.Name, placed, plan.Exposure, 0, 0, placed.Count, PartialBlock);
+            await journal.AppendAsync("nest-clearing-step-result", partial, token);
+            return partial;
         }
         foreach (string id in placed)
             await controller.WorkAsync("insert", new { entityId = id, inventory = "ammo", item = ammunition, count = MagazinesPerTurret }, 300, token: token);
