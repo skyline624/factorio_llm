@@ -61,6 +61,9 @@ public sealed class NestClearingTests
         var started = NestClearingController.WithAttempt(new NestClearingState(1, "world", []),
             new(center, 1000, NestClearingController.StartedOutcome));
         Assert.Null(NestClearingController.Choose(Memory(), Industry, started, 1001));
+        // An attempt that never reported back (usually a death) waits far longer than an ordinary failure.
+        Assert.Null(NestClearingController.Choose(Memory(), Industry, started, 1000 + NestClearingController.RetryTicks));
+        Assert.NotNull(NestClearingController.Choose(Memory(), Industry, started, 1000 + NestClearingController.DeathRetryTicks));
         var finished = NestClearingController.WithAttempt(started, new(center, 1200, "cleared"));
         Assert.Equal([("cleared", 1200L)], finished.Attempts.Select(a => (a.Outcome, a.Tick)));
     }

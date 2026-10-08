@@ -30,6 +30,11 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
     public const double MaximumExposure = 15;
     /// <summary>Thirty game minutes before a base whose clearing failed is attempted again.</summary>
     public const long RetryTicks = 108000;
+    /// <summary>
+    /// Retry delay of an attempt that never reported back, usually the actor's death: four game hours. On 2026-10-08 (seed
+    /// 20261107) the actor died three times assaulting worms; equipment lost with each body is rarely replaced within half an hour.
+    /// </summary>
+    public const long DeathRetryTicks = 864000;
     private const long FightTicks = 3600;
     private const int MaximumFightRounds = 4 * (int)(FightTicks / 120);
     /// <summary>A scouting ring follows an attack seen within the last game hour, at most once per game hour.</summary>
@@ -164,7 +169,7 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         if (industry.Count == 0 && planned.Count == 0) return null;
         return memory.Clusters()
             .Where(c => c.Spawners + c.Worms > 0 && !state.Attempts.Any(a => a.Outcome != "cleared"
-                && a.Center.DistanceTo(c.Center) <= NestMemory.LinkDistance && tick - a.Tick < RetryTicks))
+                && a.Center.DistanceTo(c.Center) <= NestMemory.LinkDistance && tick - a.Tick < (a.Outcome == StartedOutcome ? DeathRetryTicks : RetryTicks)))
             .Select(c => (Cluster: c, Distance: industry.Select(i => IndustryClusterPlanner.Distance(i.Box, c.Center))
                 .Concat(planned.Select(p => p.DistanceTo(c.Center))).Min()))
             .Where(p => p.Distance <= ReachFromIndustry)
