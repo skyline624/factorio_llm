@@ -725,19 +725,19 @@ try
                                 try { await new AttackResponseController(game, maintenanceJournal, session.Directory).RunAsync(token); }
                                 catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
                                 {
-                                    await maintenanceJournal.AppendAsync("attack-response-error", new { error = error.GetType().FullName, error.Message }, token);
+                                    await maintenanceJournal.AppendAsync("attack-response-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
                                 }
                                 // Researched armor is worn before the actor walks into a nest or a pack.
                                 try { await new SurvivalKitController(game, maintenanceJournal).UpgradeArmorAsync(session.Directory, token); }
                                 catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
                                 {
-                                    await maintenanceJournal.AppendAsync("armor-upgrade-error", new { error = error.GetType().FullName, error.Message }, token);
+                                    await maintenanceJournal.AppendAsync("armor-upgrade-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
                                 }
                                 // A remembered enemy base near own industry is cleared while its worms and spawners are still weak.
                                 try { await new NestClearingController(game, maintenanceJournal, session.Directory).RunAsync(token); }
                                 catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
                                 {
-                                    await maintenanceJournal.AppendAsync("nest-clearing-error", new { error = error.GetType().FullName, error.Message }, token);
+                                    await maintenanceJournal.AppendAsync("nest-clearing-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
                                 }
                                 var cells = await new FactoryRegistry(session.Directory).LoadAsync(session.ProposedWorldId, token);
                                 if (cells.Cells.Any(c => c.Status == "ready"))
@@ -762,7 +762,7 @@ try
                                     }
                                     catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
                                     {
-                                        await maintenanceJournal.AppendAsync("transport-growth-error", new { error = error.GetType().FullName, error.Message }, token);
+                                        await maintenanceJournal.AppendAsync("transport-growth-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
                                     }
                                     // A radar charts ore and oil for hours before they are needed: on seed 20261072 crude oil took ten
                                     // blind exploration goals (about 640 local steps). It is built once its recipe is enabled.
@@ -782,13 +782,13 @@ try
                                     }
                                     catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
                                     {
-                                        await maintenanceJournal.AppendAsync("radar-growth-error", new { error = error.GetType().FullName, error.Message }, token);
+                                        await maintenanceJournal.AppendAsync("radar-growth-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
                                     }
                                 }
                             }
                             catch (Exception error) when (!token.IsCancellationRequested)
                             {
-                                await maintenanceJournal.AppendAsync("factory-maintenance-error", new { error = error.GetType().FullName, error.Message }, token);
+                                await maintenanceJournal.AppendAsync("factory-maintenance-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
                                 throw;
                             }
                         }).RunAsync(maxGoals, runDeadline.Token);
