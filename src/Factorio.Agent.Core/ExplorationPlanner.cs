@@ -24,6 +24,18 @@ public sealed class ExplorationPlanner
     private readonly HashSet<(int X, int Y)> observed = [];
     private readonly Dictionary<string, SpatialEntity> resources = [];
     private readonly Dictionary<string, StationaryThreat> threats = [];
+    private readonly Dictionary<string, MapPosition> cliffs = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Cliff segments seen during this planner's trip, for a coarse detour around their lines. On 2026-10-08 (seed 987654321) a
+    /// cliff line west of the actor stood between it and the base 500 tiles away and the local steps paced along it.
+    /// </summary>
+    public IReadOnlyList<MapPosition> RememberCliffs(SpatialSnapshot map)
+    {
+        foreach (var cliff in map.Entities.Where(e => map.Prototypes.TryGetValue(e.Name, out var p) && p.Type == "cliff"))
+            cliffs[cliff.Id] = cliff.Position;
+        return cliffs.Values.ToArray();
+    }
     private readonly Dictionary<(int X, int Y), int> visits = [];
     private readonly Dictionary<(int X, int Y), int> frontierAttempts = [];
     private MapPosition? origin;

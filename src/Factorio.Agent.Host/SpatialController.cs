@@ -360,7 +360,9 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
                 .Select(n => (n.Position, n.Range is { } range ? range + NestMemory.WormGuardMargin : NestMemory.SpawnerGuardRadius)).ToArray() : null;
             // A long way through remembered nests follows a coarse detour around their guards; the local steps aim at its next point.
             var aim = destination ?? remembered?.Position ?? hint?.Position ?? ring;
-            var detour = aim is { } target && guards is { Length: > 0 } ? GuardedRoute.Waypoint(map.Actor.Position, target, guards) : null;
+            // Cliff lines seen on the way are walked around as well; their unseen parts count as open until observed.
+            (MapPosition Center, double Radius)[] obstacles = [.. guards ?? [], .. planner.RememberCliffs(map).Select(c => (c, CliffRadius))];
+            var detour = aim is { } target && obstacles.Length > 0 ? GuardedRoute.Waypoint(map.Actor.Position, target, obstacles) : null;
             if (detour == aim) detour = null;
             try
             {
@@ -383,6 +385,9 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             }
         }
     }
+
+    /// <summary>Half the span of a native cliff segment, as the detour planner's keep-out radius around it.</summary>
+    private const double CliffRadius = 4;
 
     /// <summary>How far the actor walks inside a clearing to reach the tree it clears next.</summary>
     private const double ClearingEdgeRadius = 12;

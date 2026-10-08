@@ -23,6 +23,18 @@ public sealed class GuardedRouteTests
     }
 
     [Fact]
+    public void ALineOfCliffSegmentsIsWalkedAroundAtItsSeenEnd()
+    {
+        // Seed 987654321 on 2026-10-08: a cliff line west of the actor stood between it and the base and the steps paced along it.
+        (MapPosition, double)[] cliffs = [.. Enumerable.Range(0, 30).Select(i => (new MapPosition(300, 320 + 4 * i), 4.0))];
+        var from = new MapPosition(312, 386);
+        var waypoint = GuardedRoute.Waypoint(from, new(-32, -50), cliffs)!;
+        Assert.False(GuardedRoute.Crosses(from, waypoint, cliffs), $"The way to {waypoint} crosses the cliff line.");
+        // The seen line ends at y 436 to the south and 320 to the north: the detour passes one of its ends.
+        Assert.True(waypoint.Y < 320 || waypoint.Y > 436, $"The detour point {waypoint} does not round the line.");
+    }
+
+    [Fact]
     public void GuardsHoldingTheStartOrTheDestinationDoNotDivertTheTrip()
     {
         Assert.Equal(To, GuardedRoute.Waypoint(From, To, [(To, 48), (From, 48)]));
