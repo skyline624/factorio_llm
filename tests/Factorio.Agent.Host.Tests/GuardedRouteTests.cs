@@ -34,6 +34,23 @@ public sealed class GuardedRouteTests
     }
 
     [Fact]
+    public void WhenNoWayLeadsAroundGuardsAndCliffsTheCliffsAloneAreWalkedAround()
+    {
+        // Seed 987654321 on 2026-10-08: nests beyond a cliff-walled valley closed every way around both and the detour was dropped.
+        // A valley walled west, east and south by cliffs, its northern mouth held by a nest.
+        (MapPosition, double)[] wall = [.. Enumerable.Range(0, 26).SelectMany(i => new[] { (new MapPosition(300, 300 + 4 * i), 4.0),
+            (new MapPosition(360, 300 + 4 * i), 4.0) }), .. Enumerable.Range(0, 16).Select(i => (new MapPosition(300 + 4 * i, 400), 4.0))];
+        (MapPosition, double)[] nests = [(new(330, 290), 30)];
+        var from = new MapPosition(330, 355);
+        MapPosition home = new(-32.5, -50.5);
+        Assert.Null(GuardedRoute.Waypoint(from, home, [.. nests, .. wall]));
+        var around = GuardedRoute.Around(from, home, nests, wall)!;
+        Assert.Equal(GuardedRoute.Waypoint(from, home, wall), around);
+        Assert.False(GuardedRoute.Crosses(from, around, wall));
+        Assert.Equal(home, GuardedRoute.Around(new(0, 0), home, [], []) ?? home);
+    }
+
+    [Fact]
     public void NeighbouringStartsShareTheSameDetour()
     {
         // Seed 987654321 on 2026-10-08: a grid moving with the actor sent it south-east from one point and five tiles away from

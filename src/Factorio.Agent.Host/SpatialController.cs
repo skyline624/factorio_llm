@@ -370,8 +370,7 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             var cliffs = planner.RememberCliffs(map);
             if (aim is { } far && game is ICliffMemoryReader cliffReader)
                 cliffs = [.. cliffs.Concat((await cliffReader.ReadCliffMemoryAsync(map.Scope, token)).Near(map.Actor.Position, far, GuardedRoute.Margin)).Distinct()];
-            (MapPosition Center, double Radius)[] obstacles = [.. guards ?? [], .. cliffs.Select(c => (c, CliffRadius))];
-            var detour = aim is { } target && obstacles.Length > 0 ? GuardedRoute.Waypoint(map.Actor.Position, target, obstacles) : null;
+            var detour = aim is { } target ? GuardedRoute.Around(map.Actor.Position, target, guards ?? [], [.. cliffs.Select(c => (c, CliffRadius))]) : null;
             if (detour == aim) detour = null;
             try
             {

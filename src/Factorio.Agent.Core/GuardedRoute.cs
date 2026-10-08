@@ -69,6 +69,16 @@ public static class GuardedRoute
         return null;
     }
 
+    /// <summary>
+    /// The detour around nest guards and cliff walls together, else around the walls alone: cliffs cannot be crossed, a guard can.
+    /// On 2026-10-08 (seed 987654321) no way led around both from a cliff-walled valley, the detour was dropped, and the steps
+    /// aimed straight at the wall while the way around the cliffs alone led north.
+    /// </summary>
+    public static MapPosition? Around(MapPosition from, MapPosition to, IReadOnlyList<(MapPosition Center, double Radius)> guards,
+        IReadOnlyList<(MapPosition Center, double Radius)> walls) =>
+        (guards.Count + walls.Count > 0 ? Waypoint(from, to, [.. guards, .. walls]) : null)
+        ?? (walls.Count > 0 ? Waypoint(from, to, walls) : null);
+
     /// <summary>Whether the straight segment passes inside a guard.</summary>
     public static bool Crosses(MapPosition a, MapPosition b, IReadOnlyList<(MapPosition Center, double Radius)> guards) =>
         guards.Any(g => Distance(g.Center, a, b) < g.Radius);
