@@ -272,6 +272,22 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         // frame or corridor while ordinary links used surface belts only.
         var equipment = PowerFuelTransport.SelectEquipment(catalog);
         string? alternativeInserter = target.Kind == "power" ? PowerFuelTransport.SelectAlternativeInserter(catalog) : null;
+        // An input chest no arm can feed is refused before its corridor is walked: on 2026-10-08 (seed 20261106) a boiler's
+        // feeder chest stood between pipes, a turret and its own arm, and every round walked a 280-tile corridor to it from each
+        // of eight coal drills. The survey then starts from this end.
+        if (surveyed)
+        {
+            try
+            {
+                if (await TargetEnclosedAsync(state, target, to, steam, equipment, alternativeInserter, catalog, controller, token))
+                    return await RefusedAsync("target-port-enclosed");
+            }
+            catch (Exception error) when (error is NavigationPlanningException or EntityUnreachableException)
+            {
+                return await RefusedAsync("frame-unreachable");
+            }
+            frameEntities = [frameEntities[1], frameEntities[0], .. frameEntities.Skip(2)];
+        }
         SpatialSnapshot? map;
         // A frame or corridor no route reaches is one refused link, not a failed goal: on 2026-10-08 (seed 987654321) a coal
         // corridor survey met NoRouteOnKnownGrid and ended a research goal.
@@ -677,6 +693,19 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     private static string? Product(ProductionCatalog catalog, FactoryCell cell) => cell.Recipe is null ? null
         : catalog.Recipes.FirstOrDefault(r => r.Name == cell.Recipe)?.Products.FirstOrDefault(p => p.DeterministicItem)?.Name
             ?? (cell.IsResource ? cell.Recipe : null);
+    /// <summary>Whether the target's input chest, observed from beside it, admits no native arm position fed from a belt.</summary>
+    private async Task<bool> TargetEnclosedAsync(FactoryState state, FactoryCell target, MapPosition position,
+        PowerExpansionController.SteamItems? steam, BeltTransportEquipment equipment, string? alternativeInserter, ProductionCatalog catalog,
+        SpatialController controller, CancellationToken token)
+    {
+        string chest = target.Entities["input-chest"];
+        await controller.ApproachEntityAsync(chest, position, catalog, token);
+        var local = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam, equipment.UndergroundBelt, alternativeInserter), 32, token);
+        if (local.Scope != catalog.Scope) throw new InvalidDataException("Transport target check scope changed.");
+        return local.Entities.Any(e => e.Id == chest)
+            && PowerFuelTransport.InaccessibleFuelTargets(local, equipment, [chest], alternativeInserter, token).Count > 0;
+    }
+
     internal async Task<SpatialSnapshot?> CaptureFuelFrameAsync(FactoryState state, FactorySnapshot snapshot,
         IReadOnlyList<string> entityIds, PowerExpansionController.SteamItems? steam, ProductionCatalog catalog,
         SpatialController controller, CancellationToken token, string? undergroundBelt = null, string? alternativeInserter = null)
