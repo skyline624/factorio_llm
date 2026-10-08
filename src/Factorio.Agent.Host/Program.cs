@@ -763,7 +763,11 @@ try
                                     // An attack can cut cells from the generators; on 2026-10-01 (seed 20261002) the whole mining
                                     // area stayed on an unfed island for hours. Reconnect before the next decision.
                                     if (round?.Maintenance?.Unpowered.Count > 0)
-                                        await new FactoryCellBuilder(game, maintenanceJournal, session.Directory).RepairPowerAsync(token);
+                                        try { await new FactoryCellBuilder(game, maintenanceJournal, session.Directory).RepairPowerAsync(token); }
+                                        catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+                                        {
+                                            await maintenanceJournal.AppendAsync("power-repair-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
+                                        }
                                     // Parts this round could not rebuild for want of items are made now; the next round rebuilds them.
                                     if (round?.Maintenance?.Shortfall is { Count: > 0 } upkeep)
                                         try { await new UpkeepProcurement(game, maintenanceJournal, session.Directory).RunAsync(upkeep, token); }
