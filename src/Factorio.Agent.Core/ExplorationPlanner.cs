@@ -37,6 +37,8 @@ public sealed class ExplorationPlanner
         return cliffs.Values.ToArray();
     }
     private readonly Dictionary<(int X, int Y), int> visits = [];
+    /// <summary>Visits after which a step that neither approaches the target nor observes new ground is not taken again.</summary>
+    public const int PacingVisits = 3;
     private readonly Dictionary<(int X, int Y), int> frontierAttempts = [];
     private MapPosition? origin;
     private MapPosition? frontierGoal;
@@ -172,6 +174,10 @@ public sealed class ExplorationPlanner
                 // An ordinary step either approaches that frontier or observes some new terrain.
                 // A caller's destination retains its existing detours and is never replaced here.
                 if (towardFrontier && !Progresses(candidate, known)) continue;
+                // Nor does a caller's destination keep the actor pacing a pocket: on 2026-10-08 (seed 987654321) it walked
+                // between the four reachable points of a forest pocket for two hours. A worn step leaves the view blocked, and
+                // blocked navigation clears trees toward the destination.
+                if (!Progresses(candidate, known) && visits.GetValueOrDefault(candidate.Cell) >= PacingVisits) continue;
                 RoutePlan route = new RoutePlanner().Find(field, candidate.Point);
                 if (route.Status != RouteStatus.Found)
                 {

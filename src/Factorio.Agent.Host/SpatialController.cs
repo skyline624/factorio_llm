@@ -374,7 +374,8 @@ public sealed class SpatialController(IGameClient game, IControllerJournal journ
             // A forest band takes many trunks to cross (seed 987654321: a clearing 400 tiles from the base).
             catch (ExplorationBlockedException) when (cleared < 48)
             {
-                if (!await ClearTreeAsync(map, catalog, destination, token)) throw;
+                // Toward the detour when there is one: the straight way may lie behind the cliffs it avoids.
+                if (!await ClearTreeAsync(map, catalog, detour ?? destination, token)) throw;
             }
             catch (ExplorationDangerException error)
             {

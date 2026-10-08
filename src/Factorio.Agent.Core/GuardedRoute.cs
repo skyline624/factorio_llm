@@ -22,7 +22,9 @@ public static class GuardedRoute
     {
         var active = guards.Where(g => g.Center.DistanceTo(to) > g.Radius && g.Center.DistanceTo(from) > g.Radius).ToArray();
         if (!Crosses(from, to, active)) return to;
-        double minX = Math.Min(from.X, to.X) - Margin, minY = Math.Min(from.Y, to.Y) - Margin;
+        // World-anchored cells: a grid moving with the actor changed the detour at every step. On 2026-10-08 (seed 987654321)
+        // it pointed south-east from one point and five tiles away from the next, and the actor walked between them for hours.
+        double minX = Math.Floor((Math.Min(from.X, to.X) - Margin) / Cell) * Cell, minY = Math.Floor((Math.Min(from.Y, to.Y) - Margin) / Cell) * Cell;
         int width = (int)Math.Ceiling((Math.Abs(from.X - to.X) + 2 * Margin) / Cell) + 1;
         int height = (int)Math.Ceiling((Math.Abs(from.Y - to.Y) + 2 * Margin) / Cell) + 1;
         MapPosition Center((int X, int Y) c) => new(minX + c.X * Cell, minY + c.Y * Cell);

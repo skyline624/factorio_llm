@@ -23,6 +23,18 @@ public sealed class GuardedRouteTests
     }
 
     [Fact]
+    public void NeighbouringStartsShareTheSameDetour()
+    {
+        // Seed 987654321 on 2026-10-08: a grid moving with the actor sent it south-east from one point and five tiles away from
+        // the next, and it walked between them for hours.
+        (MapPosition, double)[] cliffs = [.. Enumerable.Range(0, 30).Select(i => (new MapPosition(300, 320 + 4 * i), 4.0))];
+        MapPosition home = new(-32, -50);
+        var detours = new[] { new MapPosition(312, 386), new(313, 387), new(314, 385), new(311.5, 386.5) }
+            .Select(from => GuardedRoute.Waypoint(from, home, cliffs)).Distinct().ToArray();
+        Assert.Single(detours);
+    }
+
+    [Fact]
     public void ALineOfCliffSegmentsIsWalkedAroundAtItsSeenEnd()
     {
         // Seed 987654321 on 2026-10-08: a cliff line west of the actor stood between it and the base and the steps paced along it.

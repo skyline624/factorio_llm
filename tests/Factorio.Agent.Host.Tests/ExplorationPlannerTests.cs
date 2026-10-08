@@ -61,6 +61,34 @@ public sealed class ExplorationPlannerTests
     }
 
     [Fact]
+    public void APocketThatNeverApproachesTheDestinationIsReportedBlockedInsteadOfPaced()
+    {
+        // Seed 987654321, 2026-10-08: the actor walked between four reachable points of a forest pocket for two hours.
+        var map = Map(new(0, 0));
+        // Solid ground all round a pocket open only to the south of the actor, away from the destination.
+        map = map with { Entities = [Block("north", -48, -48, 49, -2), Block("south", -48, 40, 49, 49), Block("west", -48, -2, -30, 40),
+            Block("east", 30, -2, 49, 40)] };
+        var surveyed = Enumerable.Range(-40, 80).SelectMany(x => Enumerable.Range(-40, 80).Select(y => new SurveyedCell(x, y))).ToArray();
+        var planner = new ExplorationPlanner();
+        var field = new SpatialCollisionField(map, ExplorationPlanner.ThreatMargin);
+        var taken = new Dictionary<MapPosition, int>();
+        Assert.Throws<ExplorationBlockedException>(() =>
+        {
+            for (int step = 0; step < 1000; step++)
+            {
+                var point = planner.Choose(map, "", Catalog(), new(0, -200), surveyed);
+                Assert.Equal(RouteStatus.Found, new RoutePlanner().Find(field, point).Status);
+                taken[point] = taken.GetValueOrDefault(point) + 1;
+            }
+        });
+        Assert.NotEmpty(taken);
+        Assert.All(taken.Values, visits => Assert.True(visits <= ExplorationPlanner.PacingVisits));
+
+        static SpatialEntity Block(string id, double x0, double y0, double x1, double y1) =>
+            new(id, "wall", new((x0 + x1) / 2, (y0 + y1) / 2), new(new(x0, y0), new(x1, y1)), 0, "neutral");
+    }
+
+    [Fact]
     public void SeeingAFrontierDoesNotReverseTheWalkBeforeApproachingIt()
     {
         var planner = new ExplorationPlanner();
