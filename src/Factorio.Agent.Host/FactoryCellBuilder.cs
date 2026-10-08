@@ -352,7 +352,11 @@ public sealed class FactoryCellBuilder(IGameClient game, IControllerJournal jour
         if (map.Entities.Any(e => e.Id == $"{name}:{zone.Id}")) return map;
         var box = new WorldBox(zone.Origin, new(zone.Origin.X + zone.Slots * zone.Pitch, zone.Origin.Y + zone.BandHeight));
 
-        var pole = map.Prototypes[map.Items[poleItem].EntityName];
+        // The reservation only borrows a pole's collision layers. A photograph taken for an older cell may hold its small pole while
+        // steam growth names the medium one (seed 20261106, 2026-10-08: a research goal failed on the missing key).
+        var pole = map.Items.TryGetValue(poleItem, out var placeable) ? map.Prototypes[placeable.EntityName]
+            : map.Prototypes.Values.FirstOrDefault(p => p.Type == "electric-pole")
+                ?? throw new KeyNotFoundException($"No electric pole geometry was observed to reserve zone {zone.Id}.");
         return map with
         {
             Prototypes = new Dictionary<string, EntityGeometry>(map.Prototypes) { [name] = pole with { Name = name, Type = "reservation" } },
