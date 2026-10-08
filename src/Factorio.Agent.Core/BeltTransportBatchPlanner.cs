@@ -41,7 +41,7 @@ public sealed class BeltTransportBatchPlanner(Action<BeltTransportBatchProgress>
             || r.SourceIds.Distinct(StringComparer.Ordinal).Count() != r.SourceIds.Count))
             throw new ArgumentException("A batch requires one to eight valid requests with distinct candidate sources.", nameof(requests));
         if (maximumSearches is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(maximumSearches));
-        if (maximumBelts is < 1 or > 1536 || nodeBudget is < 1 or > 100000) throw new ArgumentOutOfRangeException(nameof(maximumBelts));
+        if (maximumBelts is < 1 or > 1536 || nodeBudget is < 1 or > BeltTransportPlanner.MaximumNodeBudget) throw new ArgumentOutOfRangeException(nameof(maximumBelts));
         if (maximumLinks is < 1 or > 8) throw new ArgumentOutOfRangeException(nameof(maximumLinks));
         int? assignmentUpperBound = stopAfterMaximumAssignments ? AssignmentBound(map, equipment, requests, token) : null;
         int? assignmentLimit = maximumLinks is { } limit ? Math.Min(limit, assignmentUpperBound ?? requests.Count) : assignmentUpperBound;

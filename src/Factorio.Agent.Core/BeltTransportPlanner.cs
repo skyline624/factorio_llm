@@ -6,12 +6,23 @@ public sealed record BeltTransportPlan(PlacementCandidate SourceInserter, Placem
 
 public sealed class BeltTransportPlanner
 {
+    /// <summary>Largest node budget one route search may spend; about ten seconds of search on 2026 hardware.</summary>
+    public const int MaximumNodeBudget = 1_000_000;
+
+    /// <summary>
+    /// A node budget that lets a surface search flood its whole frame and leaves a crossing search twice that, never below the
+    /// caller's minimum. On 2026-10-08 (seed 20261106) every coal link to a power cell across a 286 x 285 corridor exhausted a
+    /// 24 000-node budget, a third of the frame, after four seconds of a 45-second planning budget.
+    /// </summary>
+    public static int FrameBudget(SpatialSnapshot map, int minimum) => (int)Math.Clamp(
+        3 * (map.Bounds.Max.X - map.Bounds.Min.X) * (map.Bounds.Max.Y - map.Bounds.Min.Y), minimum, MaximumNodeBudget);
+
     public BeltTransportPlan? Find(SpatialSnapshot map, BeltTransportEquipment equipment, string sourceId, string targetId,
         CancellationToken cancellationToken = default, int maximumBelts = 200, int nodeBudget = 12000,
         Func<BeltTransportPlan, bool>? eligible = null, PlacementCandidate? sourceInserter = null,
         PlacementCandidate? targetInserter = null)
     {
-        if (maximumBelts is < 1 or > 1536 || nodeBudget is < 1 or > 100000) throw new ArgumentOutOfRangeException(nameof(maximumBelts));
+        if (maximumBelts is < 1 or > 1536 || nodeBudget is < 1 or > MaximumNodeBudget) throw new ArgumentOutOfRangeException(nameof(maximumBelts));
         var source = map.Entities.Single(e => e.Id == sourceId);
         var target = map.Entities.Single(e => e.Id == targetId);
         var arm = map.Prototypes[map.Items[equipment.Inserter].EntityName];

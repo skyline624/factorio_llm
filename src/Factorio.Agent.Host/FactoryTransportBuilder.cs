@@ -303,6 +303,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         if (bus is null)
         {
             BeltTransportPlan? plan;
+            bool budgetSpent = false;
             if (target.Kind == "power")
             {
                 BeltTransportRequest[] requests = [new(target.Entities["input-chest"], [source.Entities["output-chest"]])];
@@ -313,10 +314,21 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
                     links = search.Plan?.Links.Count, search.Plan?.Searches, search.Plan?.BudgetExhausted,
                     search.Plan?.AssignmentUpperBound, budgetSeconds = 45, map.CollectedTick }, token);
                 plan = search.Plan?.Links.SingleOrDefault()?.Plan;
+                budgetSpent = plan is null && search.Plan?.BudgetExhausted != false;
             }
-            else plan = new BeltTransportPlanner().Find(map, equipment, source.Entities["output-chest"], target.Entities["input-chest"], token,
-                maximumBelts: surveyed ? TransportCorridorSurvey.MaximumBelts : 200, nodeBudget: surveyed ? 100000 : 12000);
-            if (plan is null) return await RefusedAsync(surveyed ? "no-corridor-route" : "no-local-route");
+            else
+            {
+                // Supervised like the fuel search, so a long corridor neither freezes the controller nor ends the growth round.
+                var frame = map;
+                try
+                {
+                    plan = await ControllerPlanning.RunAsync(t => new BeltTransportPlanner().Find(frame, equipment, source.Entities["output-chest"],
+                        target.Entities["input-chest"], t, maximumBelts: surveyed ? TransportCorridorSurvey.MaximumBelts : 200,
+                        nodeBudget: BeltTransportPlanner.FrameBudget(frame, surveyed ? 100000 : 12000)), controller, RouteSearchBudget, token);
+                }
+                catch (Exception error) when (error is TimeoutException or PlanningBudgetExceededException) { plan = null; budgetSpent = true; }
+            }
+            if (plan is null) return await RefusedAsync(budgetSpent ? "route-search-budget" : surveyed ? "no-corridor-route" : "no-local-route");
             var record = NewBus(sourceCellId, targetCellId, item, maximum, plan, map.CollectedTick, equipment);
             await registry.SaveAsync(state.With(record.Cell).With(record.Bus), token);
             await journal.AppendAsync("factory-transport-plan", new { bus = record.Bus, record.Cell.Plan, map.CollectedTick }, token);
@@ -442,6 +454,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         : cell.Recipe is null ? null : catalog.Recipes.FirstOrDefault(r => r.Name == cell.Recipe);
 
     internal static bool IsSciencePack(string item) => item.EndsWith("-science-pack", StringComparison.Ordinal);
+
+    /// <summary>Wall-clock bound of one link's route search.</summary>
+    internal static readonly TimeSpan RouteSearchBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>Coal a stone or steel furnace burns per minute at full load: 90 kW over 4 MJ per piece, rounded up.</summary>
     internal const double FurnaceFuelPerMinute = 1.5;

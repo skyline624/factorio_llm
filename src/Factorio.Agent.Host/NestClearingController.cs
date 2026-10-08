@@ -101,9 +101,9 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         if (choices.Count == 0) return new("no-ammunition", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick);
         // The actor's own reserve stays loaded: the step's magazines come on top of the survival kit.
         long magazines = (long)TurretsPerStep * MagazinesPerTurret + SurvivalKitPlanner.MagazineReserve;
-        string? ammunition = choices.FirstOrDefault(a => AttackResponseController.Affordable(catalog, turret, a,
+        string? ammunition = Armament(choices, a => AttackResponseController.Affordable(catalog, turret, a,
             (int)(magazines / TurretsPerStep) + 1, stock, TurretsPerStep) == TurretsPerStep);
-        if (ammunition is null) return new("no-stock", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick);
+        if (ammunition is null) return new("no-stock", nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick, choices[0]);
         if (nest.Structures.Any(s => (overmatched ?? []).Any(o => o.Structure == s.Name && o.Ammunition == ammunition)))
             return new(UnderArmed, nest.Center, nest.Spawners, nest.Worms, 0, 0, [], tick, ammunition);
         // Portable defense draws from the same bag on the way in; on 2026-10-06 most assault steps in all three normal campaigns
@@ -126,6 +126,14 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             return (await ClearAsync(catalog, nest, turret, ammunition, kit, extra, token)) with { Ammunition = ammunition };
         }
     }
+
+    /// <summary>
+    /// The strongest compatible rounds when a whole step of them is affordable, otherwise none: weaker rounds are never the
+    /// fallback. On 2026-10-08 (seed 20261107, evolution 0.37) piercing rounds lacked steel, the assault went in with firearm
+    /// magazines, which medium biters' flat physical resistance reduces to under one damage per round, and the actor died.
+    /// </summary>
+    internal static string? Armament(IReadOnlyList<string> strongestFirst, Func<string, bool> affordable) =>
+        strongestFirst.Count > 0 && affordable(strongestFirst[0]) ? strongestFirst[0] : null;
 
     /// <summary>Outcome when a structure of the nest already overmatched the only affordable ammunition.</summary>
     internal const string UnderArmed = "under-armed";

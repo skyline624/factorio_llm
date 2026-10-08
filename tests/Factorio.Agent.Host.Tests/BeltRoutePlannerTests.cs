@@ -123,6 +123,32 @@ public sealed class BeltRoutePlannerTests
         Assert.DoesNotContain(route.Belts, b => b.Position == drop);
     }
 
+    [Fact]
+    public void ALongDetourFitsTheBudgetScaledToItsFrame()
+    {
+        // Seed 20261106, 2026-10-08: coal links across a 286 x 285 corridor exhausted a fixed 24 000-node budget.
+        var map = Map();
+        SpatialEntity Box(string id, double x0, double y0, double x1, double y1) =>
+            new(id, "wall", new((x0 + x1) / 2, (y0 + y1) / 2), new(new(x0, y0), new(x1, y1)), 0, "own");
+        map = map with
+        {
+            Bounds = new(new(-150, -150), new(150, 150)),
+            Rows = Enumerable.Range(-150, 300).Select(y => new TileRun(-150, y, 300, "grass")).ToArray(),
+            // A base open toward the source, 120 tiles tall, between both ends.
+            Entities = [Box("top", -30, -60, 30, -58), Box("bottom", -30, 58, 30, 60), Box("back", 28, -60, 30, 60)]
+        };
+        MapPosition start = new(-140.5, .5), target = new(140.5, .5);
+        Assert.Equal(BeltRouteStatus.BudgetExceeded, new BeltRoutePlanner().Find(map, "belt", start, target, 12000).Status);
+        int budget = BeltTransportPlanner.FrameBudget(map, 24000);
+        Assert.Equal(270000, budget);
+        var route = new BeltRoutePlanner().Find(map, "belt", start, target, budget);
+        Assert.Equal(BeltRouteStatus.Found, route.Status);
+        Assert.True(route.ExpandedNodes > 12000);
+        Assert.Equal(BeltTransportPlanner.MaximumNodeBudget,
+            BeltTransportPlanner.FrameBudget(map with { Bounds = new(new(-1000, -1000), new(1000, 1000)) }, 24000));
+        Assert.Equal(24000, BeltTransportPlanner.FrameBudget(map with { Bounds = new(new(0, 0), new(10, 10)) }, 24000));
+    }
+
     internal static SpatialSnapshot Map()
     {
         var map = SpatialPlannerTests.Map([]);

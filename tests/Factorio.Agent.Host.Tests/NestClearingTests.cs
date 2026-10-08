@@ -80,6 +80,17 @@ public sealed class NestClearingTests
     }
 
     [Fact]
+    public void AnAssaultNeverFallsBackToWeakerRounds()
+    {
+        string[] choices = ["piercing-rounds-magazine", "firearm-magazine"];
+        Assert.Equal("piercing-rounds-magazine", NestClearingController.Armament(choices, _ => true));
+        // Seed 20261107, 2026-10-08: piercing rounds lacked steel and firearm magazines lost the actor to medium biters.
+        Assert.Null(NestClearingController.Armament(choices, a => a == "firearm-magazine"));
+        Assert.Equal("firearm-magazine", NestClearingController.Armament(["firearm-magazine"], _ => true));
+        Assert.Null(NestClearingController.Armament([], _ => true));
+    }
+
+    [Fact]
     public void TheScoutingRingStartsTowardTheLatestAttackAroundIndustry()
     {
         var attacks = new AttackLogState(1, "world", [
