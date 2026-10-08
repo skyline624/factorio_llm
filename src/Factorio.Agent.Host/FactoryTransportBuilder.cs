@@ -254,19 +254,19 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             return true;
         }
         // A branched graph has no single ordered tail. Retain it until graph-aware extension is available.
-        if (bus?.Graph is not null) return false;
+        if (bus?.Graph is not null) return await RefusedAsync("branched-bus");
         var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
         if (snapshot.Scope != catalog.Scope) throw new InvalidDataException("Factory transport scope changed.");
         if (target.Kind == "power") PowerExpansionController.ValidateRegisteredFeeder(snapshot, target);
-        if (bus is not null && !FactoryTransportHealth.Healthy(state, snapshot, bus)) return false;
+        if (bus is not null && !FactoryTransportHealth.Healthy(state, snapshot, bus)) return await RefusedAsync("unhealthy-bus");
         var from = Position(snapshot, source.Entities["output-chest"]);
         var to = Position(snapshot, target.Entities["input-chest"]);
-        if (from is null || to is null) return false;
+        if (from is null || to is null) return await RefusedAsync("chest-not-observed");
         var frameEntities = FrameEntities(state, source, target, bus);
         int approachTiles = target.Kind == "power" ? 1 : 4;
         var frameCenter = PlanningCenter(snapshot, frameEntities, approachTiles, target.Kind == "power" ? FuelPlanningRadius : 48);
         bool surveyed = frameCenter is null;
-        if (surveyed && !TransportCorridorSurvey.CanSurvey(snapshot, frameEntities)) return false;
+        if (surveyed && !TransportCorridorSurvey.CanSurvey(snapshot, frameEntities)) return await RefusedAsync("corridor-not-surveyable");
         var steam = await new PowerExpansionController(game, journal, directory).SteamItemsAsync(catalog, token);
         var equipment = target.Kind == "power" ? PowerFuelTransport.SelectEquipment(catalog) : Equipment;
         string? alternativeInserter = target.Kind == "power" ? PowerFuelTransport.SelectAlternativeInserter(catalog) : null;
@@ -281,10 +281,10 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             await controller.TravelAsync(frameCenter!, approachTiles, catalog, token);
             map = await new SpatialClient(game).CaptureAsync(GeometryItems(state, steam), 48, token);
         }
-        if (map is null) return false;
+        if (map is null) return await RefusedAsync("no-frame");
         if (map.Scope != catalog.Scope) throw new InvalidDataException("Transport planning scope changed.");
         if (frameEntities.Any(id => !map.Entities.Any(e => e.Id == id)) || map.Prototypes[map.Items[Equipment.Inserter].EntityName].FilterSlots is not > 0)
-            return false;
+            return await RefusedAsync("frame-misses-endpoints");
         await journal.AppendAsync("factory-transport-frame", new { map.Scope, map.CollectedTick, sourceCellId, targetCellId,
             requestedCenter = frameCenter, observedCenter = map.Actor.Position, map.Bounds, equipment,
             requiredEntities = frameEntities.Length }, token);
@@ -305,7 +305,7 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             }
             else plan = new BeltTransportPlanner().Find(map, equipment, source.Entities["output-chest"], target.Entities["input-chest"], token,
                 maximumBelts: surveyed ? TransportCorridorSurvey.MaximumBelts : 200, nodeBudget: surveyed ? 100000 : 12000);
-            if (plan is null) return false;
+            if (plan is null) return await RefusedAsync(surveyed ? "no-corridor-route" : "no-local-route");
             var record = NewBus(sourceCellId, targetCellId, item, maximum, plan, map.CollectedTick, equipment);
             await registry.SaveAsync(state.With(record.Cell).With(record.Bus), token);
             await journal.AppendAsync("factory-transport-plan", new { bus = record.Bus, record.Cell.Plan, map.CollectedTick }, token);
@@ -313,13 +313,13 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
             return true;
         }
         var current = state.Cells.Single(c => c.Id == bus.CellId);
-        if (current.Plan?.Values.Any(p => p.UndergroundType is not null) == true) return false;
+        if (current.Plan?.Values.Any(p => p.UndergroundType is not null) == true) return await RefusedAsync("underground-bus");
         var plans = new Dictionary<string, PlannedEntity>(current.Plan!, StringComparer.Ordinal);
         string consumerRole = $"target-inserter-{bus.Consumers.Count}";
         var roles = FactoryTransportHealth.Belts(current);
-        if (roles.Any(r => !map.Entities.Any(e => e.Id == current.Entities[r]))) return false;
+        if (roles.Any(r => !map.Entities.Any(e => e.Id == current.Entities[r]))) return await RefusedAsync("bus-not-observed");
         var extension = new FactoryBeltPlanner().Extend(map, Equipment, roles.Select(r => current.Entities[r]).ToArray(), target.Entities["input-chest"], token);
-        if (extension is null) return false;
+        if (extension is null) return await RefusedAsync("no-extension");
         Add(consumerRole, Equipment.Inserter, extension.TargetInserter);
         Add(roles[^1], Equipment.Belt, extension.Belts[0]);
         for (int i = 1; i < extension.Belts.Count; i++) Add($"belt-{roles.Length + i - 1}", Equipment.Belt, extension.Belts[i]);
@@ -334,6 +334,13 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
         return true;
 
         void Add(string role, string equipment, PlacementCandidate p) => plans[role] = new(role, equipment, p.Position, p.Direction);
+
+        // Each refusal is journaled so the remaining hand deliveries can be traced to a cause (2026-10-08: none was).
+        async Task<bool> RefusedAsync(string reason)
+        {
+            await journal.AppendAsync("factory-transport-link-refused", new { sourceCellId, targetCellId, item, reason }, token);
+            return false;
+        }
     }
 
     public async Task<bool> LinkPairAsync(string sourceCellId, string firstCellId, string secondCellId, string item,

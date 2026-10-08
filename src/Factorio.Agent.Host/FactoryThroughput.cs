@@ -10,7 +10,13 @@ public sealed record RecipeThroughput(string Recipe, int Machines, double Nomina
     double Utilization, IReadOnlyDictionary<string, int> States);
 public sealed record ThroughputReport(long FromTick, long ToTick, IReadOnlyList<RecipeThroughput> Recipes,
     IReadOnlyDictionary<string, double> ItemsPerMinute, IReadOnlyDictionary<string, double> Targets, IReadOnlyDictionary<string, int> LabStates,
-    int Working, int Machines);
+    int Working, int Machines, InputCoverage? Coverage = null);
+/// <summary>
+/// Solid cell inputs (cell, ingredient) a healthy bus covers versus those the actor still delivers, laboratories fed by hand and
+/// fuel-burning furnace cells the actor refuels.
+/// </summary>
+public sealed record InputCoverage(int Inputs, int BeltFed, IReadOnlyDictionary<string, int> HandFedByItem, int HandFedLaboratories,
+    int HandFuelledFurnaces);
 public sealed record ThroughputState(int Version, string WorldId, ThroughputSample Sample, ThroughputReport? Report);
 
 /// <summary>
@@ -31,6 +37,7 @@ public sealed class FactoryThroughput(IGameClient game, IControllerJournal journ
         var state = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
         var previous = await LoadAsync(catalog.Scope.WorldId, token);
         var (sample, report) = Measure(snapshot, previous?.Sample, catalog, state.Targets ?? new Dictionary<string, double>());
+        report = report is null ? null : report with { Coverage = Coverage(state, snapshot, catalog) };
         await LocalJson.WriteAsync(StatePath, new ThroughputState(1, catalog.Scope.WorldId, sample, report ?? previous?.Report), token);
         if (report is not null) await journal.AppendAsync("factory-throughput", report, token);
         return report;
@@ -81,6 +88,21 @@ public sealed class FactoryThroughput(IGameClient game, IControllerJournal journ
         static Dictionary<string, int> States(IEnumerable<FactoryRecord> records) => records
             .GroupBy(r => Text(r, "statusName") ?? "unknown", StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+    }
+
+    internal static InputCoverage Coverage(FactoryState state, FactorySnapshot snapshot, ProductionCatalog catalog)
+    {
+        var connected = FactoryTransportCoverage.Connected(state, snapshot, catalog, FactoryLogistics.CellShares(catalog, state));
+        var ready = state.Cells.Where(c => c.Status == "ready").ToArray();
+        var needs = ready.Where(c => c.Recipe is not null && c.Entities.ContainsKey("input-chest"))
+            .SelectMany(c => (catalog.Recipes.FirstOrDefault(r => r.Name == c.Recipe)?.Ingredients ?? []).Where(i => i.DeterministicItem)
+                .Select(i => (Chest: c.Entities["input-chest"], Item: i.Name))).Distinct().ToArray();
+        var hand = needs.Where(n => !connected.Contains(n)).GroupBy(n => n.Item, StringComparer.Ordinal).OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        // Resource smelters and band furnaces burn fuel the actor carries; electric furnaces need none.
+        int fuelled = ready.Count(c => c.Kind is "smelter" or FurnaceCellPlanner.Kind && c.Entities.TryGetValue("furnace", out _)
+            && snapshot.Records.Any(r => r.Kind == "inventory" && r.EntityId == c.Entities["furnace"] && r.Name.Contains("fuel", StringComparison.Ordinal)));
+        return new(needs.Length, needs.Length - hand.Values.Sum(), hand, ready.Count(c => c.Kind == "lab"), fuelled);
     }
 
     private static string? Text(FactoryRecord record, string property) =>

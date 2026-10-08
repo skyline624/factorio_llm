@@ -759,11 +759,13 @@ try
                                     try
                                     {
                                         using var growth = CancellationTokenSource.CreateLinkedTokenSource(token);
-                                        growth.CancelAfter(TimeSpan.FromMinutes(12));
+                                        // Belts replace hand deliveries for good (2026-10-08: two links per round left half to two thirds of
+                                        // the cell inputs carried by the actor), so a round may build up to eight in thirty minutes.
+                                        growth.CancelAfter(TimeSpan.FromMinutes(30));
                                         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), growth.Token));
                                         int links;
                                         using (ProductionReservations.EnterFactory(cells))
-                                            links = await new FactoryTransportBuilder(game, maintenanceJournal, session.Directory).ConnectAsync(catalog, 2, growth.Token);
+                                            links = await new FactoryTransportBuilder(game, maintenanceJournal, session.Directory).ConnectAsync(catalog, 8, growth.Token);
                                         await maintenanceJournal.AppendAsync("transport-growth", new { links }, token);
                                     }
                                     catch (Exception error) when (FactoryResearchController.Recoverable(error, token))

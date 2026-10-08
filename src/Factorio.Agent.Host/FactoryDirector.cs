@@ -121,7 +121,7 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
         if (await DeferAsync()) return plan;
         await GrowDeferredRawAsync(catalog, plan.RawPerMinute, deferredRaw, token, isObjectiveComplete);
         if (await DeferAsync()) return plan;
-        await new FactoryTransportBuilder(game, journal, directory).ConnectAsync(catalog, token: token);
+        await new FactoryTransportBuilder(game, journal, directory).ConnectAsync(catalog, 8, token);
         return plan;
 
         async Task<bool> DeferAsync()
