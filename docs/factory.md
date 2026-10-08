@@ -238,3 +238,9 @@ Une cellule n'a qu'un bras de chaque côté. Avec le bras de base (0,8 objet par
 ## Transfert vers une entité inaccessible
 
 Pendant une tournée logistique, une entité sans position d'interaction accessible (un coffre enfermé par de nouvelles cellules) ou dont la route est refusée est sautée (`factory-transfer-target-unreachable`) ; la tournée et l'objectif continuent. Le 7 octobre 2026, dans la partie normale de graine **987654321**, un tel coffre avait arrêté un objectif de recherche.
+
+## Débit mesuré
+
+`FactoryThroughput` mesure à chaque tour de maintenance entre deux objectifs ce que l'usine a réellement produit depuis le tour précédent : pour chaque machine de fabrication, le compteur natif `products_finished` et l'état natif (`statusName`) exportés dans la photographie d'usine ; pour chaque laboratoire, son état. Le rapport (`factory-throughput`, `factory-throughput.json`) donne par recette le nombre de machines, les fabrications mesurées par minute, la capacité nominale (vitesse native divisée par la durée de recette), l'utilisation et la répartition des états, puis les objets produits par minute face aux cibles enregistrées. Une machine construite depuis la photographie précédente n'a pas de compteur comparable et n'est pas comptée. Le planificateur reçoit ce rapport (`automatedFactory.measuredThroughput`).
+
+La première mesure, faite le 8 octobre 2026 sur les sauvegardes des trois parties normales (statistiques natives de production sur dix minutes), était nulle pour les packs de science chimique et les circuits : 34 à 52 ateliers attendaient des ingrédients (`item_ingredient_shortage`), 10 à 24 fours de fonderie du combustible (`no_fuel`), les raffineries avaient leur sortie pleine et 2 à 4 machines seulement travaillaient. Les capacités planifiées ne disent rien du débit tant que le personnage transporte les entrées entre les cellules.

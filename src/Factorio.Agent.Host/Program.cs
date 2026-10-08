@@ -742,6 +742,12 @@ try
                                 var cells = await new FactoryRegistry(session.Directory).LoadAsync(session.ProposedWorldId, token);
                                 if (cells.Cells.Any(c => c.Status == "ready"))
                                 {
+                                    // What the factory actually made since the previous round, before this round's deliveries change it.
+                                    try { await new FactoryThroughput(game, maintenanceJournal, session.Directory).MeasureAsync(token); }
+                                    catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+                                    {
+                                        await maintenanceJournal.AppendAsync("factory-throughput-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
+                                    }
                                     var round = await new FactoryLogistics(game, maintenanceJournal, session.Directory)
                                         .ServiceAsync(40, token, FactoryLogistics.BetweenGoalsFreshnessTicks, usePlannedBuffers: true);
                                     // An attack can cut cells from the generators; on 2026-10-01 (seed 20261002) the whole mining

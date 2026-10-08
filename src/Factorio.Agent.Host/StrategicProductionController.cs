@@ -40,6 +40,7 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
         var factoryState = factoryDirectory is null ? null : await new FactoryRegistry(factoryDirectory).LoadAsync(scope.WorldId, token);
         var transportReadiness = FactoryTransportConversion.Readiness(factoryState, factory, catalog, science.Technologies);
         var cells = factoryState is null ? [] : factoryState.Cells.Where(c => c.Status == "ready").ToArray();
+        var throughput = factoryDirectory is null ? null : await new FactoryThroughput(game, journal, factoryDirectory).LatestAsync(scope.WorldId, token);
         JsonElement agent = observation.Data.GetProperty("agent");
         var defenseSituation = await AttackResponseFacts.ReadAsync(factoryDirectory, factoryState, factory, defenses, agent, token);
         string observationId = $"{observation.Data.GetProperty("snapshotId").GetInt64()}:{observation.Tick}";
@@ -118,6 +119,13 @@ public sealed class StrategicProductionController(IGameClient game, IStrategicPl
                 laboratories = cells.Count(c => c.Kind == "lab"),
                 siloCells = cells.Count(c => c.Kind == SiloCellPlanner.Kind),
                 rawSupply = factoryState is null ? [] : FactoryDirector.RawSupply(factoryState),
+                measuredThroughput = throughput is null ? null : new
+                {
+                    fromTick = throughput.FromTick, toTick = throughput.ToTick, machines = throughput.Machines, working = throughput.Working,
+                    itemsPerMinute = throughput.ItemsPerMinute, targets = throughput.Targets, laboratories = throughput.LabStates,
+                    recipes = throughput.Recipes.Take(24).Select(r => new { r.Recipe, r.Machines, r.MeasuredCraftsPerMinute, r.Utilization, r.States }).ToArray(),
+                    interpretation = "Native finished crafts between two maintenance photographs. Utilization is measured crafts over the machines' nominal speed; item_ingredient_shortage and no_fuel states mean the cell waits for deliveries rather than lacks machines."
+                },
                 enabledDrills = catalog.Items.Where(p => p.Value.PlaceEntityType == "mining-drill" && FactoryDirector.Enabled(catalog, p.Key))
                     .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray(),
                 rawInterpretation = "Resource cells mine ore patches for plates, coal and stone. Explicit items_per_minute goals can grow their persistent capacity; construction and exploration are bounded. The actor still carries products and fuel between unconnected cells, and temporary stock requests may use an early drill. Burner drills burn coal and mine at half an electric drill's speed; depleted cells no longer produce. Registered rates are calculated capacity, not measured sustained throughput.",

@@ -296,6 +296,8 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             destroyed += outcome.Destroyed;
             lost += outcome.Lost;
             if (lost >= MaximumLostTurrets) { status = "turret-losses"; break; }
+            // A whole block lost without a kill will not fare better on the next step with the same rounds (seed 20261106: 4 then 4).
+            if (outcome.Destroyed == 0 && outcome.Lost > 0 && outcome.Lost == outcome.Turrets.Count) { status = "overmatched"; break; }
             if (outcome.Outcome == "stalled" && outcome.Destroyed == 0) { status = "stalled"; break; }
         }
         long tick = (await SafetyAsync(token)).Tick;
