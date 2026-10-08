@@ -121,6 +121,10 @@ public sealed class PowerExpansionPlannerTests
         Assert.Equal(["boiler", "engine-1", "engine-2"], plan.Machines.Select(m => m.Role));
         Assert.Equal([("boiler", "engine-1"), ("engine-1", "engine-2")], plan.Links.Select(l => (l.Source, l.Target)));
         AssertBuildable(map, plan);
+        // A tree the planning map left out still stops ordinary pipes unless a planned machine covers it (it is mined there): on
+        // 2026-10-08 a route proven through trees found none on the ground. The port's own tile is too narrow for any machine.
+        var tree = Entity("tree", "stone-wall", new(0.5, 4.5), 0);
+        Assert.Null(new PowerExpansionPlanner().Piped(map, "boiler", "steam-engine", "pipe", null, Force, reach: 32, pipeObstacles: [tree]));
         // Without a free water port nothing can be piped.
         var closed = map with { Entities = map.Entities.Select(e => e.Id != "boiler1" ? e : e with
             { FluidConnections = e.FluidConnections!.Select(p => p with { TargetEntityId = p.TargetEntityId ?? "w1" }).ToArray() }).ToArray() };

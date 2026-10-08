@@ -145,7 +145,8 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
             // A chain without room to grow in place continues on its own shore nearby, else on open land fed by a water pipe.
             plan = planner.Next(planning, items.Boiler, items.Engine, force)
                 ?? (items.Pump is { } pump ? planner.Site(planning, pump, items.Boiler, items.Engine, SiteReach) : null)
-                ?? (pipeItem is null ? null : planner.Piped(planning, items.Boiler, items.Engine, pipeItem, tunnelItem, force, SiteReach, token));
+                ?? (pipeItem is null ? null : planner.Piped(planning, items.Boiler, items.Engine, pipeItem, tunnelItem, force, SiteReach,
+                    map.Entities.Where(e => e.Id != map.Actor.Id && FactoryZonePlanner.Removable.Contains(map.Prototypes[e.Name].Type)).ToArray(), token));
             if (plan is not null) break;
         }
         if (plan is null) return null;
@@ -169,9 +170,23 @@ public sealed class PowerExpansionController(IGameClient game, IControllerJourna
         {
             // The water route is planned again on the ground as built, around bands kept for the factory, and proven natively.
             var zones = (await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token)).Zones;
-            await new PipeConnectionController(game, journal).RunAsync(plan.BoilerId, ids["boiler"], "water", token,
-                ground: current => zones.Aggregate(current, (reserved, zone) => FactoryCellBuilder.ReserveZone(reserved, zone, items.Pole)),
-                geometryItems: items.All);
+            try
+            {
+                await new PipeConnectionController(game, journal).RunAsync(plan.BoilerId, ids["boiler"], "water", token,
+                    ground: current => zones.Aggregate(current, (reserved, zone) => FactoryCellBuilder.ReserveZone(reserved, zone, items.Pole)),
+                    geometryItems: items.All);
+            }
+            catch (FluidSiteUnavailableException error)
+            {
+                // A dry unit is never part of a chain and would only hold its ground: its machines go back to the inventory.
+                foreach (var machine in plan.Machines.Reverse())
+                {
+                    await controller.ApproachEntityAsync(ids[machine.Role], machine.Placement.Position, catalog, token);
+                    Completed(await controller.WorkAsync("mine", new { entityId = ids[machine.Role], count = 1 }, 3600, token: token), "mine");
+                }
+                await journal.AppendAsync("power-piped-unit-recovered", new { plan.BoilerId, ids, error.Message }, token);
+                return null;
+            }
             map = await CaptureAsync(items, catalog, token, water);
         }
 

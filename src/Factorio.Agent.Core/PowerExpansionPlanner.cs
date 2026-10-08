@@ -133,8 +133,10 @@ public sealed class PowerExpansionPlanner
     /// Placements lie on a three-tile lattice within <paramref name="reach"/> of the source boiler so the bounded search spreads
     /// past the crowded installation; the route only proves the water can come, construction plans its own on observed ground.
     /// </summary>
+    /// <param name="pipeObstacles">Entities placement may clear but a pipe route must avoid, e.g. trees left off a planning map:
+    /// only those under the unit's machines are mined (seed 20261106: a planned route crossed trees and construction found none).</param>
     public SteamExpansionPlan? Piped(SpatialSnapshot map, string boilerItem, string engineItem, string pipeItem, string? undergroundItem,
-        string force, double reach, CancellationToken cancellationToken = default)
+        string force, double reach, IReadOnlyList<SpatialEntity>? pipeObstacles = null, CancellationToken cancellationToken = default)
     {
         EntityGeometry boiler = Geometry(map, boilerItem), engine = Geometry(map, engineItem);
         int ratio = EnginesPerBoiler(boiler, engine);
@@ -152,6 +154,9 @@ public sealed class PowerExpansionPlanner
                 var engines = Extend(withBoiler, boiler, placement, "boiler", engineItem, ratio, 1);
                 if (engines.Count < ratio) continue;
                 var unit = engines.Aggregate(withBoiler, (current, e) => Planned(current, e.Machine.Role, engine, e.Machine.Placement));
+                var footprints = unit.Entities.Where(e => e.Force == "planned").Select(e => e.Bounds).ToArray();
+                if (pipeObstacles is { Count: > 0 })
+                    unit = unit with { Entities = [.. unit.Entities, .. pipeObstacles.Where(o => !footprints.Any(b => b.Overlaps(o.Bounds)))] };
                 var route = new PipeRoutePlanner().Find(unit, pipeItem, chain.Boiler.Id, "planned:boiler", "water", WaterRouteBudget,
                     cancellationToken, undergroundItem: undergroundItem);
                 if (route.Status != PipeRouteStatus.Found || (route.Pieces?.Count ?? route.Pipes.Count) is 0 or > MaximumWaterPieces) continue;
