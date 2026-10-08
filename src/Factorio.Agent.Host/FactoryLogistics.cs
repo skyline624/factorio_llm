@@ -280,7 +280,9 @@ public sealed class FactoryLogistics(IGameClient game, IControllerJournal journa
         var automatedBoilers = cells.Where(c => c.Kind == "power" && PowerFuelPolicy.AutomatedReserve(snapshot, c, stack, connected))
             .Select(c => c.Entities["boiler"]).ToHashSet(StringComparer.Ordinal);
         fuelCells = FuelCells(snapshot, cells, rawDemand);
-        var burners = FuelOrder(Burners(snapshot, fuelCells).Where(b => !automatedBoilers.Contains(b.EntityId)).Where(b => b.PowerSource
+        // A furnace whose feeder chest a bus keeps in coal burns from it, like an automated boiler.
+        var beltFuelled = FurnaceFeederController.BeltFuelled(state, connected);
+        var burners = FuelOrder(Burners(snapshot, fuelCells).Where(b => !automatedBoilers.Contains(b.EntityId) && !beltFuelled.Contains(b.EntityId)).Where(b => b.PowerSource
             ? NeedsDirectFuel(fedBoilers.Contains(b.EntityId), b.Loaded, stack) : b.Loaded < stack / 2).ToArray(), fuelCells);
         var plan = PlanFuel(burners.Select(b => b.Loaded).ToArray(), carried.GetValueOrDefault(fuel), stack);
         bool powerStarved = false;

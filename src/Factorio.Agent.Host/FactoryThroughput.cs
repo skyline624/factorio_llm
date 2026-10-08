@@ -100,8 +100,9 @@ public sealed class FactoryThroughput(IGameClient game, IControllerJournal journ
         var hand = needs.Where(n => !connected.Contains(n)).GroupBy(n => n.Item, StringComparer.Ordinal).OrderByDescending(g => g.Count())
             .ThenBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
         // Resource smelters and band furnaces burn fuel the actor carries; electric furnaces need none.
-        int fuelled = ready.Count(c => c.Kind is "smelter" or FurnaceCellPlanner.Kind && c.Entities.TryGetValue("furnace", out _)
-            && snapshot.Records.Any(r => r.Kind == "inventory" && r.EntityId == c.Entities["furnace"] && r.Name.Contains("fuel", StringComparison.Ordinal)));
+        var beltFuelled = FurnaceFeederController.BeltFuelled(state, connected);
+        int fuelled = ready.Count(c => c.Entities.TryGetValue("furnace", out var furnace) && FurnaceFeederController.Burns(snapshot, furnace)
+            && !beltFuelled.Contains(furnace));
         return new(needs.Length, needs.Length - hand.Values.Sum(), hand, ready.Count(c => c.Kind == "lab" && !c.Entities.ContainsKey("input-chest")), fuelled);
     }
 

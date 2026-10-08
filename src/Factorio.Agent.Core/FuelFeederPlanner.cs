@@ -11,9 +11,10 @@ public sealed class FuelFeederPlanner
         var boiler = map.Entities.Single(e => e.Id == boilerId);
         var container = map.Prototypes[map.Items[containerItem].EntityName];
         var inserter = map.Prototypes[map.Items[inserterItem].EntityName];
-        if (map.Prototypes[boiler.Name].Type != "boiler" || container.Type != "container"
+        // Furnaces burn the same fuel through an inserter as boilers do (2026-10-08: furnaces were refuelled by hand).
+        if (map.Prototypes[boiler.Name].Type is not ("boiler" or "furnace") || container.Type != "container"
             || !inserter.IsElectric || inserter.Type != "inserter" || inserter.InserterPickup is null || inserter.InserterDrop is null)
-            throw new InvalidDataException("Feeder planning requires a boiler, container and native electric inserter geometry.");
+            throw new InvalidDataException("Feeder planning requires a boiler or furnace, container and native electric inserter geometry.");
         foreach (var existing in map.Entities.Where(e => e.Name == inserter.Name && e.Force == boiler.Force
             && e.DropTargetId == boilerId && e.Power?.NetworkId == networkId && e.PickupPosition is not null && e.DropPosition is not null))
         {

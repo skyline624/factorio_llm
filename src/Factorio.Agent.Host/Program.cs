@@ -760,6 +760,12 @@ try
                                     {
                                         await maintenanceJournal.AppendAsync("lab-input-retrofit-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
                                     }
+                                    // Fuel-burning furnaces get a feeder chest the same growth can belt with coal.
+                                    try { await new FurnaceFeederController(game, maintenanceJournal, session.Directory).RunAsync(token); }
+                                    catch (Exception error) when (FactoryResearchController.Recoverable(error, token))
+                                    {
+                                        await maintenanceJournal.AppendAsync("furnace-fuel-feeder-error", new { error = error.GetType().FullName, error.Message, error.StackTrace }, token);
+                                    }
                                     // Each round turns at most one more hand-carried flow into belts. On seed 20261072 the actor
                                     // carried about 28k iron plates, 26k coal and 13k copper cables between chests in 183 rounds.
                                     try

@@ -433,7 +433,9 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
     /// The solid inputs a cell takes from buses, as a recipe: its native recipe, or for a laboratory every science pack a registered
     /// cell makes, one per cycle. Until 2026-10-08 laboratories had no input side and the actor's tours filled them by hand.
     /// </summary>
-    internal static NativeRecipe? InputRecipe(ProductionCatalog catalog, FactoryState state, FactoryCell cell) => cell.Kind == "lab"
+    internal static NativeRecipe? InputRecipe(ProductionCatalog catalog, FactoryState state, FactoryCell cell) =>
+        cell.Kind == FurnaceFeederController.Kind ? new(FurnaceFeederController.Kind, true, "fuel", 1, [new(FactoryLogistics.Fuel, "item", 1)], [], true)
+        : cell.Kind == "lab"
         ? new("lab", true, "research", 1, state.Cells.Where(c => c.Status == "ready" && c.Entities.ContainsKey("output-chest"))
             .Select(c => Product(catalog, c)).OfType<string>().Where(IsSciencePack).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
             .Select(p => new NativeMaterial(p, "item", 1)).ToArray(), [], true)
@@ -441,12 +443,16 @@ public sealed class FactoryTransportBuilder(IGameClient game, IControllerJournal
 
     internal static bool IsSciencePack(string item) => item.EndsWith("-science-pack", StringComparison.Ordinal);
 
+    /// <summary>Coal a stone or steel furnace burns per minute at full load: 90 kW over 4 MJ per piece, rounded up.</summary>
+    internal const double FurnaceFuelPerMinute = 1.5;
+
     /// <summary>Packs a laboratory uses per minute while researching: about two per pack type for a thirty-second unit.</summary>
     internal const double LaboratoryPacksPerMinute = 2;
 
     internal static double InputVolume(ProductionCatalog catalog, FactoryCell cell, NativeMaterial ingredient)
     {
         if (cell.Kind == "lab") return IsSciencePack(ingredient.Name) ? LaboratoryPacksPerMinute : 0;
+        if (cell.Kind == FurnaceFeederController.Kind) return FurnaceFuelPerMinute;
         var recipe = catalog.Recipes.FirstOrDefault(r => r.Name == cell.Recipe);
         bool known = catalog.Assemblers?.ContainsKey(cell.MachineItem) == true || catalog.Machines.ContainsKey(cell.MachineItem)
             || catalog.Silos?.ContainsKey(cell.MachineItem) == true;

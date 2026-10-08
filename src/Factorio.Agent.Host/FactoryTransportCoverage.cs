@@ -51,6 +51,7 @@ internal static class FactoryTransportCoverage
         FactoryCell cell, string item, PowerState? power)
     {
         if (cell.Kind == "power") return PowerFuelPolicy.Demand(catalog, cell, item, power);
+        if (cell.Kind == FurnaceFeederController.Kind) return item == FactoryLogistics.Fuel ? FactoryTransportBuilder.FurnaceFuelPerMinute : null;
         if (cell.Recipe is null || shares is null || !shares.TryGetValue(cell.Recipe, out double crafts)) return null;
         var recipe = catalog.Recipes.SingleOrDefault(r => r.Name == cell.Recipe);
         double amount = recipe?.Ingredients.Where(i => i.DeterministicItem && i.Name == item).Sum(i => i.Amount!.Value) ?? 0;
