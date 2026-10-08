@@ -27,6 +27,9 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
     /// <summary>The service loop's own end, before the research goal's two-hour cancellation.</summary>
     public static readonly TimeSpan LoopBudget = TimeSpan.FromMinutes(105);
 
+    /// <summary>How long a procurement started inside the loop budget may continue past it, still before the goal's cancellation.</summary>
+    public static readonly TimeSpan ProcurementSlack = TimeSpan.FromMinutes(10);
+
     public async Task<FactoryResearchResult> RunAsync(string technologyName, CancellationToken token = default)
     {
         long began = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -126,8 +129,23 @@ public sealed class FactoryResearchController(IGameClient game, IControllerJourn
                 var carried = FactoryLogistics.Carried(await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token));
                 int target = (int)Math.Min(1000, carried.GetValueOrDefault(item) + Math.Min(missing, 400));
                 StockGoalResult stock;
-                using (ProductionReservations.EnterFactory(await new FactoryRegistry(directory).LoadAsync(observation.Scope.WorldId, token)))
-                    stock = await executor.RunAsync(item, target, token);
+                // One procurement can outlast the loop budget checked between rounds: on 2026-10-08 (seed 20261107) it ran into the
+                // goal's two-hour cancellation. It now ends shortly after the budget and the loop reports the research unfinished.
+                using var procurement = CancellationTokenSource.CreateLinkedTokenSource(token);
+                procurement.CancelAfter(LoopBudget + ProcurementSlack - System.Diagnostics.Stopwatch.GetElapsedTime(began) is { } left
+                    && left > TimeSpan.Zero ? left : TimeSpan.FromSeconds(1));
+                try
+                {
+                    using (ProductionReservations.EnterFactory(await new FactoryRegistry(directory).LoadAsync(observation.Scope.WorldId, token)))
+                        stock = await executor.RunAsync(item, target, procurement.Token);
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    state = await ReadStateAsync();
+                    await journal.AppendAsync("factory-research-budget-spent", new { technologyName, rounds = round, state.CollectedTick,
+                        budgetMinutes = LoopBudget.TotalMinutes, interruptedProcurement = item }, token);
+                    return await FinishAsync(state.CollectedTick, round);
+                }
                 procured[item] = procured.GetValueOrDefault(item) + Math.Max(0, stock.FinalStock - stock.InitialStock);
                 if (raw) growth.Procured(item);
                 procuredAny = true;
