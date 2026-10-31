@@ -151,5 +151,6 @@ public sealed class CodexStrategicPlannerTests
         Assert.Throws<ArgumentException>(() => new CodexOptions { Model = "gpt-6-astra" }.Validate());
         Assert.Throws<ArgumentException>(() => new CodexOptions { RequestTimeoutSeconds = 0 }.Validate());
         Assert.Throws<ArgumentException>(() => new CodexOptions { ThinkingEffort = "ultra" }.Validate());
+        new CodexOptions { Model = "gpt-6.1-terra", ThinkingEffort = "medium" }.Validate();
     }
 }
