@@ -49,14 +49,87 @@ public sealed class DecisionShadowTests
         Assert.Equal(expected, DecisionShadow.Build(Facts, null, Goal(category, target, unit)).ProposedOption);
 
     [Fact]
-    public void StateStaysCompactForTheEightThousandTokenWindow()
+    public void StateStaysCompactForTheFourThousandTokenWindow()
     {
         var question = DecisionShadow.Build(Facts, "{\"goal\":{\"target\":\"automation\"},\"executionFailure\":\"navigation_blocked\"}",
             Goal(GoalCategory.Research, "automation", GoalUnit.Completion));
-        Assert.True(question.State.Length < 6000);
+        Assert.True(question.State.Length <= 3000);
         using var state = JsonDocument.Parse(question.State);
-        Assert.Equal(7, state.RootElement.GetProperty("exposedIndustrialAnchors").GetInt32());
+        Assert.Equal(250, state.RootElement.GetProperty("health").GetDouble());
         Assert.Contains("navigation_blocked", question.State);
+    }
+
+    [Fact]
+    public void AnAlreadyAutomatedPackIsOfferedOnlyWhenTheProposalTargetsIt()
+    {
+        string facts = Facts.Replace("{\"recipe\":\"iron-gear-wheel\",\"cells\":1}", "{\"recipe\":\"automation-science-pack\",\"cells\":2}");
+        Assert.DoesNotContain("automate:automation-science-pack",
+            DecisionShadow.Build(facts, null, Goal(GoalCategory.Research, "automation", GoalUnit.Completion)).Questions["next_goal"].Criteria!.Keys);
+        var proposed = DecisionShadow.Build(facts, null, Goal(GoalCategory.Production, "automation-science-pack", GoalUnit.ItemsPerMinute));
+        Assert.Equal("automate:automation-science-pack", proposed.ProposedOption);
+        var text = proposed.Questions["next_goal"].Criteria!["automate:automation-science-pack"]!;
+        Assert.StartsWith("Increase the existing", text);
+        Assert.Contains("2 cells", text);
+    }
+
+    [Fact]
+    public void ResearchOptionsNameWhatTheyUnlock()
+    {
+        string lamp = "{\"name\":\"lamp\",\"count\":10,\"ingredients\":[{\"name\":\"automation-science-pack\",\"amount\":1}],\"trigger\":null}";
+        string facts = Facts.Replace(lamp, lamp.Replace("\"trigger\":null", "\"trigger\":null,\"unlocks\":[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\"]"));
+        var options = DecisionShadow.Build(facts, null, Goal(GoalCategory.Research, "lamp", GoalUnit.Completion)).Questions["next_goal"].Criteria!;
+        Assert.Equal("Research lamp: unlocks a, b, c, d, e, ... (10 units of automation-science-pack)", options["research:lamp"]);
+        Assert.Equal("Research automation: 10 units of automation-science-pack; on the rocket silo path", options["research:automation"]);
+    }
+
+    [Fact]
+    public void ExposedIndustryWithoutAttacksIsNotPresentedAsAThreat()
+    {
+        var question = DecisionShadow.Build(Facts.Replace("\"exposedIndustrialAnchors\":7", "\"exposedIndustrialAnchors\":43"), null,
+            Goal(GoalCategory.Research, "automation", GoalUnit.Completion));
+        Assert.Contains("uncovered industry alone is not a threat", question.Questions["next_goal"].Instructions);
+        Assert.Contains("uncovered industry alone is not a threat", question.Questions["proposal_sound"].Instructions);
+        Assert.Contains("0 recent attacks", question.Questions["next_goal"].Criteria!["defense:gun-turret"]);
+        Assert.Equal("research:automation", question.ProposedOption);
+        Assert.DoesNotContain("exposedIndustrialAnchors", question.State);
+    }
+
+    [Fact]
+    public void ARawItemProductionProposalIsComparable()
+    {
+        var goal = Goal(GoalCategory.Production, "iron-plate", GoalUnit.ItemsPerMinute);
+        Assert.Equal("automate:iron-plate", DecisionShadow.Build(Facts, null, goal).ProposedOption);
+        string facts = Facts.Replace("\"assemblerCells\":", "\"rawSupply\":[{\"item\":\"iron-plate\",\"readyCells\":1,\"perMinute\":30.04}],\"assemblerCells\":");
+        var question = DecisionShadow.Build(facts, null, goal);
+        Assert.Equal("automate:iron-plate", question.ProposedOption);
+        Assert.Equal("Raise persistent iron-plate supply (now 30.04/min)", question.Questions["next_goal"].Criteria!["automate:iron-plate"]);
+    }
+
+    [Fact]
+    public void AHugeFactsDocumentStillYieldsABoundedState()
+    {
+        string cells = string.Join(",", Enumerable.Range(0, 80).Select(i => $"{{\"recipe\":\"recipe-number-{i}\",\"cells\":{i}}}"));
+        string researched = string.Join(",", Enumerable.Range(0, 200).Select(i => $"\"a-rather-long-technology-name-{i}\""));
+        string inventory = string.Join(",", Enumerable.Range(0, 60).Select(i => $"\"some-long-item-name-{i}\":{i + 1}"));
+        string facts = Facts.Replace("{\"recipe\":\"iron-gear-wheel\",\"cells\":1}", cells)
+            .Replace("\"researchedTechnologies\":[", $"\"researchedTechnologies\":[{researched},")
+            .Replace("\"inventory\":{", $"\"inventory\":{{{inventory},");
+        string previous = "{\"goal\":{\"category\":0,\"target\":\"iron-plate\",\"quantity\":30},\"unsupportedReason\":\"" + new string('x', 900)
+            + "\",\"logistics\":{\"shortfall\":{\"copper-plate\":25},\"powerStarved\":false}}";
+        var question = DecisionShadow.Build(facts, previous, Goal(GoalCategory.Research, "automation", GoalUnit.Completion));
+        Assert.True(question.State.Length <= 3000, question.State.Length.ToString());
+        using var state = JsonDocument.Parse(question.State);
+        Assert.Equal(25, state.RootElement.GetProperty("previous").GetProperty("shortfall").GetProperty("copper-plate").GetDouble());
+    }
+
+    [Theory]
+    [InlineData("{\"observedTick\":9,\"agent\":{\"alive\":true},\"availableSolidRecipes\":[\"gun-turret\"],\"nativeDefenseItems\":[\"gun-turret\"]}", null)]
+    [InlineData("{\"observedTick\":9,\"availableResearch\":[{\"name\":\"lamp\"}],\"automatedFactory\":{\"available\":true}}", "[1,2]")]
+    [InlineData("{\"observedTick\":9}", "not json")]
+    public void OlderOrOddFactsAndOutcomesDoNotThrow(string facts, string? previous)
+    {
+        var question = DecisionShadow.Build(facts, previous, Goal(GoalCategory.Research, "lamp", GoalUnit.Completion));
+        Assert.Contains("none", question.Questions["next_goal"].Criteria!.Keys);
     }
 
     [Fact]
