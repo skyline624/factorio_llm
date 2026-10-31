@@ -47,7 +47,7 @@ public sealed class AttackResponseController(IGameClient game, IControllerJourna
         var safety = await SafetyAsync(token);
         if (!safety.Alive || safety.ControlMode != "ai") return await DoneAsync("unavailable", [], null, [], safety.Tick, token);
         var (detected, registry, snapshot) = await DetectAsync(catalog, token);
-        if (safety.Enemies.Count > 0) return await DoneAsync("deferred-enemies-near-actor", detected, null, [], safety.Tick, token);
+        if (safety.MobileThreats) return await DoneAsync("deferred-enemies-near-actor", detected, null, [], safety.Tick, token);
         // Production here must neither reuse nor empty persistent cells, exactly as inside a strategic goal.
         using var reserved = ProductionReservations.EnterFactory(registry);
         var kit = await new SurvivalKitController(game, journal).EnsureAsync("attack-response", token);
@@ -60,7 +60,7 @@ public sealed class AttackResponseController(IGameClient game, IControllerJourna
         var responses = new List<ClusterResponse>();
         foreach (var group in open)
         {
-            if ((await SafetyAsync(token)).Enemies.Count > 0) break;
+            if ((await SafetyAsync(token)).MobileThreats) break;
             var records = group.Select(p => p.Record).ToArray();
             var response = await RespondAsync(catalog, group.First().Cluster!, records, token);
             responses.Add(response);
@@ -119,10 +119,13 @@ public sealed class AttackResponseController(IGameClient game, IControllerJourna
         await log.SaveAsync(state with
         {
             Records = state.Records.Select(r => answered.Any(a => a.Tick == r.Tick && a.Cluster == r.Cluster)
-                ? r with { Responded = done, NestsAdded = r.NestsAdded + response.NestsBuilt, Attempts = r.Attempts + 1, Outcome = response.Outcome }
+                ? r with { Responded = done, NestsAdded = r.NestsAdded + response.NestsBuilt, Attempts = NextAttempts(r.Attempts, response.Outcome), Outcome = response.Outcome }
                 : r).ToArray()
         }, token);
     }
+
+    /// <summary>A refusal for lack of stock is not a failed attempt: the attack stays answerable once the stock exists.</summary>
+    internal static int NextAttempts(int attempts, string outcome) => outcome is "no-turret" or "no-stock" or "no-ammunition" ? attempts : attempts + 1;
 
     private async Task<AttackResponseResult> DoneAsync(string status, IReadOnlyList<AttackRecord> detected, SurvivalKitResult? kit,
         IReadOnlyList<ClusterResponse> responses, long tick, CancellationToken token)

@@ -9,6 +9,9 @@ public sealed record SafetyObservation(long Tick, ActorScope Scope, bool Alive, 
     double? MaxHealth = null, IReadOnlyList<DefensiveRefuge>? Defenses = null, bool LocalEnemiesComplete = false,
     IReadOnlyDictionary<string, long>? Inventory = null, bool SupportsMovingFire = false)
 {
+    /// <summary>Enemy units that can chase the actor; standing worms and spawners (other types) are not an attack in progress.</summary>
+    public bool MobileThreats => Enemies.Any(e => e.Type == "unit");
+
     public static SafetyObservation Parse(GameResponse response)
     {
         if (!response.Ok) throw new GameRpcException(response.Error ?? new("invalid_response", "Observation failed without an error."));

@@ -424,7 +424,7 @@ public sealed class SurvivalKitTests
                 }
             },
             enemies = Enemy || worn is not null && TransitionAfterArmor == "enemy"
-                ? new object[] { new { id = "biter", position = new MapPosition(10, 0), collectedTick = 100L } } : [],
+                ? new object[] { new { id = "biter", type = "unit", position = new MapPosition(10, 0), collectedTick = 100L } } : [],
             entities = Array.Empty<object>(), defenses = Array.Empty<object>()
         };
         }

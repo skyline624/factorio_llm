@@ -107,6 +107,33 @@ public sealed class DefenseControllerTests
     }
 
     [Fact]
+    public async Task NeverSubmittedOperationIsClearedInsteadOfBlockingEveryLaterStep()
+    {
+        var fake = new GameStub { Armed = false, Defenses = Refuge(), SubmitNeverArrives = true, OperationsUnknown = true };
+        var journal = new JournalStub();
+        var defense = new DefenseController(fake, journal);
+        await Assert.ThrowsAsync<OperationOutcomeUnknownException>(() => defense.StepAsync());
+        Assert.Equal("reconciled", (await defense.StepAsync()).State);
+        Assert.Contains("owned-operation-unsubmitted", journal.Types);
+        fake.SubmitNeverArrives = false;
+        fake.OperationsUnknown = false;
+        Assert.Equal("defending", (await defense.StepAsync()).State);
+        Assert.Equal("move", fake.Submission?.Kind);
+    }
+
+    [Fact]
+    public async Task StoppingANeverSubmittedOperationDoesNotThrow()
+    {
+        var fake = new GameStub { Armed = false, Defenses = Refuge(), SubmitNeverArrives = true, OperationsUnknown = true };
+        var defense = new DefenseController(fake, new JournalStub());
+        await Assert.ThrowsAsync<OperationOutcomeUnknownException>(() => defense.StepAsync());
+        await defense.StopOwnedActionAsync(CancellationToken.None);
+        fake.SubmitNeverArrives = false;
+        fake.OperationsUnknown = false;
+        Assert.Equal("defending", (await defense.StepAsync()).State);
+    }
+
+    [Fact]
     public async Task TruncatedEnemyCoverageDoesNotSupportARetreatRoute()
     {
         var fake = new GameStub { Armed = false, Defenses = Refuge(), EnemiesTruncated = true };
@@ -540,6 +567,8 @@ public sealed class DefenseControllerTests
         public double Distance { get; init; } = 4;
         public long ObservationTick { get; init; } = 100;
         public bool LoseSubmitResponse { get; init; }
+        public bool SubmitNeverArrives { get; set; }
+        public bool OperationsUnknown { get; set; }
         public bool CompleteSubmission { get; init; }
         public bool LoseCancelResponse { get; init; }
         public int DelayedCancellationQueries { get; init; }
@@ -590,12 +619,15 @@ public sealed class DefenseControllerTests
                     data = Active!.Value;
                     break;
                 case "submit":
+                    if (SubmitNeverArrives) throw new IOException("Call cancelled before reaching the engine.");
                     Submission = request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!;
                     Active = Receipt(Submission.OperationId, Submission.Kind, CompleteSubmission ? "completed" : "running");
                     if (LoseSubmitResponse) throw new IOException("Response lost after engine accepted the operation.");
                     data = Active;
                     break;
                 case "operation":
+                    if (OperationsUnknown)
+                        return Task.FromResult(new GameResponse(1, request.RequestId, false, 100, default, new GameError("operation_unknown", "Unknown operation.")));
                     QueriedId = request.Arguments.GetProperty("operationId").GetString();
                     if (pendingCancellation is not null && remainingCancellationQueries > 0 && --remainingCancellationQueries == 0)
                         Active = pendingCancellation;

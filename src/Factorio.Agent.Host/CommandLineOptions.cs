@@ -12,7 +12,7 @@ public static class CommandLineOptions
     {
         "action", "boiler", "capacity-items", "config", "distance", "fluid", "installation", "item", "items",
         "journal", "json", "json-file", "kind", "layers", "machine", "max-goals", "minutes", "phase", "plan", "quantity", "reason", "recipe", "reserve",
-        "root", "save", "seconds", "seed", "session", "source", "target", "technology", "ticks", "x", "y"
+        "root", "row", "save", "seconds", "seed", "session", "source", "target", "technology", "ticks", "x", "y"
     };
 
     public static Dictionary<string, string> Parse(string[] values)

@@ -18,6 +18,7 @@ public sealed class CommandLineOptionsTests
         Assert.Equal("true", CommandLineOptions.Parse(["--expansion", "--session", "s.json", "--reuse"])["expansion"]);
         Assert.Equal("true", CommandLineOptions.Parse(["--defer-expansion", "--session", "s.json"])["defer-expansion"]);
         Assert.Equal("true", CommandLineOptions.Parse(["--corner", "--session", "s.json"])["corner"]);
+        Assert.Equal("3", CommandLineOptions.Parse(["--session", "s.json", "--row", "3"])["row"]);
     }
 
     [Theory]

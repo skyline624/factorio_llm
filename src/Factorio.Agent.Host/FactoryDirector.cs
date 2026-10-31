@@ -60,6 +60,8 @@ public sealed class FactoryDirector(IGameClient game, IControllerJournal journal
             return new(chain.Stages, chain.RawPerMinute);
         }
         if (machines.Count == 0 && fluidMachines.Count == 0) throw new InvalidOperationException("No factory machine recipe is enabled; research its equipment first.");
+        // Checked before saving: the registry keeps the highest target ever requested, so a bad rate would stay forever.
+        if (!double.IsFinite(perMinute) || perMinute <= 0 || perMinute > 10000) throw new ArgumentOutOfRangeException(nameof(perMinute));
         var registry = new FactoryRegistry(directory);
         var registered = (await registry.LoadAsync(catalog.Scope.WorldId, token)).WithTarget(item, perMinute);
         await registry.SaveAsync(registered, token);

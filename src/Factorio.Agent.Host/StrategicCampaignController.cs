@@ -20,9 +20,12 @@ public sealed record DeferredRecovery(NativeDeathTransition Death, long RetryTic
 /// <summary>Sequential strategic goals under the caller's actor lease. Unknown outcomes are never retried.</summary>
 public sealed class StrategicCampaignController(IGameClient game, IStrategicGoalRunner runner, string memoryPath,
     string? journalPath = null, ICorpseRecovery? recovery = null, CampaignJournal? campaignJournal = null,
-    Func<CancellationToken, Task>? maintenance = null)
+    Func<CancellationToken, Task>? maintenance = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
 {
     public const int MaxConsecutiveFailures = 5;
+    /// <summary>Consecutive transient planner outages tolerated (each waits RetryAfter or 30 s) while maintenance keeps defending.</summary>
+    public const int MaxConsecutiveOutages = 20;
+    private static readonly TimeSpan DefaultOutageWait = TimeSpan.FromSeconds(30);
 
     /// <summary>A file beside the strategic memory that asks the campaign to stop at its next goal boundary.</summary>
     public const string RestartRequestFile = "restart-requested";
@@ -62,7 +65,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
         }
         if (memory.Pending) throw new InvalidDataException("An earlier strategic execution has no verified terminal outcome. Reconcile its journal and native effects before resuming.");
         string? lastGoal = null;
-        int repeated = 0, consecutiveFailures = 0, consecutiveUnsupported = 0;
+        int repeated = 0, consecutiveFailures = 0, consecutiveUnsupported = 0, consecutiveOutages = 0;
         for (int index = 0; index < maxGoals; index++)
         {
             token.ThrowIfCancellationRequested();
@@ -146,6 +149,20 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 }, token);
                 memory = await new StrategicRecoveryController(game, memoryPath, activeJournalPath, recovery).ResumeAsync(token);
                 observation = await ObserveAsync(token);
+                if (error is PlannerException planner)
+                {
+                    if (planner.Kind is PlannerErrorKind.Authentication or PlannerErrorKind.MissingModel or PlannerErrorKind.RequestRejected)
+                        return new(false, index + 1, observation.Tick, "planner-fatal");
+                    if (planner.Kind is PlannerErrorKind.Quota or PlannerErrorKind.Network or PlannerErrorKind.Timeout)
+                    {
+                        if (++consecutiveOutages >= MaxConsecutiveOutages)
+                            return new(false, index + 1, observation.Tick, "planner-unavailable");
+                        // An outage consumes no goal budget; the next iteration still runs maintenance (defense upkeep).
+                        await (delay ?? Task.Delay)(planner.RetryAfter ?? DefaultOutageWait, token);
+                        if (index > 0) index--;
+                        continue;
+                    }
+                }
                 // A failed goal ends reconciled and idle; stop before the model can loop on the same cause.
                 if (++consecutiveFailures >= MaxConsecutiveFailures)
                     return new(false, index + 1, observation.Tick, "repeated-failure");
@@ -153,7 +170,7 @@ public sealed class StrategicCampaignController(IGameClient game, IStrategicGoal
                 await LocalJson.WriteAsync(memoryPath, memory, token);
                 continue;
             }
-            consecutiveFailures = 0;
+            consecutiveFailures = consecutiveOutages = 0;
             consecutiveUnsupported = result.UnsupportedReason is null ? 0 : consecutiveUnsupported + 1;
             string feedback = Feedback(result, after.Tick, compact: false);
             if (feedback.Length > 4000) feedback = Feedback(result, after.Tick, compact: true);

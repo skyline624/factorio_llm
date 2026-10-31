@@ -218,6 +218,38 @@ public sealed class StrategicCampaignTests : IDisposable
     }
 
     [Fact]
+    public async Task TransientPlannerOutageWaitsKeepsMaintenanceRunningAndDoesNotCountAsRepeatedFailure()
+    {
+        var game = new Game { OperationStatus = null };
+        var waits = new List<TimeSpan>();
+        int maintenanceCalls = 0;
+        var runner = new JournaledRunner(game, Journal, attempt => attempt < 6
+            ? throw new PlannerException(PlannerErrorKind.Quota, "rate limited", 1, retryAfter: attempt == 0 ? TimeSpan.FromSeconds(7) : null)
+            : Completed());
+        var result = await new StrategicCampaignController(game, runner, Memory, Journal,
+            maintenance: _ => { maintenanceCalls++; return Task.CompletedTask; },
+            delay: (wait, _) => { waits.Add(wait); return Task.CompletedTask; }).RunAsync(3);
+        Assert.Equal("goal-budget", result.StopReason);
+        Assert.Equal(8, runner.History.Count); // an outage on the very first slot still consumes it
+        Assert.Equal(6, waits.Count);
+        Assert.Equal(TimeSpan.FromSeconds(7), waits[0]);
+        Assert.Equal(TimeSpan.FromSeconds(30), waits[1]);
+        Assert.True(maintenanceCalls >= 6);
+    }
+
+    [Fact]
+    public async Task PermanentPlannerErrorStopsAtOnceAsFatal()
+    {
+        var game = new Game { OperationStatus = null };
+        var runner = new JournaledRunner(game, Journal,
+            _ => throw new PlannerException(PlannerErrorKind.Authentication, "bad key", 1));
+        var result = await new StrategicCampaignController(game, runner, Memory, Journal,
+            delay: (_, _) => throw new InvalidOperationException("must not wait")).RunAsync(100);
+        Assert.Equal("planner-fatal", result.StopReason);
+        Assert.Single(runner.History);
+    }
+
+    [Fact]
     public async Task SuccessResetsTheConsecutiveFailureCount()
     {
         var game = new Game { OperationStatus = null };

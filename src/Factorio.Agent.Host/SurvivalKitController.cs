@@ -249,7 +249,7 @@ public sealed class SurvivalKitController(IGameClient game, IControllerJournal j
     private async Task<SafetyObservation?> SafeAsync(CancellationToken token, ActorScope? expectedScope = null)
     {
         var observation = await ObserveAsync(token);
-        return observation is { Alive: true, ControlMode: "ai", StopUnconfirmed: false, Loadout: not null, Enemies.Count: 0 }
+        return observation is { Alive: true, ControlMode: "ai", StopUnconfirmed: false, Loadout: not null, MobileThreats: false }
             && (expectedScope is null || observation.Scope == expectedScope) ? observation : null;
     }
 

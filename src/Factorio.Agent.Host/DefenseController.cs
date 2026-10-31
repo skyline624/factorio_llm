@@ -45,7 +45,18 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
         if (uncertainOperation is not null)
         {
             // An ambiguous submission/cancellation is reconciled by identity, never retransmitted.
-            OperationReceipt reconciled = await operations.QueryAsync(uncertainOperation, token);
+            OperationReceipt reconciled;
+            try { reconciled = await operations.QueryAsync(uncertainOperation, token); }
+            catch (GameRpcException error) when (error.Error.Code == "operation_unknown")
+            {
+                // The mod records every submission it receives before validating it: unknown means it never arrived.
+                string unsent = uncertainOperation;
+                await journal.AppendAsync("owned-operation-unsubmitted", new { operationId = unsent }, token);
+                uncertainOperation = null;
+                if (ownedOperation == unsent) { ownedOperation = null; ownedSubmission = null; ownedStopRequested = false; }
+                // "reconciled" keeps SpatialController's callers re-observing instead of acting on a stale frame.
+                return new("reconciled", Math.Max(lastTick, 0), unsent);
+            }
             await journal.AppendAsync("reconciled", reconciled, token);
             if (ownedSubmission?.OperationId == reconciled.OperationId)
             {
@@ -214,7 +225,18 @@ public sealed class DefenseController(IGameClient game, IControllerJournal journ
     public async Task StopOwnedActionAsync(CancellationToken token)
     {
         if (ownedOperation is null) return;
-        OperationReceipt receipt = await operations.QueryAsync(ownedOperation, token);
+        OperationReceipt receipt;
+        try { receipt = await operations.QueryAsync(ownedOperation, token); }
+        catch (GameRpcException error) when (error.Error.Code == "operation_unknown")
+        {
+            // Never received by the engine (see StepAsync): nothing to stop, and throwing would hide the caller's real error.
+            await journal.AppendAsync("owned-operation-unsubmitted", new { operationId = ownedOperation }, token);
+            if (uncertainOperation == ownedOperation) uncertainOperation = null;
+            ownedOperation = null;
+            ownedSubmission = null;
+            ownedStopRequested = false;
+            return;
+        }
         if (!receipt.IsTerminal && !ownedStopRequested)
         {
             await journal.AppendAsync("cancel-intent", new { operationId = ownedOperation, reason = "Controller stopping." }, token);

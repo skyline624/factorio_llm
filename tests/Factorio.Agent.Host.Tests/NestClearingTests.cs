@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Factorio.Agent.Core;
+using Factorio.Agent.Infrastructure;
 using Xunit;
 
 namespace Factorio.Agent.Host.Tests;
@@ -132,5 +134,50 @@ public sealed class NestClearingTests
         Assert.True(staging.X < nest.Center.X);
         Assert.All(nest.Structures.Where(s => s.Range is not null),
             worm => Assert.True(staging.DistanceTo(worm.Position) > worm.Range!.Value + ExplorationPlanner.ThreatMargin));
+    }
+
+    [Theory]
+    [InlineData("completed", 1, 1)]
+    [InlineData("cancelled", 0, 3)]
+    [InlineData("failed", 0, 1)]
+    public async Task OnlyACompletedPickupCountsAsRecoveredAndACancelledOneIsRetried(string status, int recovered, int submissions)
+    {
+        var game = new MineGame(status);
+        await using var controller = new SpatialController(game, new NullJournal());
+        var back = await NestClearingController.PickUpAsync(controller, ["turret-1"], default);
+        Assert.Equal(recovered, back.Count);
+        Assert.Equal(submissions, game.Mines);
+    }
+
+    private sealed class MineGame(string status) : IGameClient
+    {
+        private readonly SpatialSnapshot map = SpatialPlannerTests.Map([]);
+        public int Mines { get; private set; }
+        public Task<GameResponse> ExecuteAsync(GameRequest request, CancellationToken cancellationToken = default)
+        {
+            object data = request.Action switch
+            {
+                "spatial" => map,
+                "observe" => new { map.Scope, collectedTick = map.CollectedTick,
+                    coverage = new { atomic = true, collectionStartTick = map.CollectedTick, collectionEndTick = map.CollectedTick,
+                        enemyVisibility = "normal-character-5x5-chunks-or-native-current-visibility" },
+                    agent = new { alive = true, controlMode = "ai", stopUnconfirmed = false, position = map.Actor.Position,
+                        health = 250, weapon = new { ready = false, rounds = 0, range = 0 } }, enemies = Array.Empty<object>() },
+                "submit" => Submit(request.Arguments.Deserialize<OperationSubmission>(Protocol.Json)!),
+                _ => throw new InvalidOperationException(request.Action)
+            };
+            return Task.FromResult(new GameResponse(1, request.RequestId, true, map.CollectedTick, Protocol.ToElement(data)));
+        }
+        private object Submit(OperationSubmission operation)
+        {
+            Assert.Equal("mine", operation.Kind);
+            Mines++;
+            return new { operation.OperationId, operation.Kind, status, acceptedTick = map.CollectedTick, updatedTick = map.CollectedTick, effects = new { } };
+        }
+    }
+
+    private sealed class NullJournal : IControllerJournal
+    {
+        public Task AppendAsync(string type, object data, CancellationToken token) => Task.CompletedTask;
     }
 }

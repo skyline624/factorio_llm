@@ -71,6 +71,25 @@ public sealed class AttackResponseTests
         Assert.Equal(expected, AttackResponseController.Affordable(catalog, "gun-turret", "firearm-magazine", 10, stock, 4));
     }
 
+    [Theory]
+    [InlineData("no-turret", 1)]
+    [InlineData("no-stock", 1)]
+    [InlineData("no-ammunition", 1)]
+    [InlineData("failed", 2)]
+    [InlineData("skipped", 2)]
+    public void StockRefusalsDoNotBurnAnAttemptButFailuresDo(string outcome, int expected) =>
+        Assert.Equal(expected, AttackResponseController.NextAttempts(1, outcome));
+
+    [Fact]
+    public void OnlyEnemyUnitsAreMobileThreats()
+    {
+        SafetyObservation With(params string[] types) => new(1, new("w", "s", "a", 1, 1), true, "ai", false, new(0, 0), 250, WeaponState.Unavailable,
+            types.Select((t, i) => new VisibleThreat($"e{i}", new(30, 0), t)).ToArray(), null);
+        Assert.False(With().MobileThreats);
+        Assert.False(With("turret", "unit-spawner").MobileThreats);
+        Assert.True(With("unit-spawner", "unit").MobileThreats);
+    }
+
     [Fact]
     public void PlannerFactsCountRememberedEnemyBasesWithoutTheirPositions()
     {

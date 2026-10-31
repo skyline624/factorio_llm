@@ -5,7 +5,7 @@ using Factorio.Agent.Infrastructure;
 namespace Factorio.Agent.Host;
 
 public sealed record NestClearingStep(string TargetId, string TargetName, IReadOnlyList<string> Turrets, double Exposure,
-    int Destroyed, int Lost, int Recovered, string Outcome);
+    int Destroyed, int Lost, int Recovered, string Outcome, int Left = 0);
 public sealed record NestClearingResult(string Status, MapPosition? Center, int Spawners, int Worms, int Destroyed,
     int TurretsLost, IReadOnlyList<NestClearingStep> Steps, long Tick, string? Ammunition = null);
 public sealed record NestClearingAttempt(MapPosition Center, long Tick, string Outcome);
@@ -54,7 +54,7 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         var catalog = ProductionCatalog.Parse(await game.ExecuteAsync(GameRequest.Create("production_catalog"), token));
         var safety = await SafetyAsync(token);
         if (!safety.Alive || safety.ControlMode != "ai") return await DoneAsync(new("unavailable", null, 0, 0, 0, 0, [], safety.Tick), token);
-        if (safety.Enemies.Any(e => e.Type == "unit"))
+        if (safety.MobileThreats)
             return await DoneAsync(new("deferred-enemies-near-actor", null, 0, 0, 0, 0, [], safety.Tick), token);
         var registry = await new FactoryRegistry(directory).LoadAsync(catalog.Scope.WorldId, token);
         var snapshot = await new FactorySnapshotClient(game).CaptureAsync(cancellationToken: token);
@@ -285,18 +285,27 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
             if (plan.Exposure > MaximumExposure) { status = "too-exposed"; break; }
             await journal.AppendAsync("nest-clearing-step", new { step, plan, remaining = remaining.Count, map.CollectedTick }, token);
             NestClearingStep outcome;
-            try { outcome = await StepAsync(controller, catalog, plan, staging, remaining, turret, ammunition, token); }
+            var placed = new List<string>();
+            try { outcome = await StepAsync(controller, catalog, plan, staging, remaining, turret, ammunition, placed, token); }
             catch (Exception error) when (error is NavigationPlanningException || error is InvalidOperationException && error is not ObjectDisposedException)
             {
+                // Turrets this step already placed are picked up, best effort; those not recovered count as lost.
+                int left = placed.Count;
+                try { left -= (await PickUpAsync(controller, placed, token)).Count; }
+                catch (InvalidOperationException abandoned) when (abandoned is not ObjectDisposedException) { }
+                lost += left;
                 // Defense can build its own turrets on the planned stand point while a pack attacks: replan from a new photograph.
-                await journal.AppendAsync("nest-clearing-approach-failed", new { step, error = error.GetType().Name, error.Message }, token);
+                await journal.AppendAsync("nest-clearing-approach-failed", new { step, error = error.GetType().Name, error.Message, left }, token);
+                if (lost >= MaximumLostTurrets) { status = "turret-losses"; break; }
                 if (++failedApproaches >= 3) { status = "approach-failed"; break; }
                 await MoveDirectAsync(controller, staging, token);
                 continue;
             }
             steps.Add(outcome);
+            lost += outcome.Left;
             if (outcome.Outcome == PartialBlock)
             {
+                if (lost >= MaximumLostTurrets) { status = "turret-losses"; break; }
                 if (++failedApproaches >= 3) { status = "approach-failed"; break; }
                 continue;
             }
@@ -313,10 +322,9 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
     }
 
     private async Task<NestClearingStep> StepAsync(SpatialController controller, ProductionCatalog catalog, NestAssaultStep plan,
-        MapPosition staging, IReadOnlyList<NestStructure> remaining, string turret, string ammunition, CancellationToken token)
+        MapPosition staging, IReadOnlyList<NestStructure> remaining, string turret, string ammunition, List<string> placed, CancellationToken token)
     {
         await MoveDirectAsync(controller, plan.Stand, token);
-        var placed = new List<string>();
         // Portable defense may spend the kit on packs met during the approach. On 2026-10-06 (seed 20261106) it used three of
         // four turrets and the lone remaining one was destroyed without a kill; a partial block now waits for a full kit.
         var bag = (await new ProductionController(game, journal).ObserveAsync(token)).Inventory;
@@ -343,15 +351,22 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         {
             // A refused placement left part of the block. On 2026-10-08 (seed 20261106) a lone turret was twice left at a worm guarded by
             // two spawners and destroyed without a kill: the unloaded turrets are picked up and the step is planned again.
-            foreach (string id in placed)
-                await controller.WorkAsync("mine", new { entityId = id, count = 1 }, 600, token: token);
+            var block = placed.ToArray();
+            var back = await PickUpAsync(controller, block, token);
+            placed.RemoveAll(back.Contains);
             await MoveDirectAsync(controller, staging, token);
-            var partial = new NestClearingStep(plan.Target.Id, plan.Target.Name, placed, plan.Exposure, 0, 0, placed.Count, PartialBlock);
+            var partial = new NestClearingStep(plan.Target.Id, plan.Target.Name, block, plan.Exposure, 0, 0, back.Count, PartialBlock, block.Length - back.Count);
             await journal.AppendAsync("nest-clearing-step-result", partial, token);
             return partial;
         }
+        var unloaded = new List<string>();
         foreach (string id in placed)
-            await controller.WorkAsync("insert", new { entityId = id, inventory = "ammo", item = ammunition, count = MagazinesPerTurret }, 300, token: token);
+        {
+            var loaded = await controller.WorkAsync("insert", new { entityId = id, inventory = "ammo", item = ammunition, count = MagazinesPerTurret }, 300, token: token);
+            if (loaded.Status != "completed") unloaded.Add(id);
+        }
+        // A turret left empty would fight for nothing at the worm: it comes back with the bag instead.
+        placed.RemoveAll((await PickUpAsync(controller, unloaded, token)).Contains);
         await MoveDirectAsync(controller, staging, token);
         var standing = placed.ToHashSet(StringComparer.Ordinal);
         string outcome = placed.Count == 0 ? "not-placed" : "stalled";
@@ -376,22 +391,31 @@ public sealed class NestClearingController(IGameClient game, IControllerJournal 
         var after = await new SpatialClient(game).CaptureAsync([turret], 64, token);
         var gone = NestAssaultPlanner.Structures(after).Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         int destroyed = remaining.Count(r => !gone.Contains(r.Id) && after.Bounds.Contains(r.Position));
-        int recovered = 0;
-        var survivors = placed.Where(id => after.Entities.Any(e => e.Id == id)).ToArray();
+        var fielded = placed.ToArray();
+        var survivors = fielded.Where(id => after.Entities.Any(e => e.Id == id)).ToArray();
         if (survivors.Length > 0) await MoveDirectAsync(controller, plan.Stand, token);
-        foreach (string id in survivors)
+        var recovered = await PickUpAsync(controller, survivors, token);
+        placed.RemoveAll(recovered.Contains);
+        if (survivors.Length > 0) await MoveDirectAsync(controller, staging, token);
+        var result = new NestClearingStep(plan.Target.Id, plan.Target.Name, fielded, plan.Exposure, destroyed,
+            fielded.Length - survivors.Length, recovered.Count, outcome, survivors.Length - recovered.Count);
+        await journal.AppendAsync("nest-clearing-step-result", result, token);
+        return result;
+    }
+
+    /// <summary>Mines the given turrets back and returns those actually recovered; a cancelled pickup is tried again, never counted.</summary>
+    internal static async Task<IReadOnlyList<string>> PickUpAsync(SpatialController controller, IEnumerable<string> turrets, CancellationToken token)
+    {
+        var recovered = new List<string>();
+        foreach (string id in turrets)
             for (int attempt = 0; attempt < 3; attempt++)
             {
                 // A defense interruption cancels the pickup; the same turret is tried again rather than left by the nest.
                 var mined = await controller.WorkAsync("mine", new { entityId = id, count = 1 }, 900, token: token);
-                if (mined.Status == "completed") recovered++;
+                if (mined.Status == "completed") recovered.Add(id);
                 if (mined.Status != "cancelled") break;
             }
-        if (survivors.Length > 0) await MoveDirectAsync(controller, staging, token);
-        var result = new NestClearingStep(plan.Target.Id, plan.Target.Name, placed, plan.Exposure, destroyed,
-            placed.Count - survivors.Length, recovered, outcome);
-        await journal.AppendAsync("nest-clearing-step-result", result, token);
-        return result;
+        return recovered;
     }
 
     /// <summary>
