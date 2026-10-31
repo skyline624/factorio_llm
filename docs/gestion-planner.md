@@ -26,7 +26,7 @@ dotnet run --project src/Factorio.Agent.Host -- run-campaign --session .runtime/
 
 `check-gestion` envoie un contexte synthétique annoncé comme tel, ne crée pas de monde et n'exécute aucune opération. Ne pas combiner `--ollama-cloud` avec ce profil.
 
-Premier appel réel (2026-10-31) : `check-gestion` a obtenu une proposition validée de `huihui-glm-5.3-flash-ud-iq2-xxs` en 16 s pour 846 tokens d'entrée, certificat vérifié contre l'autorité privée. La cible proposée (`iron plates`) n'était pas un identifiant natif : en campagne, la validation C# la renverrait au modèle pour correction. Aucune campagne n'a encore été menée avec ce transport.
+Premier appel réel (2026-10-31) : `check-gestion` a obtenu une proposition validée de `huihui-glm-5.3-flash-ud-iq2-xxs` en 16 s pour 846 tokens d'entrée, certificat vérifié contre l'autorité privée. La cible proposée (`iron plates`) n'était pas un identifiant natif : en campagne, la validation C# la renverrait au modèle pour correction. Première campagne (2026-10-31, graine 20261031, monde normal repris après deux campagnes Codex, 30 minutes) : deux objectifs, tous deux en identifiants natifs et acceptés sans correction (`iron-plate` à 30 par minute, puis la recherche `steel-processing`), en 53 et 62 s pour environ 8 000 tokens d'entrée. Le premier a construit des cellules de fonte, des assembleurs, des tapis et une ligne d'approvisionnement ; le second était en cours à l'échéance. Aucune erreur d'exécution, aucune attaque observée.
 
 ## Budgets et limites
 
