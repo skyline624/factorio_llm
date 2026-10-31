@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Factorio.Agent.Ollama;
 using Factorio.Agent.Codex;
+using Factorio.Agent.Gestion;
 
 namespace Factorio.Agent.Host;
 
@@ -62,8 +63,8 @@ public static class OllamaConfiguration
     {
         var profile = await ReadAsync(path ?? ResolveDefaultPath(), path is not null, token);
         string transport = profile?.Planner?.Transport ?? "ollama";
-        if (transport is not ("ollama" or "codex-chatgpt"))
-            throw new InvalidDataException("Planner.Transport must be ollama or codex-chatgpt.");
+        if (transport is not ("ollama" or "codex-chatgpt" or "gestion-local"))
+            throw new InvalidDataException("Planner.Transport must be ollama, codex-chatgpt or gestion-local.");
         return transport;
     }
 
@@ -74,6 +75,36 @@ public static class OllamaConfiguration
             throw new InvalidDataException("Codex requires explicit Planner.Transport=codex-chatgpt and a Codex section.");
         profile.Codex.Validate();
         return profile.Codex;
+    }
+
+    /// <summary>The CA path is resolved against the profile file, so a relative profile stays relocatable.</summary>
+    public static async Task<(GestionOptions Options, string CaCertificatePath)> LoadGestionAsync(string? path,
+        string? environmentApiKey, CancellationToken token = default)
+    {
+        path ??= ResolveDefaultPath();
+        var profile = await ReadAsync(path, true, token);
+        if (profile?.Planner?.Transport != "gestion-local" || profile.Gestion is not { } settings)
+            throw new InvalidDataException("Gestion requires explicit Planner.Transport=gestion-local and a Gestion section.");
+        if (!Uri.TryCreate(settings.BaseUrl, UriKind.Absolute, out var baseUrl))
+            throw new InvalidDataException("Gestion BaseUrl must be an absolute URI.");
+        string? apiKey = !string.IsNullOrWhiteSpace(settings.ApiKey) ? settings.ApiKey : environmentApiKey;
+        if (string.IsNullOrWhiteSpace(apiKey))
+            throw new InvalidDataException("Gestion requires Gestion.ApiKey or the GESTION_API_KEY environment variable.");
+        if (string.IsNullOrWhiteSpace(settings.CaCertificate))
+            throw new InvalidDataException("Gestion requires a CaCertificate PEM file for its private certificate authority.");
+        string caPath = Environment.ExpandEnvironmentVariables(settings.CaCertificate);
+        if (!Path.IsPathRooted(caPath))
+            caPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, caPath);
+        var options = new GestionOptions
+        {
+            BaseUrl = baseUrl,
+            Model = settings.Model,
+            ApiKey = apiKey,
+            RequestTimeout = TimeSpan.FromSeconds(settings.RequestTimeoutSeconds),
+            MaxTokens = settings.MaxTokens
+        };
+        options.Validate();
+        return (options, Path.GetFullPath(caPath));
     }
 
     private static async Task<Profile?> ReadAsync(string path, bool required, CancellationToken token)
@@ -101,6 +132,7 @@ public static class OllamaConfiguration
     {
         public PlannerSettings? Planner { get; init; }
         public CodexOptions? Codex { get; init; }
+        public GestionSettings? Gestion { get; init; }
         public Settings? Ollama { get; init; }
         public DecisionSettings? DecisionModel { get; init; }
     }
@@ -108,6 +140,16 @@ public static class OllamaConfiguration
     private sealed class PlannerSettings
     {
         public string Transport { get; init; } = "ollama";
+    }
+
+    private sealed class GestionSettings
+    {
+        public string BaseUrl { get; init; } = "";
+        public string Model { get; init; } = "";
+        public string? ApiKey { get; init; }
+        public string CaCertificate { get; init; } = "";
+        public int RequestTimeoutSeconds { get; init; } = 180;
+        public int MaxTokens { get; init; } = 4096;
     }
 
     private sealed class DecisionSettings

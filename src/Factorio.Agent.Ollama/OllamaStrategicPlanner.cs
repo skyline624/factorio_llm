@@ -8,7 +8,6 @@ namespace Factorio.Agent.Ollama;
 /// <summary>Validated proposals through the local gateway or direct Ollama Cloud API. Never executes game actions.</summary>
 public sealed class OllamaStrategicPlanner : IStrategicPlanner
 {
-    private const int MaxResponseBytes = 2 * 1024 * 1024;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _http;
     private readonly OllamaOptions _options;
@@ -60,9 +59,9 @@ public sealed class OllamaStrategicPlanner : IStrategicPlanner
                     .ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                     throw HttpFailure(response, attempt);
-                using var document = await ReadResponseAsync(response.Content, attempt, linked.Token).ConfigureAwait(false);
+                using var document = await PlannerHttp.ReadResponseAsync(response.Content, "Ollama", attempt, linked.Token).ConfigureAwait(false);
                 var root = document.RootElement;
-                RejectDuplicateProperties(root, attempt);
+                PlannerHttp.RejectDuplicateProperties(root, "Ollama", attempt);
                 var metrics = new PlannerMetrics(_clock.GetElapsedTime(started), attempt,
                     ReadMetric(root, "prompt_eval_count", attempt), ReadMetric(root, "eval_count", attempt),
                     ReadMetric(root, "total_duration", attempt) is { } nanoseconds
@@ -112,12 +111,7 @@ public sealed class OllamaStrategicPlanner : IStrategicPlanner
 
     private PlannerException HttpFailure(HttpResponseMessage response, int attempt)
     {
-        var retryAfter = response.Headers.RetryAfter?.Delta;
-        if (retryAfter is null && response.Headers.RetryAfter?.Date is { } retryDate)
-            retryAfter = retryDate - _clock.GetUtcNow();
-        if (retryAfter < TimeSpan.Zero)
-            retryAfter = TimeSpan.Zero;
-
+        var retryAfter = PlannerHttp.RetryAfter(response, _clock);
         var (kind, message) = response.StatusCode switch
         {
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
@@ -136,23 +130,6 @@ public sealed class OllamaStrategicPlanner : IStrategicPlanner
         return new PlannerException(kind, message, attempt, response.StatusCode, retryAfter);
     }
 
-    private static async Task<JsonDocument> ReadResponseAsync(HttpContent content, int attempt, CancellationToken token)
-    {
-        if (content.Headers.ContentLength > MaxResponseBytes)
-            throw GoalContract.Invalid("Ollama response exceeds the two MiB limit.", attempt);
-        await using var stream = await content.ReadAsStreamAsync(token).ConfigureAwait(false);
-        using var buffer = new MemoryStream();
-        var chunk = new byte[8192];
-        int read;
-        while ((read = await stream.ReadAsync(chunk, token).ConfigureAwait(false)) != 0)
-        {
-            if (buffer.Length + read > MaxResponseBytes)
-                throw GoalContract.Invalid("Ollama response exceeds the two MiB limit.", attempt);
-            buffer.Write(chunk, 0, read);
-        }
-        return JsonDocument.Parse(buffer.ToArray(), new JsonDocumentOptions { MaxDepth = 32 });
-    }
-
     private static long? ReadMetric(JsonElement root, string name, int attempt)
     {
         if (root.ValueKind != JsonValueKind.Object)
@@ -162,22 +139,5 @@ public sealed class OllamaStrategicPlanner : IStrategicPlanner
         if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt64(out var metric) || metric < 0)
             throw GoalContract.Invalid("Ollama returned an invalid usage metric.", attempt);
         return metric;
-    }
-
-    private static void RejectDuplicateProperties(JsonElement element, int attempt)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var property in element.EnumerateObject())
-            {
-                if (!names.Add(property.Name))
-                    throw GoalContract.Invalid("Ollama returned duplicate JSON fields.", attempt);
-                RejectDuplicateProperties(property.Value, attempt);
-            }
-        }
-        else if (element.ValueKind == JsonValueKind.Array)
-            foreach (var value in element.EnumerateArray())
-                RejectDuplicateProperties(value, attempt);
     }
 }

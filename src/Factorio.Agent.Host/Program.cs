@@ -5,6 +5,7 @@ using Factorio.Agent.Host;
 using Factorio.Agent.Infrastructure;
 using Factorio.Agent.Ollama;
 using Factorio.Agent.Codex;
+using Factorio.Agent.Gestion;
 
 using var shutdown = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; shutdown.Cancel(); };
@@ -24,6 +25,7 @@ try
           automate-smelting --session FILE --item NAME --quantity N
           run-goal --session FILE [--config FILE] [--ollama-cloud]
           check-codex [--config FILE]
+          check-gestion [--config FILE]
           run-campaign --session FILE [--max-goals N] [--minutes N] [--config FILE] [--ollama-cloud]
           reconcile-campaign --session FILE --journal FILE
           steam-power --session FILE [--plan FILE]
@@ -97,17 +99,28 @@ try
     var options = CommandLineOptions.Parse(args[1..]);
     string? Option(string name) => options.GetValueOrDefault(name);
     string Required(string name) => Option(name) ?? throw new ArgumentException($"Missing --{name}.");
+    const string PreflightFacts =
+        "Synthetic transport check, not a real campaign. A normal Factorio start with one burner mining drill, " +
+        "one stone furnace, no completed research, no factory cells. Iron ore is visible. " +
+        "Propose a small bootstrap goal for iron plates; C# will ground it later.";
     switch (args[0])
     {
         case "check-codex":
         {
             var codexOptions = await OllamaConfiguration.LoadCodexAsync(Option("config"), shutdown.Token);
             var planner = new CodexStrategicPlanner(codexOptions, Path.Combine(".runtime", "codex-inference"));
-            var proposal = await planner.ProposeAsync(new StrategicContext("codex-preflight",
-                "Synthetic transport check, not a real campaign. A normal Factorio start with one burner mining drill, " +
-                "one stone furnace, no completed research, no factory cells. Iron ore is visible. " +
-                "Propose a small bootstrap goal for iron plates; C# will ground it later."), shutdown.Token);
+            var proposal = await planner.ProposeAsync(new StrategicContext("codex-preflight", PreflightFacts), shutdown.Token);
             Print(new { verified = true, transport = "codex-chatgpt", model = codexOptions.Model, proposal });
+            break;
+        }
+        case "check-gestion":
+        {
+            var (gestionOptions, caPath) = await OllamaConfiguration.LoadGestionAsync(Option("config"),
+                Environment.GetEnvironmentVariable("GESTION_API_KEY"), shutdown.Token);
+            using var gestionHttp = GestionHttp.Create(caPath);
+            var planner = new GestionStrategicPlanner(gestionHttp, gestionOptions);
+            var proposal = await planner.ProposeAsync(new StrategicContext("gestion-preflight", PreflightFacts), shutdown.Token);
+            Print(new { verified = true, transport = "gestion-local", model = gestionOptions.Model, proposal });
             break;
         }
         case "factory-cell":
@@ -686,6 +699,16 @@ try
                 planner = new CodexStrategicPlanner(codexOptions, Path.Combine(".runtime", "codex-inference"));
                 transportKind = "codex-chatgpt";
                 model = codexOptions.Model;
+            }
+            else if (plannerTransport == "gestion-local")
+            {
+                if (directCloud) throw new ArgumentException("--ollama-cloud conflicts with the explicit Gestion local transport.");
+                var (gestionOptions, caPath) = await OllamaConfiguration.LoadGestionAsync(Option("config"),
+                    Environment.GetEnvironmentVariable("GESTION_API_KEY"), shutdown.Token);
+                // Kept for the whole run, like the shared client above.
+                planner = new GestionStrategicPlanner(GestionHttp.Create(caPath), gestionOptions);
+                transportKind = "gestion-local";
+                model = gestionOptions.Model;
             }
             else
             {
