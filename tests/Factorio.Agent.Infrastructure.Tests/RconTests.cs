@@ -259,6 +259,53 @@ public sealed class RconTests
     public void RejectsActionsOutsideTheProtocol(string action) =>
         Assert.Throws<ArgumentException>(() => FactorioGameClient.BuildCommand(GameRequest.Create(action)));
 
+    [Fact]
+    public void RejectsRequestJsonAboveTheModLimitBeforeSending()
+    {
+        static GameRequest Padded(int length) => GameRequest.Create("submit", new { pad = new string('x', length) });
+        int overhead = Encoding.UTF8.GetByteCount(System.Text.Json.JsonSerializer.Serialize(Padded(0), Protocol.Json));
+        Assert.Contains("xxx", FactorioGameClient.BuildCommand(Padded(65536 - overhead)));
+        Assert.Throws<ArgumentException>(() => FactorioGameClient.BuildCommand(Padded(65536 - overhead + 1)));
+    }
+
+    [Fact]
+    public async Task QueueWaitDoesNotCountAgainstTheExchangeTimeout()
+    {
+        await WithServer(async stream =>
+        {
+            await ReadAsync(stream);
+            await WriteAsync(stream, 1, 2, []);
+            for (int i = 0; i < 2; i++)
+            {
+                var request = await ReadAsync(stream);
+                await Task.Delay(600);
+                await WriteAsync(stream, request.Id, 0, Encoding.UTF8.GetBytes("ok"));
+                var barrier = await ReadAsync(stream);
+                await WriteAsync(stream, barrier.Id, 0, Encoding.UTF8.GetBytes(BarrierResponse));
+            }
+        }, async client =>
+        {
+            // Each exchange takes ~600 ms (< 1 s timeout) but the second one waits ~1.2 s in total.
+            Task<string> first = client.ExecuteAsync("first");
+            Task<string> second = client.ExecuteAsync("second");
+            Assert.Equal(new[] { "ok", "ok" }, await Task.WhenAll(first, second));
+        }, TimeSpan.FromSeconds(1), keepConnectionOpen: true);
+    }
+
+    [Fact]
+    public async Task InvalidUtf8ResponseIsInvalidDataNotAnArgumentError()
+    {
+        await WithServer(async stream =>
+        {
+            await ReadAsync(stream);
+            await WriteAsync(stream, 1, 2, []);
+            await ReadAsync(stream);
+            await WriteAsync(stream, 2, 0, [0xFF, 0xFE]);
+            var barrier = await ReadAsync(stream);
+            await WriteAsync(stream, barrier.Id, 0, Encoding.UTF8.GetBytes(BarrierResponse));
+        }, async client => await Assert.ThrowsAsync<InvalidDataException>(() => client.ExecuteAsync("example")));
+    }
+
     private static async Task WithServer(Func<NetworkStream, Task> server, Func<RconClient, Task> action,
         TimeSpan? timeout = null, bool keepConnectionOpen = false)
     {

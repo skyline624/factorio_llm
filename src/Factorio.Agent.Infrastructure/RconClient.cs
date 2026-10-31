@@ -29,26 +29,28 @@ public sealed class RconClient : IAsyncDisposable
         if (Utf8.GetByteCount(command) > 256 * 1024)
             throw new ArgumentException("RCON command exceeds the 256 KiB limit.", nameof(command));
 
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(options.Timeout);
+        // Queue wait is bounded by the caller only; the timeout covers the exchange itself.
+        await gate.WaitAsync(cancellationToken);
         try
         {
-            await gate.WaitAsync(deadline.Token);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(options.Timeout);
             try { return await ExchangeAsync(command, deadline.Token); }
+            catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+            {
+                CloseConnection();
+                throw new TimeoutException("RCON exchange timed out. The action outcome may be unknown; observe before retrying.", error);
+            }
             catch
             {
                 CloseConnection();
                 throw;
             }
-            finally
-            {
-                if (!options.KeepConnectionOpen) CloseConnection();
-                gate.Release();
-            }
         }
-        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+        finally
         {
-            throw new TimeoutException("RCON exchange timed out. The action outcome may be unknown; observe before retrying.", error);
+            if (!options.KeepConnectionOpen) CloseConnection();
+            gate.Release();
         }
     }
 
@@ -92,7 +94,8 @@ public sealed class RconClient : IAsyncDisposable
                 barrierSent = true;
             }
         }
-        return Utf8.GetString(response.GetBuffer(), 0, checked((int)response.Length));
+        try { return Utf8.GetString(response.GetBuffer(), 0, checked((int)response.Length)); }
+        catch (DecoderFallbackException error) { throw new InvalidDataException("RCON response is not valid UTF-8.", error); }
     }
 
     private void CloseConnection()

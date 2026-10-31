@@ -184,8 +184,9 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
                 // an uncertain stop, changed actor or parent cancellation must still escape this attempt.
                 await controller.StopOwnedActionsAsync();
                 token.ThrowIfCancellationRequested();
+                // Corpses, enemies and defenses are listed apart from own entities: none of those is needed here.
                 var fresh = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = InspectionRadius,
-                    limit = 200, entityLimit = ProductionController.MaximumOwnEntities }), token);
+                    limit = 200, entityLimit = 1 }), token);
                 var known = ReadObservedCorpses(fresh, death, scope, lastTick);
                 var safety = SafetyObservation.Parse(fresh);
                 if (safety.StopUnconfirmed || safety.Operation is { IsTerminal: false })
@@ -242,8 +243,9 @@ public sealed class CorpseRecoveryController(IGameClient game, IControllerJourna
 
             async Task InspectApproachAsync(CancellationToken inspectionToken)
             {
+                // Polled on every walk step: own entities (up to 5000 serialized inventories) are not read here.
                 var fresh = await game.ExecuteAsync(GameRequest.Create("observe", new { radius = InspectionRadius,
-                    limit = 200, entityLimit = ProductionController.MaximumOwnEntities }), inspectionToken);
+                    limit = 200, entityLimit = 1 }), inspectionToken);
                 var observed = ReadObservedCorpses(fresh, death, scope, lastTick);
                 lastTick = fresh.Tick;
                 var body = observed.SingleOrDefault(c => c.Id == selected.Corpse.Id);

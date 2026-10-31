@@ -30,6 +30,9 @@ public sealed class FactorioGameClient(RconClient rcon) : IGameClient, IAsyncDis
         return response;
     }
 
+    // Same limit as mod/control.lua (`#json <= 65536`): larger JSON is refused there with an empty request id.
+    private const int MaximumRequestBytes = 65536;
+
     public static string BuildCommand(GameRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -39,6 +42,8 @@ public sealed class FactorioGameClient(RconClient rcon) : IGameClient, IAsyncDis
         if (!Protocol.Actions.Contains(request.Action)) throw new ArgumentException("Action is not allowed.");
         if (request.Arguments.ValueKind != JsonValueKind.Object) throw new ArgumentException("Arguments must be an object.");
         string json = JsonSerializer.Serialize(request, Protocol.Json);
+        if (System.Text.Encoding.UTF8.GetByteCount(json) > MaximumRequestBytes)
+            throw new ArgumentException("Request JSON exceeds the mod's 65536-byte limit.", nameof(request));
         string equals = "=";
         while (json.Contains("]" + equals + "]", StringComparison.Ordinal)) equals += "=";
         return "/silent-command rcon.print(remote.call(\"factorio_agent\",\"execute\",[" + equals + "[" + json + "]" + equals + "]))";
