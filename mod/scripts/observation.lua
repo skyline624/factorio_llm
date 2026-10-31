@@ -163,7 +163,8 @@ function M.observe(args)
   local ids = {}
   for id, entity in pairs(s.known) do
     if not (entity.valid and entity.force == c.force) then s.known[id] = nil
-    elseif not inventory_only or holds_items(entity) then ids[#ids + 1] = id end
+    -- Poles hold no items but production finds its power sources among these entities.
+    elseif not inventory_only or entity.type == "electric-pole" or holds_items(entity) then ids[#ids + 1] = id end
   end
   table.sort(ids)
   for index = 1, math.min(#ids, entity_limit) do result.entities[#result.entities + 1] = M.entity(s.known[ids[index]], true) end
