@@ -2,7 +2,10 @@ using System.Text.Json.Serialization;
 
 namespace Factorio.Agent.Gestion;
 
-/// <summary>Local OpenAI-compatible server. The model must be a concrete id, never an alias that follows the active engine.</summary>
+/// <summary>
+/// Local OpenAI-compatible server. Either a concrete model id (the answer must name it exactly) or the Gestion alias,
+/// which follows the engine the operator selected in Gestion; the answering model is then recorded with each proposal.
+/// </summary>
 public sealed record GestionOptions
 {
     public const string ActiveModelAlias = "llm-actif";
@@ -20,8 +23,6 @@ public sealed record GestionOptions
             throw new ArgumentException("Gestion BaseUrl must be an absolute https URL without credentials, query or fragment.");
         if (string.IsNullOrEmpty(Model) || Model.Length > 128 || Model.Any(c => c <= ' ' || c >= 127))
             throw new ArgumentException("Gestion Model must be 1 to 128 printable ASCII characters.");
-        if (string.Equals(Model, ActiveModelAlias, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException($"Gestion Model must be a concrete model id; {ActiveModelAlias} silently follows the active engine.");
         if (string.IsNullOrWhiteSpace(ApiKey) || ApiKey.Length > 4096 || ApiKey.Any(c => c <= ' ' || c >= 127))
             throw new ArgumentException("Gestion requires Gestion.ApiKey or GESTION_API_KEY (non-empty ASCII without whitespace).");
         if (RequestTimeout <= TimeSpan.Zero || RequestTimeout > TimeSpan.FromMinutes(10))

@@ -56,6 +56,22 @@ public sealed class GestionStrategicPlannerTests
     }
 
     [Fact]
+    public async Task ActiveModelAliasAcceptsTheAnsweringModelAndRecordsIt()
+    {
+        var aliasOptions = Options with { Model = GestionOptions.ActiveModelAlias };
+        var handler = new Handler(_ => Json(Response(Arguments(), model: "engine-selected-in-gestion")));
+        var proposal = await new GestionStrategicPlanner(new HttpClient(handler), aliasOptions).ProposeAsync(Context);
+        Assert.Equal("engine-selected-in-gestion", proposal.Metrics.ResolvedModel);
+        using var sent = JsonDocument.Parse(handler.Body);
+        Assert.Equal("llm-actif", sent.RootElement.GetProperty("model").GetString());
+
+        var echo = new Handler(_ => Json(Response(Arguments(), model: "llm-actif")));
+        var error = await Assert.ThrowsAsync<PlannerException>(() =>
+            new GestionStrategicPlanner(new HttpClient(echo), aliasOptions).ProposeAsync(Context));
+        Assert.Equal(PlannerErrorKind.MissingModel, error.Kind);
+    }
+
+    [Fact]
     public async Task AnotherModelInTheResponseIsRefused()
     {
         var error = await Assert.ThrowsAsync<PlannerException>(() =>
@@ -125,8 +141,6 @@ public sealed class GestionStrategicPlannerTests
 
     [Theory]
     [InlineData("http://192.168.1.33/", Model, Key)]
-    [InlineData("https://192.168.1.33/", "llm-actif", Key)]
-    [InlineData("https://192.168.1.33/", "LLM-Actif", Key)]
     [InlineData("https://192.168.1.33/", Model, "key with space")]
     [InlineData("https://192.168.1.33/", Model, "")]
     [InlineData("https://user:pw@192.168.1.33/", Model, Key)]

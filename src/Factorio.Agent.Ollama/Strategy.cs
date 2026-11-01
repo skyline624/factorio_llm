@@ -21,7 +21,7 @@ public sealed record GoalProposal(string ObservationId, string Description, Goal
 
 /// <summary>Token metrics describe the successful response only; failed attempts may also consume tokens.</summary>
 public sealed record PlannerMetrics(TimeSpan Elapsed, int Attempts, long? PromptTokens,
-    long? CompletionTokens, TimeSpan? ProviderTotalDuration);
+    long? CompletionTokens, TimeSpan? ProviderTotalDuration, string? ResolvedModel = null);
 
 public enum PlannerErrorKind
 {

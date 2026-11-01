@@ -7,7 +7,7 @@ Le transport `gestion-local` est une sélection explicite, indépendante d'Ollam
 Copier `config/appsettings.gestion.example.json` vers un profil privé ignoré par Git, par exemple `config/appsettings.gestion.local.json`, avec `Planner.Transport=gestion-local` et une section `Gestion` :
 
 - `BaseUrl` : URL `https` absolue, sans identifiants, paramètres ni fragment.
-- `Model` : identifiant **concret** du modèle servi. L'alias `llm-actif` est refusé, car il suit silencieusement le moteur actif et ferait changer de modèle sans trace. La réponse doit nommer exactement ce modèle, sinon elle est rejetée.
+- `Model` : `llm-actif` (recommandé) ou un identifiant concret. Avec l'alias, c'est la gestion du serveur qui choisit le moteur : le modèle suit celui que l'opérateur a sélectionné dans Gestion, sans changement du profil. La réponse doit alors nommer un modèle concret (jamais l'alias), enregistré avec chaque proposition (`metrics.resolvedModel`) pour tracer un changement de moteur. Avec un identifiant concret, la réponse doit nommer exactement ce modèle ; Gestion refuse la requête si ce moteur n'est pas actif.
 - `ApiKey` : facultative dans le profil. À défaut, la variable d'environnement `GESTION_API_KEY` est lue ; une clé non vide du profil a priorité. La clé n'apparaît ni dans Git, ni dans les journaux, ni dans les messages d'erreur, ni en argument de ligne de commande.
 - `CaCertificate` : fichier PEM de l'autorité privée. Les variables d'environnement sont développées ; un chemin relatif est résolu depuis le dossier du profil.
 - `RequestTimeoutSeconds` (180 par défaut, 10 minutes au plus) et `MaxTokens` (4096 par défaut, de 256 à 32768).
@@ -27,6 +27,8 @@ dotnet run --project src/Factorio.Agent.Host -- run-campaign --session .runtime/
 `check-gestion` envoie un contexte synthétique annoncé comme tel, ne crée pas de monde et n'exécute aucune opération. Ne pas combiner `--ollama-cloud` avec ce profil.
 
 Premier appel réel (2026-10-31) : `check-gestion` a obtenu une proposition validée de `huihui-glm-5.3-flash-ud-iq2-xxs` en 16 s pour 846 tokens d'entrée, certificat vérifié contre l'autorité privée. La cible proposée (`iron plates`) n'était pas un identifiant natif : en campagne, la validation C# la renverrait au modèle pour correction. Première campagne (2026-10-31, graine 20261031, monde normal repris après deux campagnes Codex, 30 minutes) : deux objectifs, tous deux en identifiants natifs et acceptés sans correction (`iron-plate` à 30 par minute, puis la recherche `steel-processing`), en 53 et 62 s pour environ 8 000 tokens d'entrée. Le premier a construit des cellules de fonte, des assembleurs, des tapis et une ligne d'approvisionnement ; le second était en cours à l'échéance. Aucune erreur d'exécution, aucune attaque observée.
+
+Le 1er novembre 2026, avec `Model=llm-actif` et le moteur `strata` (`orcarouter-qwen3.8-flash-next-uncensored-iq3_xxs`) sélectionné dans Gestion, la connexion et l'inférence répondent (5 à 9 s), mais trois `check-gestion` sur trois ont été refusés par la validation : avec la consigne du projet, ce modèle omet le champ obligatoire `observationId` et rend parfois l'appel d'outil en texte libre. Le moteur `maya` (GLM) produisait un objectif valide le 31 octobre.
 
 ## Budgets et limites
 

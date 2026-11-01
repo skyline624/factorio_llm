@@ -63,10 +63,10 @@ public sealed class GestionConfigurationTests : IDisposable
     }
 
     [Fact]
-    public async Task ActiveEngineAliasAndMissingCaAreRejected()
+    public async Task ActiveEngineAliasLoadsAndMissingCaIsRejected()
     {
         string alias = await WriteAsync(Profile("'BaseUrl':'https://192.168.1.33/','Model':'llm-actif','CaCertificate':'ca.pem'"));
-        await Assert.ThrowsAsync<ArgumentException>(() => OllamaConfiguration.LoadGestionAsync(alias, "synthetic-environment-key"));
+        Assert.Equal("llm-actif", (await OllamaConfiguration.LoadGestionAsync(alias, "synthetic-environment-key")).Options.Model);
         string noCa = await WriteAsync(Profile("'BaseUrl':'https://192.168.1.33/','Model':'m'"));
         await Assert.ThrowsAsync<InvalidDataException>(() => OllamaConfiguration.LoadGestionAsync(noCa, "synthetic-environment-key"));
     }

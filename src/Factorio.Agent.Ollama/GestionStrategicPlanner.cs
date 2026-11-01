@@ -87,8 +87,9 @@ public sealed class GestionStrategicPlanner : IStrategicPlanner
     {
         if (root.ValueKind != JsonValueKind.Object)
             throw GoalContract.Invalid("Expected a Gestion response object.", 1);
+        bool alias = _options.Model == GestionOptions.ActiveModelAlias;
         if (!root.TryGetProperty("model", out var model) || model.ValueKind != JsonValueKind.String ||
-            model.GetString() != _options.Model)
+            !(alias ? IsModelId(model.GetString()) : model.GetString() == _options.Model))
             throw new PlannerException(PlannerErrorKind.MissingModel,
                 "The server answered with another model; no substitute accepted.", 1);
         if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array ||
@@ -111,11 +112,16 @@ public sealed class GestionStrategicPlanner : IStrategicPlanner
             !function.TryGetProperty("arguments", out var arguments) || arguments.ValueKind != JsonValueKind.String)
             throw GoalContract.Invalid("Expected propose_goal with JSON string arguments.", 1);
 
-        var metrics = new PlannerMetrics(elapsed, 1, ReadUsage(root, "prompt_tokens"), ReadUsage(root, "completion_tokens"), null);
+        var metrics = new PlannerMetrics(elapsed, 1, ReadUsage(root, "prompt_tokens"), ReadUsage(root, "completion_tokens"), null,
+            model.GetString());
         using var parsed = JsonDocument.Parse(arguments.GetString()!, new JsonDocumentOptions { MaxDepth = 32 });
         PlannerHttp.RejectDuplicateProperties(parsed.RootElement, Provider, 1);
         return GoalContract.ParseArguments(parsed.RootElement, observationId, metrics);
     }
+
+    // The alias resolves server-side; the answer must still name a concrete model, never the alias itself.
+    private static bool IsModelId(string? id) => !string.IsNullOrEmpty(id) && id.Length <= 128 &&
+        id != GestionOptions.ActiveModelAlias && id.All(c => c > ' ' && c < 127);
 
     private static long? ReadUsage(JsonElement root, string name)
     {
